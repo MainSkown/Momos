@@ -1,0 +1,21 @@
+version: '3.8'
+
+services: 
+  momos-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: momos-dashboard
+    ports:
+      - "5137:5137"
+    restart: unless-stopped
+    depends_on:
+      - momos-backend
+
+  momos-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: momos-backend
+    network_mode: "host"
+    restart: unless-stopped
