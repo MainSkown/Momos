@@ -1,35 +1,213 @@
-@import './base.css';
+/* ==========================================================================
+   Momos AI - Core Styles & Reset
+   ========================================================================== */
+
+:root {
+  --black: #000000;
+  --dark-bg: #0a0a0a;
+  --card-bg: #1a1a1a;
+
+  --red-primary: #dc2626;
+  --red-dark: #991b1b;
+  --red-darker: #7f1d1d;
+  --red-hover: #b91c1c;
+  --red-light: #ef4444;
+  --red-lighter: #f87171;
+
+  --border-primary: rgba(220, 38, 38, 0.3);
+  --border-secondary: rgba(220, 38, 38, 0.5);
+  --border-subtle: rgba(220, 38, 38, 0.2);
+
+  --text-white: #ffffff;
+  --text-gray-light: #e5e5e5;
+  --text-gray: #a3a3a3;
+  --text-gray-dark: #888888;
+  --text-gray-darker: #525252;
+  --text-muted: #6b7280;
+
+  --shadow-red-strong: 0 0 20px rgba(220, 38, 38, 0.3);
+  --shadow-red-medium: 0 0 15px rgba(220, 38, 38, 0.4);
+  --shadow-red-subtle: 0 0 10px rgba(220, 38, 38, 0.3);
+  --shadow-red-weak: 0 0 8px rgba(220, 38, 38, 0.25);
+
+  --status-active: #22c55e;
+  --status-critical: #dc2626;
+  --status-high: #ef4444;
+  --status-medium: #f87171;
+  --status-success: #22c55e;
+
+  --hover-bg: rgba(220, 38, 38, 0.1);
+  --active-bg: #991b1b;
+  --disabled-bg: #7f1d1d;
+
+  --font-mono: "Courier New", Courier, monospace;
+  --font-sans: system-ui, -apple-system, sans-serif;
+
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+
+  --radius: 0;
+
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--black);
+  color: var(--text-white);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
 
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
+  width: 100%;
+  max-width: 99%;
+  margin: 10px;
+  padding: 0;
+  display: block;
 }
 
-a,
-.green {
+a {
   text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
+  color: var(--red-primary);
+  transition: all var(--transition-fast);
 }
 
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
-  }
+a:hover {
+  color: var(--red-light);
 }
 
-@media (min-width: 1024px) {
-  body {
+.bg-black {
+  background-color: var(--black);
+}
+.bg-dark {
+  background-color: var(--dark-bg);
+}
+.bg-card {
+  background-color: var(--card-bg);
+}
+.bg-red {
+  background-color: var(--red-primary);
+}
+
+.text-red {
+  color: var(--red-primary);
+}
+.text-white {
+  color: var(--text-white);
+}
+.text-gray {
+  color: var(--text-gray);
+}
+
+.border {
+  border: 2px solid var(--border-primary);
+}
+.border-red {
+  border: 2px solid var(--red-primary);
+}
+
+.border-bottom {
+  border-bottom: 2px solid var(--border-primary);
+}
+.border-top {
+  border-top: 2px solid var(--border-primary);
+}
+.shadow-red {
+  box-shadow: var(--shadow-red-medium);
+}
+
+.row {
+  display: flex;
+  flex-direction: row;
+}
+.full-width {
+  width: 100%;
+}
+.column {
+  display: flex;
+  flex-direction: column;
+}
+.no-margin {
+  margin: 0;
+}
+.flex-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.header-text {
+  margin: 5px;
+  color: var(--red-primary);
+  padding-left: 20px;
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+.separator {
+  height: 1px;
+  background-color: var(--border-primary);
+  width: auto;       
+}
+
+/* Gaps */
+.gap-low{gap: 10px}
+.gap-mid{gap: 30px}
+.gap-high{gap:60px}
+
+/* Buttons */
+.button {   
+    color: var(--text-gray);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+
+    border-top: none;
+    border-bottom: none;
     display: flex;
-    place-items: center;
-  }
+    justify-content: center;
+    align-items: center;
+}
 
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
-  }
+.button:hover {
+    background-color: var(--hover-bg);
+    color: var(--red-hover);
+}
+
+.button:active {
+    transform: scale(0.98);
+}
+
+.button.is-active {
+    background-color: var(--active-bg);
+    color: var(--text-white);
+}
+
+.button.is-active:hover {
+    background-color: var(--hover-bg);
+    color: var(--red-hover);
+}
+
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--black);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--red-darker);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--red-dark);
 }
