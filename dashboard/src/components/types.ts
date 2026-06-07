@@ -1,5 +1,11 @@
 export type tTool = {
+  id: number,
   name: string,
-  on_click: Function,
   icon?: string
+}
+
+export type tProject = {
+    id: string,
+    name: string,    
+    createdAt?: string,
 }

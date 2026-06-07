@@ -1,36 +1,40 @@
 <template>
-    <div class="main-page">
-        <ProjectBar class="project-bar"/>
-        <div class="row gap-low">
-            <ToolsBar class="tool-bar"/>
-            <ContextView class="context-view"/>
-        </div>
+  <div class="main-page">
+    <ProjectBar class="project-bar" v-model="currentProject"/>
+    <div class="row gap-low">
+      <ToolsBar class="tool-bar" v-model="currentTool" />
+      <ContextView class="context-view"> </ContextView>
     </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import ContextView from './MainPage/ContextView.vue';
-import ProjectBar from './MainPage/ProjectBar.vue';
-import ToolsBar from './MainPage/ToolsBar.vue';
+import ContextView from "./MainPage/ContextView.vue";
+import ProjectBar from "./MainPage/ProjectBar.vue";
+import ToolsBar from "./MainPage/ToolsBar.vue";
+import { tools } from "./tools.ts";
+import { ref } from "vue";
 
+const currentProject = ref<string>('123')
+const currentTool = ref<number>(tools[0] !== undefined ? tools[0].id : 1);
 </script>
 
 <style lang="css">
-.project-bar{
-    margin-bottom: 5px;
+.project-bar {
+  margin-bottom: 5px;
 }
 
-.main-page{
-    width: auto;
-    display: flex;
-    flex-direction: column;
+.main-page {
+  width: auto;
+  display: flex;
+  flex-direction: column;
 }
 
-.tool-bar{
-    flex-grow: 1;
+.tool-bar {
+  flex-grow: 1;
 }
 
-.context-view{
-    flex-grow: 8;
+.context-view {
+  flex-grow: 8;
 }
 </style>

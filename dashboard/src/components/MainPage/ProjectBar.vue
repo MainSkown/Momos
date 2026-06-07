@@ -2,24 +2,25 @@
     <div class="border row">
         <div 
             v-for="p in projects" 
-            :key="p.name"
+            :key="p.id"
             class="button border"
-            :class="{ 'is-active': activeProject === p.name }"
-            @click="activeProject = p.name"
+            :class="{ 'is-active': activeProject === p.id }"
+            @click="activeProject = p.id"
             style="min-width: 100px;"
         >
             {{ p.name }}
         </div>
 
-        <div class="add-button button border" @click="console.log('lick')"> +</div>
+        <div class="add-button button border" @click="">+</div>
     </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import type { tProject } from '../types';
 
-const projects = [{ name: 'test' }, { name: 'test2' }]
-const activeProject = ref<string | null>(null)
+const projects:tProject[] = [{ id:'123', name: 'test' }, {id:'213', name: 'test2' }]
+const activeProject = defineModel<string>()
 </script>
 
 <style lang="css">
