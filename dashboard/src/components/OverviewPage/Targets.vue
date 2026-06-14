@@ -22,6 +22,7 @@
         <div class="border cell text-center">{{ $t('targets.ipv4') }}</div>
         <div class="border cell text-center">{{ $t('targets.ipv6') }}</div>
         <div class="border cell text-center">{{ $t('targets.domain') }}</div>
+        <div class="border small-cell" />
       </div>
 
       <!-- Target Rows -->
@@ -64,6 +65,7 @@
               @input="(event) => (t.domain = handleDomainInput(event))"
             />
           </div>
+          <div class="button border small-cell" @click="deleteTarget(t.id)">X</div>
         </div>
 
         <div
@@ -189,9 +191,9 @@ function addTarget() {
     .getProjectsTargets(store.openedProject)
     .some(
       (t) =>
-        t.ipv4 === addresses.ipv4 ||
-        t.domain === addresses.domain ||
-        t.ipv6 === addresses.ipv6,
+        t.ipv4 !== undefined && t.ipv4 === addresses.ipv4 ||
+        t.domain !== undefined && t.domain === addresses.domain ||
+        t.ipv6 !== undefined && t.ipv6 === addresses.ipv6,
     );
 
   if (doExist){
@@ -203,7 +205,14 @@ function addTarget() {
 
   const t = TargetFactory(addresses, store.openedProject);
   store.addProjectsTarget(t);
+
+  target.value = ''
 }
+
+function deleteTarget(id: string){
+  store.deleteTarget(id)
+}
+
 </script>
 
 <style scoped lang="css">
@@ -233,5 +242,9 @@ function addTarget() {
 .cell {
   flex-grow: 1;
   width: 25%;
+}
+
+.small-cell {
+  width: 3%;
 }
 </style>

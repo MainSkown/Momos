@@ -41,6 +41,9 @@ export const useMomosStore = defineStore("momos", {
         }
 
         this.targets.push(target)
+    },
+    deleteTarget(targetID: string){
+      this.targets = this.targets.filter(t => t.id !== targetID)
     }
   }
 });
