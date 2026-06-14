@@ -23,7 +23,7 @@ const projects:tProject[] = [{ id:'123', name: 'test' }, {id:'213', name: 'test2
 const activeProject = defineModel<string>()
 </script>
 
-<style lang="css">
+<style scoped lang="css">
 
 .add-button {
     margin-left: auto;

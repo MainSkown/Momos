@@ -159,6 +159,74 @@ a:hover {
   width: auto;       
 }
 
+.input-field {
+  box-sizing: border-box;
+  background-color: var(--black);
+  color: var(--text-white);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  padding: var(--spacing-sm) var(--spacing-md);
+  
+  /* Sharp 0px corners from your variables */
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius); 
+  
+  outline: none;
+  transition: border-color var(--transition-fast), 
+              box-shadow var(--transition-fast), 
+              background-color var(--transition-fast);
+}
+
+/* Subtle grey text for the placeholder */
+.input-field::placeholder {
+  color: var(--text-gray-dark);
+  font-family: var(--font-sans);
+  opacity: 0.8;
+}
+
+/* Cyber-glow focus state */
+.input-field:focus {
+  border-color: var(--red-primary);
+  background-color: var(--black); /* Slightly darkens to emphasize typing zone */
+  box-shadow: var(--shadow-red-subtle);
+}
+
+/* Disabled/Locked state */
+.input-field:disabled {
+  background-color: var(--card-bg);
+  border-color: var(--text-gray-darker);
+  color: var(--text-gray-dark);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.terminal-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* 2. Generating the absolute-positioned prompt symbol */
+.terminal-input-group::before {
+  content: ">";
+  position: absolute;
+  left: var(--spacing-md);
+  
+  /* Styling to match your Momos AI terminal vibe */
+  color: var(--red-primary);
+  font-family: var(--font-mono); 
+  font-weight: bold;
+  font-size: 1.1rem;
+  
+  /* Makes sure clicking directly on the character still focuses the text box */
+  pointer-events: none; 
+}
+
+/* 3. Pushing the user's text to the right so it doesn't overlap the character */
+.terminal-input-group .input-field {
+  padding-left: calc(var(--spacing-md) + 1.25rem);
+}
+
 /* Gaps */
 .gap-low{gap: 10px}
 .gap-mid{gap: 30px}
@@ -170,8 +238,6 @@ a:hover {
     cursor: pointer;
     transition: background-color 0.2s ease;
 
-    border-top: none;
-    border-bottom: none;
     display: flex;
     justify-content: center;
     align-items: center;

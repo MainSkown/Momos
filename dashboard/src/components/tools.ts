@@ -11,6 +11,6 @@ export const tools: tTool[] = [
   },
   {
     id: 3,
-    name: "Settings",
+    name: "Project Settings",
   },
 ]

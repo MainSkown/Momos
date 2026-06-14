@@ -3,7 +3,9 @@
     <ProjectBar class="project-bar" v-model="currentProject"/>
     <div class="row gap-low">
       <ToolsBar class="tool-bar" v-model="currentTool" />
-      <ContextView class="context-view"> </ContextView>
+      <ContextView class="context-view"> 
+        <Overview v-if="currentTool == tools.find(t => t.name == 'Overview')?.id" />
+      </ContextView>
     </div>
   </div>
 </template>
@@ -12,6 +14,7 @@
 import ContextView from "./MainPage/ContextView.vue";
 import ProjectBar from "./MainPage/ProjectBar.vue";
 import ToolsBar from "./MainPage/ToolsBar.vue";
+import Overview from "./OverviewPage/Overview.vue";
 import { tools } from "./tools.ts";
 import { ref } from "vue";
 
