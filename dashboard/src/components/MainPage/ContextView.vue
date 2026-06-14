@@ -1,7 +1,7 @@
 <template>
 <div class="border">
     <div class="header-text">
-        CONTEXT WINDOW
+        {{ $t('context_window.context_window')}}
     </div>
 
     <div class="separator" />

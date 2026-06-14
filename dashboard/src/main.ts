@@ -6,6 +6,7 @@ import App from './App.vue'
 import Vue3Toastify, { type ToastContainerOptions } from 'vue3-toastify';
 import 'vue3-toastify/dist/index.css';
 import '@/assets/toast.css'
+import {i18n} from '@/i18n/i18n.ts'
 
 const pinia = createPinia()
 const app = createApp(App)
@@ -18,5 +19,6 @@ app.use(
     // ...
   } as ToastContainerOptions,
 )
+app.use(i18n)
 
 app.mount('#app')

@@ -4,7 +4,7 @@
     <div class="row gap-low">
       <ToolsBar class="tool-bar" v-model="currentTool" />
       <ContextView class="context-view"> 
-        <Overview v-if="currentTool == tools.find(t => t.name == 'Overview')?.id" />
+        <Overview v-if="currentTool == 'overview'" />
       </ContextView>
     </div>
   </div>
@@ -19,7 +19,7 @@ import { tools } from "./tools.ts";
 import { ref } from "vue";
 
 const currentProject = ref<string>('123')
-const currentTool = ref<number>(tools[0] !== undefined ? tools[0].id : 1);
+const currentTool = ref<string>(tools[0] !== undefined ? tools[0].key : '');
 </script>
 
 <style lang="css">

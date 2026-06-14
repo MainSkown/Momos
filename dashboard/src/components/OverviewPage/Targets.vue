@@ -1,6 +1,6 @@
 <template>
   <div class="border" style="padding-bottom: 5px">
-    <span class="text-red" style="padding-left: 10px">Targets</span>
+    <span class="text-red" style="padding-left: 10px"> {{ $t('targets.targets') }}</span>
     <div class="separator" />
     <!-- Input box-->
     <div class="row">
@@ -8,7 +8,7 @@
         <input
           v-model="target"
           class="input-field"
-          placeholder="ENTER IPv4/IPv6 OR DOMAIN ADDRESS"
+          :placeholder="$t('targets.enter_addr')"
         />
       </div>
       <div class="add-button button border" @click="addTarget">+</div>
@@ -18,10 +18,10 @@
     <div class="column table">
       <!-- Head-row -->
       <div class="row table-row">
-        <div class="border cell text-center">Name</div>
-        <div class="border cell text-center">IPv4</div>
-        <div class="border cell text-center">IPv6</div>
-        <div class="border cell text-center">Domain</div>
+        <div class="border cell text-center">{{ $t('targets.name') }}</div>
+        <div class="border cell text-center">{{ $t('targets.ipv4') }}</div>
+        <div class="border cell text-center">{{ $t('targets.ipv6') }}</div>
+        <div class="border cell text-center">{{ $t('targets.domain') }}</div>
       </div>
 
       <!-- Target Rows -->
@@ -37,14 +37,14 @@
             <input
               v-model="t.name"
               class="input-field no-border text-center"
-              placeholder="No name"
+              :placeholder="$t('targets.no_name')"
             />
           </div>
           <div class="border cell text-center">
             <input
               :value="t.ipv4"
               class="input-field no-border text-center"
-              placeholder="No IPv4"
+              :placeholder="$t('targets.no_ipv4')"
               @input="(event) => (t.ipv4 = handleIPv4Input(event))"
             />
           </div>
@@ -52,7 +52,7 @@
             <input
               :value="t.ipv6"
               class="input-field no-border text-center"
-              placeholder="No IPv6"
+              :placeholder="$t('targets.no_ipv6')"
               @input="(event) => (t.ipv6 = handleIPv6Input(event))"
             />
           </div>
@@ -60,7 +60,7 @@
             <input
               :value="t.domain"
               class="input-field no-border text-center"
-              placeholder="No domain"
+              :placeholder="$t('targets.no_domain')"
               @input="(event) => (t.domain = handleDomainInput(event))"
             />
           </div>
@@ -70,7 +70,7 @@
           class="border text-center"
           v-if="store.getProjectsTargets(store.openedProject).length === 0"
         >
-          No targets
+          {{ $t('targets.no_targets') }}
         </div>
       </div>
     </div>
@@ -89,6 +89,9 @@ import {
   type tAddresses,
 } from "@/types";
 import { toast } from 'vue3-toastify'
+import { useI18n } from "vue-i18n";
+
+const {t: $t} = useI18n()
 const store = useMomosStore();
 
 const target = ref<string>("");
@@ -162,7 +165,7 @@ function addTarget() {
   const addr = target.value;
 
   if (addr.length == 0){
-    toast.error("Can't add empty", {position: toast.POSITION.TOP_CENTER})
+    toast.error($t('notify.address_empty'), {position: toast.POSITION.TOP_CENTER})
 
     return
   }
@@ -170,7 +173,7 @@ function addTarget() {
   if (!isAddressValid(addr)) {
     console.log("Invalid addr");
 
-    toast.error("Invalid address. It should be: IPv4, IPv6 or a domain", {position: toast.POSITION.TOP_CENTER})
+    toast.error($t('notify.invalid_addr'), {position: toast.POSITION.TOP_CENTER})
 
     return;
   }
@@ -193,7 +196,7 @@ function addTarget() {
 
   if (doExist){
     // Do not allow the same targets
-    toast.error("There is already a target with given address", {position: toast.POSITION.TOP_CENTER})
+    toast.error($t('notify.address_already_exist'), {position: toast.POSITION.TOP_CENTER})
 
     return
   }

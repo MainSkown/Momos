@@ -1,18 +1,18 @@
 <template>
   <div class="border" style="padding: 0; height: 720px">
-    <div class="header-text">TOOLS</div>
+    <div class="header-text">{{ $t('tools.tools') }}</div>
 
     <div class="separator" />
 
     <div class="column" style="margin-top: 5px">
       <div
         class="button"
-        :class="{ 'is-active': toolID === t.id }"
+        :class="{ 'is-active': toolKey === t.key }"
         v-for="t in tools"
         style="justify-content: start; padding-left: 20px"
-        @click="selectTool(t.id)"
+        @click="selectTool(t.key)"
       >
-        {{ t.name }}
+        {{ $t(t.name)}}
       </div>
     </div>
   </div>
@@ -21,10 +21,10 @@
 <script setup lang="ts">
 import { tools } from "../tools";
 
-const toolID = defineModel<number>();
+const toolKey = defineModel<string>();
 
-const selectTool = (id: number) => {
-  toolID.value = id;
+const selectTool = (key: string) => {
+  toolKey.value = key;
 };
 
 </script>
