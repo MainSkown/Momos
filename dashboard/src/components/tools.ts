@@ -2,15 +2,15 @@ import type { tTool } from '../types';
 
 export const tools: tTool[] = [
   {
-    id: 1,
-    name: 'Overview'
+    key: 'overview',
+    name: 'tools.overview'
   },
   {
-    id: 2,
-    name: "Vulnerabilities",
+    key: 'vulns',
+    name: "tools.vulnerabilities",
   },
   {
-    id: 3,
-    name: "Project Settings",
+    key:'p_settings',
+    name: "tools.project_settings",
   },
 ]

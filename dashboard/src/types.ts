@@ -1,5 +1,5 @@
 export type tTool = {
-  id: number,
+  key: string,
   name: string,
   icon?: string
 }
