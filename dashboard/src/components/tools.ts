@@ -1,4 +1,4 @@
-import type { tTool } from './types';
+import type { tTool } from '../types';
 
 export const tools: tTool[] = [
   {

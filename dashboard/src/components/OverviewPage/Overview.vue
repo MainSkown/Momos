@@ -1,23 +1,11 @@
 <template>
-  <div class="column">
+  <div class="column layout-container">
+    
     <!-- First row -->
-    <div class="row full-width">
+    <!-- Removed full-width because flex layout will handle it cleanly -->
+    <div class="row">
       <!-- Targets -->
-      <div class="border field">
-        <span class="text-red" style="padding-left: 10px">Targets</span>
-        <div class="separator" />
-        <!-- Input box-->
-        <div class="row">
-          <div class="terminal-input-group" style="margin: 5px; width: 100%">
-            <input
-              v-model="target"
-              class="input-field"
-              placeholder="ENTER IPv4/IPv6 OR DOMAIN ADDRESS"
-            />
-          </div>
-          <div class="add-button button border" @click="">+</div>
-        </div>
-      </div>
+      <Targets class="field" />      
 
       <!-- Summary -->
       <div class="border field">
@@ -25,14 +13,14 @@
         <div class="separator" />
       </div>
     </div>
+
     <!-- Second row -->
     <div class="row">
+      <!-- Removed style="height: 100%" because flex: 1 on the parent handles it -->
       <div class="border field">
-        <span class="text-red" style="padding-left: 10px">Agent Info</span>
+        <span class="text-red" style="padding-left: 10px;">Agent Info</span>
         <div class="separator" />
-        <div>
-            
-        </div>
+        <div></div>
       </div>
 
       <div class="border field">
@@ -40,35 +28,39 @@
         <div class="separator" />
       </div>
     </div>
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from "vue";
+import Targets from "./Targets.vue";
 
 const target = ref<string>();
 </script>
 
 <style scoped lang="css">
+.layout-container {
+  height: calc(100% - 40px); 
+  
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
 .row {
   display: flex;
   justify-content: space-evenly;
+  flex: 1; 
+  min-height: 0;
 }
 
 .field {
-  width: 50%;
+  flex: 1;
   margin: 5px;
-}
-
-.input-field {
-  width: 100%;
-}
-
-.add-button {
-  aspect-ratio: 1;
-  width: 4%;
-
-  font-size: x-large;
-  margin: 5px;
+  min-height: 0; 
+  
+  display: flex;
+  flex-direction: column;
 }
 </style>

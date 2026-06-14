@@ -1,0 +1,234 @@
+<template>
+  <div class="border" style="padding-bottom: 5px">
+    <span class="text-red" style="padding-left: 10px">Targets</span>
+    <div class="separator" />
+    <!-- Input box-->
+    <div class="row">
+      <div class="terminal-input-group" style="margin: 5px; width: 100%">
+        <input
+          v-model="target"
+          class="input-field"
+          placeholder="ENTER IPv4/IPv6 OR DOMAIN ADDRESS"
+        />
+      </div>
+      <div class="add-button button border" @click="addTarget">+</div>
+    </div>
+
+    <!-- Table -->
+    <div class="column table">
+      <!-- Head-row -->
+      <div class="row table-row">
+        <div class="border cell text-center">Name</div>
+        <div class="border cell text-center">IPv4</div>
+        <div class="border cell text-center">IPv6</div>
+        <div class="border cell text-center">Domain</div>
+      </div>
+
+      <!-- Target Rows -->
+      <div
+        class="column scrollable-panel"
+        style="max-height: 200px; width: 100%"
+      >
+        <div
+          class="row table-row"
+          v-for="t in store.getProjectsTargets(store.openedProject)"
+        >
+          <div class="border cell text-center">
+            <input
+              v-model="t.name"
+              class="input-field no-border text-center"
+              placeholder="No name"
+            />
+          </div>
+          <div class="border cell text-center">
+            <input
+              :value="t.ipv4"
+              class="input-field no-border text-center"
+              placeholder="No IPv4"
+              @input="(event) => (t.ipv4 = handleIPv4Input(event))"
+            />
+          </div>
+          <div class="border cell text-center">
+            <input
+              :value="t.ipv6"
+              class="input-field no-border text-center"
+              placeholder="No IPv6"
+              @input="(event) => (t.ipv6 = handleIPv6Input(event))"
+            />
+          </div>
+          <div class="border cell text-center">
+            <input
+              :value="t.domain"
+              class="input-field no-border text-center"
+              placeholder="No domain"
+              @input="(event) => (t.domain = handleDomainInput(event))"
+            />
+          </div>
+        </div>
+
+        <div
+          class="border text-center"
+          v-if="store.getProjectsTargets(store.openedProject).length === 0"
+        >
+          No targets
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from "vue";
+import { useMomosStore } from "@/store/momos_store";
+import {
+  domainPattern,
+  ipv4Pattern,
+  ipv6Pattern,
+  isAddressValid,
+  TargetFactory,
+  type tAddresses,
+} from "@/types";
+import { toast } from 'vue3-toastify'
+const store = useMomosStore();
+
+const target = ref<string>("");
+
+const handleIPv4Input = (event: Event): string => {
+  const e = event.target as HTMLInputElement;
+  let value = e.value;
+
+  // 1. Instantly remove any character that isn't a digit or a dot
+  value = value.replace(/[^0-9.]/g, "");
+
+  // 2. Split the string into segments by the dots
+  const segments = value.split(".");
+
+  // 3. Sanitize each segment (limit to a max of 4 segments total)
+  const cleanedSegments = segments.slice(0, 4).map((segment) => {
+    let clean = segment.slice(0, 3);
+
+    if (parseInt(clean, 10) > 255) {
+      clean = "255";
+    }
+    return clean;
+  });
+
+  const joinedResult = cleanedSegments.join(".");
+
+  // FORCE THE DOM SYNC: This instantly vanishes illegal characters from the screen
+  e.value = joinedResult;
+
+  return joinedResult;
+};
+
+const handleIPv6Input = (event: Event): string => {
+  const e = event.target as HTMLInputElement;
+  let value = e.value;
+
+  // 1. Keep only hex characters and colons (case-insensitive)
+  value = value.replace(/[^0-9a-fA-F:]/g, "");
+
+  // 2. Split into segments by colons
+  const segments = value.split(":");
+
+  // 3. Max 8 segments total, max 4 characters per segment
+  const cleanedSegments = segments.slice(0, 8).map((segment) => {
+    return segment.slice(0, 4);
+  });
+
+  const joinedResult = cleanedSegments.join(":");
+
+  // Force DOM sync
+  e.value = joinedResult;
+  return joinedResult;
+};
+
+const handleDomainInput = (event: Event): string => {
+  const e = event.target as HTMLInputElement;
+  let value = e.value;
+
+  // 1. Lowercase it automatically and strip non-domain characters
+  value = value.toLowerCase().replace(/[^a-z0-9.-]/g, "");
+
+  // 2. Prevent consecutive dots (e.g., typing 'google..com' instantly becomes 'google.com')
+  value = value.replace(/\.{2,}/g, ".");
+
+  // Force DOM sync
+  e.value = value;
+  return value;
+};
+
+function addTarget() {
+  const addr = target.value;
+
+  if (addr.length == 0){
+    toast.error("Can't add empty", {position: toast.POSITION.TOP_CENTER})
+
+    return
+  }
+
+  if (!isAddressValid(addr)) {
+    console.log("Invalid addr");
+
+    toast.error("Invalid address. It should be: IPv4, IPv6 or a domain", {position: toast.POSITION.TOP_CENTER})
+
+    return;
+  }
+
+  const addresses: tAddresses = {
+    ipv4: ipv4Pattern.test(addr) ? addr : undefined,
+    ipv6: ipv6Pattern.test(addr) ? addr : undefined,
+    domain: domainPattern.test(addr) ? addr : undefined,
+  };
+
+  // Check if target already exist
+  const doExist = store
+    .getProjectsTargets(store.openedProject)
+    .some(
+      (t) =>
+        t.ipv4 === addresses.ipv4 ||
+        t.domain === addresses.domain ||
+        t.ipv6 === addresses.ipv6,
+    );
+
+  if (doExist){
+    // Do not allow the same targets
+    toast.error("There is already a target with given address", {position: toast.POSITION.TOP_CENTER})
+
+    return
+  }
+
+  const t = TargetFactory(addresses, store.openedProject);
+  store.addProjectsTarget(t);
+}
+</script>
+
+<style scoped lang="css">
+.input-field {
+  width: 100%;
+}
+
+.add-button {
+  aspect-ratio: 1;
+  width: 4%;
+
+  font-size: x-large;
+  margin: 5px;
+}
+
+.table {
+  justify-content: center;
+  align-items: safe center;
+  margin: 5px 5px 0 5px;
+  width: 98.8%;
+}
+
+.table-row {
+  width: 100%;
+}
+
+.cell {
+  flex-grow: 1;
+  width: 25%;
+}
+</style>

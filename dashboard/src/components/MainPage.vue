@@ -34,10 +34,10 @@ const currentTool = ref<number>(tools[0] !== undefined ? tools[0].id : 1);
 }
 
 .tool-bar {
-  flex-grow: 1;
+  width: 15%;
 }
 
 .context-view {
-  flex-grow: 8;
+  width: 85%;
 }
 </style>
