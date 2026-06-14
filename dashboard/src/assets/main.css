@@ -109,11 +109,19 @@ a:hover {
   color: var(--text-gray);
 }
 
+.text-center{
+  text-align: center;
+}
+
 .border {
   border: 2px solid var(--border-primary);
 }
 .border-red {
   border: 2px solid var(--red-primary);
+}
+
+.no-border {
+  border: none !important;
 }
 
 .border-bottom {
@@ -200,6 +208,15 @@ a:hover {
   box-shadow: none;
 }
 
+.input-field.is-invalid {
+  border-color: var(--status-critical);
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.4);
+}
+
+.input-field.is-invalid:focus {
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.6);
+}
+
 .terminal-input-group {
   position: relative;
   display: flex;
@@ -264,6 +281,39 @@ a:hover {
 
 
 /* Scrollbar Styling */
+.scrollable-panel {
+  /* Core scroll functionality */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  
+  /* Modern Standard Scrollbar Styling (Firefox support) */
+  scrollbar-width: thin;
+  scrollbar-color: var(--red-darker) var(--black);
+  
+  /* Enforces Hardware Acceleration for stutter-free scrolling */
+  will-change: transform;
+}
+
+/* Chrome, Safari, and Edge custom track tuning */
+.scrollable-panel::-webkit-scrollbar {
+  width: 6px; /* Ultra-sleek, slightly thinner than your main scrollbar */
+}
+
+.scrollable-panel::-webkit-scrollbar-track {
+  background: var(--black);
+}
+
+.scrollable-panel::-webkit-scrollbar-thumb {
+  background: var(--red-darker);
+  border-radius: var(--radius); /* Retains your strict 0px sharp edges */
+}
+
+.scrollable-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--red-dark);
+}
+
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
