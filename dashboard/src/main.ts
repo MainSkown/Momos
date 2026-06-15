@@ -8,6 +8,9 @@ import 'vue3-toastify/dist/index.css';
 import '@/assets/toast.css'
 import {i18n} from '@/i18n/i18n.ts'
 
+import '@fontsource/material-icons/index.css'
+import '@fontsource/material-icons-outlined/index.css'
+
 const pinia = createPinia()
 const app = createApp(App)
 

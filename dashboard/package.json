@@ -11,6 +11,8 @@
     "type-check": "vue-tsc --build"
   },
   "dependencies": {
+    "@fontsource/material-icons": "^5.2.7",
+    "@fontsource/material-icons-outlined": "^5.2.6",
     "axios": "^1.17.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.32",

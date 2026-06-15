@@ -1,6 +1,8 @@
 <template>
   <div class="border" style="padding-bottom: 5px">
-    <span class="text-red" style="padding-left: 10px"> {{ $t('targets.targets') }}</span>
+    <span class="text-red" style="padding-left: 10px">
+      {{ $t("targets.targets") }}</span
+    >
     <div class="separator" />
     <!-- Input box-->
     <div class="row">
@@ -18,10 +20,10 @@
     <div class="column table">
       <!-- Head-row -->
       <div class="row table-row">
-        <div class="border cell text-center">{{ $t('targets.name') }}</div>
-        <div class="border cell text-center">{{ $t('targets.ipv4') }}</div>
-        <div class="border cell text-center">{{ $t('targets.ipv6') }}</div>
-        <div class="border cell text-center">{{ $t('targets.domain') }}</div>
+        <div class="border cell text-center">{{ $t("targets.name") }}</div>
+        <div class="border cell text-center">{{ $t("targets.ipv4") }}</div>
+        <div class="border cell text-center">{{ $t("targets.ipv6") }}</div>
+        <div class="border cell text-center">{{ $t("targets.domain") }}</div>
         <div class="border small-cell" />
       </div>
 
@@ -65,14 +67,18 @@
               @input="(event) => (t.domain = handleDomainInput(event))"
             />
           </div>
-          <div class="button border small-cell" @click="deleteTarget(t.id)">X</div>
+          <div class="button border small-cell" @click="deleteTarget(t.id)">
+            <span class="material-icons-outlined" data-fallback="✕">
+              delete_outline
+            </span>
+          </div>
         </div>
 
         <div
           class="border text-center"
           v-if="store.getProjectsTargets(store.openedProject).length === 0"
         >
-          {{ $t('targets.no_targets') }}
+          {{ $t("targets.no_targets") }}
         </div>
       </div>
     </div>
@@ -90,10 +96,10 @@ import {
   TargetFactory,
   type tAddresses,
 } from "@/types";
-import { toast } from 'vue3-toastify'
+import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
 
-const {t: $t} = useI18n()
+const { t: $t } = useI18n();
 const store = useMomosStore();
 
 const target = ref<string>("");
@@ -166,16 +172,20 @@ const handleDomainInput = (event: Event): string => {
 function addTarget() {
   const addr = target.value;
 
-  if (addr.length == 0){
-    toast.error($t('notify.address_empty'), {position: toast.POSITION.TOP_CENTER})
+  if (addr.length == 0) {
+    toast.error($t("notify.address_empty"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
 
-    return
+    return;
   }
 
   if (!isAddressValid(addr)) {
     console.log("Invalid addr");
 
-    toast.error($t('notify.invalid_addr'), {position: toast.POSITION.TOP_CENTER})
+    toast.error($t("notify.invalid_addr"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
 
     return;
   }
@@ -191,28 +201,29 @@ function addTarget() {
     .getProjectsTargets(store.openedProject)
     .some(
       (t) =>
-        t.ipv4 !== undefined && t.ipv4 === addresses.ipv4 ||
-        t.domain !== undefined && t.domain === addresses.domain ||
-        t.ipv6 !== undefined && t.ipv6 === addresses.ipv6,
+        (t.ipv4 !== undefined && t.ipv4 === addresses.ipv4) ||
+        (t.domain !== undefined && t.domain === addresses.domain) ||
+        (t.ipv6 !== undefined && t.ipv6 === addresses.ipv6),
     );
 
-  if (doExist){
+  if (doExist) {
     // Do not allow the same targets
-    toast.error($t('notify.address_already_exist'), {position: toast.POSITION.TOP_CENTER})
+    toast.error($t("notify.address_already_exist"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
 
-    return
+    return;
   }
 
   const t = TargetFactory(addresses, store.openedProject);
   store.addProjectsTarget(t);
 
-  target.value = ''
+  target.value = "";
 }
 
-function deleteTarget(id: string){
-  store.deleteTarget(id)
+function deleteTarget(id: string) {
+  store.deleteTarget(id);
 }
-
 </script>
 
 <style scoped lang="css">
@@ -245,6 +256,6 @@ function deleteTarget(id: string){
 }
 
 .small-cell {
-  width: 3%;
+  width: 4%;
 }
 </style>
