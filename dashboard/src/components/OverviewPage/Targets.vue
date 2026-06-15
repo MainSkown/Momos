@@ -11,6 +11,7 @@
           v-model="target"
           class="input-field"
           :placeholder="$t('targets.enter_addr')"
+          @keydown.enter="addTarget"
         />
       </div>
       <div class="add-button button border" @click="addTarget">+</div>
