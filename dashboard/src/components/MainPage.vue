@@ -1,5 +1,5 @@
 <template>
-  <div class="main-page">
+  <div class="main-page gap-low">
     <ProjectBar class="project-bar"/>
     <div class="row gap-low" v-if="store.getProjects.length > 0">
       <ToolsBar class="tool-bar" v-model="currentTool" />
