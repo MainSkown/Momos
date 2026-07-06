@@ -3,10 +3,10 @@ import {
   getAllProjects,
   postProject,
   postTarget,
-  type TargetBase,
+  getAllTargetsInProject,
+  deleteTarget
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
-import { getAllTargetsInProject } from "../api/sdk.gen";
 
 interface State {
   openedProject: string;
@@ -96,7 +96,13 @@ export const useMomosStore = defineStore("momos", {
 
       this.targets.push(result.data);
     },
-    deleteTarget(targetID: string) {
+    async deleteTarget(targetID: string) {
+      const result = await deleteTarget({path: {target_id: targetID}})
+
+      if (result.response?.status !== 204){
+        throw Error('Could not delete target: ' + targetID)
+      }
+
       this.targets = this.targets.filter((t) => t.id !== targetID);
     },
   },

@@ -1,6 +1,6 @@
 import uuid
 from sqlmodel import SQLModel, Session, create_engine, select
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from . import settings
 from typing import List, TypeVar, Type
 
@@ -66,6 +66,14 @@ class DatabaseManager:
 
     def add_target(self, target: Target):
         return self.add_to_database(target)
+    
+    def delete_target(self, target_id: str):
+        parsed_uuid = uuid.UUID(target_id)
+        
+        with Session(self.engine) as session:
+            statement = delete(Target).where(Target.id == parsed_uuid)
+            session.exec(statement)
+            session.commit()
 
 
 db_manager = DatabaseManager(settings.database_url)

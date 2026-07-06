@@ -15,3 +15,7 @@ class TargetService:
     @staticmethod
     def get_all_targets(project_id: str) -> List[Target]:
         return db_manager.get_all_targets_in_project(project_id)
+    
+    @staticmethod
+    def delete_target(target_id: str):
+        db_manager.delete_target(target_id)

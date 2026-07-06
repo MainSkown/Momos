@@ -238,3 +238,33 @@ export type PostTargetResponses = {
 };
 
 export type PostTargetResponse = PostTargetResponses[keyof PostTargetResponses];
+
+export type DeleteTargetData = {
+    body?: never;
+    path: {
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/target/{target_id}';
+};
+
+export type DeleteTargetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteTargetError = DeleteTargetErrors[keyof DeleteTargetErrors];
+
+export type DeleteTargetResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteTargetResponse = DeleteTargetResponses[keyof DeleteTargetResponses];
