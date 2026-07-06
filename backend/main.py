@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
-from src.routers import project_router
+from src.routers import project_router,target_router
 
 app = FastAPI()
 
@@ -23,3 +23,4 @@ app.openapi = custom_openapi
 
 # Routers
 app.include_router(project_router, prefix="/api")
+app.include_router(target_router, prefix="/api")

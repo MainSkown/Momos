@@ -1,10 +1,15 @@
+import uuid
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy import text
 from . import settings
-from src.schemas.project_scheme import Project
 from typing import List, TypeVar, Type
 
+# SQLModels Imports #
+from src.schemas.project_scheme import Project
+from src.schemas.target_scheme import Target
+
 T = TypeVar("T", bound=SQLModel)
+
 
 class DatabaseManager:
     def __init__(self, db_url: str):
@@ -16,13 +21,12 @@ class DatabaseManager:
         with self.engine.connect() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             conn.commit()
-            
+
         SQLModel.metadata.create_all(self.engine)
 
     def get_session(self):
         with Session(self.engine) as session:
             yield session
-
 
     # --- Base functions ---
     def get_all(self, model: Type[T]) -> List[T]:
@@ -45,5 +49,23 @@ class DatabaseManager:
     def add_project(self, project: Project):
         return self.add_to_database(project)
 
-db_manager = DatabaseManager(settings.database_url)
+    def get_project(self, project_id: str) -> Project:
+        parsed_uuid = uuid.UUID(project_id)
 
+        with Session(self.engine) as session:
+            project = session.get(Project, parsed_uuid)
+            return project
+
+    # --- Managing Targets ---
+    def get_all_targets_in_project(self, project_id: str) -> List[Target]:
+        parsed_uuid = uuid.UUID(project_id)
+
+        with Session(self.engine) as session:
+            statement = select(Target).where(Target.project_id == parsed_uuid)
+            return session.exec(statement).all()
+
+    def add_target(self, target: Target):
+        return self.add_to_database(target)
+
+
+db_manager = DatabaseManager(settings.database_url)
