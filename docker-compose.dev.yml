@@ -38,3 +38,6 @@ services:
             - ".venv"
         - action: rebuild
           path: ./backend/pyproject.toml
+  db:
+    ports:
+      - "5432:5432"
