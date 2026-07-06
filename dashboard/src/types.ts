@@ -1,4 +1,4 @@
-import type { ProjectResponse } from "./api";
+import type { ProjectResponse, ResponseTarget } from "./api";
 
 export type tTool = {
   key: string;
@@ -14,24 +14,7 @@ export type tAddresses = {
   domain?: string;
 };
 
-export type tTarget = tAddresses & {
-  id: string,
-  name: string;
-  projectID: string;
-};
-
-export function getTarget(target: tTarget): string {
-  return target.ipv4 || target.ipv6 || target.domain || "";
-}
-
-export function TargetFactory(addr: tAddresses, projectID: string): tTarget {
-  return {
-    id: crypto.randomUUID(),
-    name: "",
-    ...addr,
-    projectID: projectID,
-  };
-}
+export type tTarget = ResponseTarget
 
 /* Those are not types, but still useful */
 

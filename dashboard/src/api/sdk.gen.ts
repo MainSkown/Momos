@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetAllProjectsData, GetAllProjectsResponses, PutProjectData, PutProjectErrors, PutProjectResponses } from './types.gen';
+import type { GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -26,8 +26,25 @@ export const getAllProjects = <ThrowOnError extends boolean = false>(options?: O
 /**
  * Create Project
  */
-export const putProject = <ThrowOnError extends boolean = false>(options: Options<PutProjectData, ThrowOnError>): RequestResult<PutProjectResponses, PutProjectErrors, ThrowOnError> => (options.client ?? client).put<PutProjectResponses, PutProjectErrors, ThrowOnError>({
+export const postProject = <ThrowOnError extends boolean = false>(options: Options<PostProjectData, ThrowOnError>): RequestResult<PostProjectResponses, PostProjectErrors, ThrowOnError> => (options.client ?? client).post<PostProjectResponses, PostProjectErrors, ThrowOnError>({
     url: '/api/project',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get All Targets In Project
+ */
+export const getAllTargetsInProject = <ThrowOnError extends boolean = false>(options: Options<GetAllTargetsInProjectData, ThrowOnError>): RequestResult<GetAllTargetsInProjectResponses, GetAllTargetsInProjectErrors, ThrowOnError> => (options.client ?? client).get<GetAllTargetsInProjectResponses, GetAllTargetsInProjectErrors, ThrowOnError>({ url: '/api/project/{project_id}/targets', ...options });
+
+/**
+ * Create Target
+ */
+export const postTarget = <ThrowOnError extends boolean = false>(options: Options<PostTargetData, ThrowOnError>): RequestResult<PostTargetResponses, PostTargetErrors, ThrowOnError> => (options.client ?? client).post<PostTargetResponses, PostTargetErrors, ThrowOnError>({
+    url: '/api/project/{project_id}/target',
     ...options,
     headers: {
         'Content-Type': 'application/json',

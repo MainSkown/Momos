@@ -39,6 +39,74 @@ export type ProjectResponse = {
 };
 
 /**
+ * ResponseTarget
+ */
+export type ResponseTarget = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Ipv4
+     */
+    ipv4: string | null;
+    /**
+     * Ipv6
+     */
+    ipv6: string | null;
+    /**
+     * Domain
+     */
+    domain: string | null;
+    /**
+     * Description
+     */
+    description: string | null;
+    /**
+     * Ports
+     */
+    ports: Array<number> | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
+ * TargetBase
+ */
+export type TargetBase = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Ipv4
+     */
+    ipv4: string | null;
+    /**
+     * Ipv6
+     */
+    ipv6: string | null;
+    /**
+     * Domain
+     */
+    domain: string | null;
+    /**
+     * Description
+     */
+    description: string | null;
+    /**
+     * Ports
+     */
+    ports: Array<number> | null;
+};
+
+/**
  * ValidationError
  */
 export type ValidationError = {
@@ -84,27 +152,89 @@ export type GetAllProjectsResponses = {
 
 export type GetAllProjectsResponse = GetAllProjectsResponses[keyof GetAllProjectsResponses];
 
-export type PutProjectData = {
+export type PostProjectData = {
     body: ProjectBase;
     path?: never;
     query?: never;
     url: '/api/project';
 };
 
-export type PutProjectErrors = {
+export type PostProjectErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type PutProjectError = PutProjectErrors[keyof PutProjectErrors];
+export type PostProjectError = PostProjectErrors[keyof PostProjectErrors];
 
-export type PutProjectResponses = {
+export type PostProjectResponses = {
     /**
      * Successful Response
      */
     200: ProjectResponse;
 };
 
-export type PutProjectResponse = PutProjectResponses[keyof PutProjectResponses];
+export type PostProjectResponse = PostProjectResponses[keyof PostProjectResponses];
+
+export type GetAllTargetsInProjectData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/targets';
+};
+
+export type GetAllTargetsInProjectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAllTargetsInProjectError = GetAllTargetsInProjectErrors[keyof GetAllTargetsInProjectErrors];
+
+export type GetAllTargetsInProjectResponses = {
+    /**
+     * Response Getalltargetsinproject
+     *
+     * Successful Response
+     */
+    200: Array<ResponseTarget>;
+};
+
+export type GetAllTargetsInProjectResponse = GetAllTargetsInProjectResponses[keyof GetAllTargetsInProjectResponses];
+
+export type PostTargetData = {
+    body: TargetBase;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target';
+};
+
+export type PostTargetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostTargetError = PostTargetErrors[keyof PostTargetErrors];
+
+export type PostTargetResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResponseTarget;
+};
+
+export type PostTargetResponse = PostTargetResponses[keyof PostTargetResponses];

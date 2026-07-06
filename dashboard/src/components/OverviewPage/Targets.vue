@@ -11,10 +11,10 @@
           v-model="target"
           class="input-field"
           :placeholder="$t('targets.enter_addr')"
-          @keydown.enter="addTarget"
+          @keydown.enter=""
         />
       </div>
-      <div class="add-button button border" @click="addTarget">+</div>
+      <div class="add-button button border" @click="">+</div>
     </div>
 
     <!-- Table -->
@@ -94,7 +94,6 @@ import {
   ipv4Pattern,
   ipv6Pattern,
   isAddressValid,
-  TargetFactory,
   type tAddresses,
 } from "@/types";
 import { toast } from "vue3-toastify";
@@ -170,57 +169,6 @@ const handleDomainInput = (event: Event): string => {
   return value;
 };
 
-function addTarget() {
-  const addr = target.value;
-
-  if (addr.length == 0) {
-    toast.error($t("notify.address_empty"), {
-      position: toast.POSITION.TOP_CENTER,
-    });
-
-    return;
-  }
-
-  if (!isAddressValid(addr)) {
-    console.log("Invalid addr");
-
-    toast.error($t("notify.invalid_addr"), {
-      position: toast.POSITION.TOP_CENTER,
-    });
-
-    return;
-  }
-
-  const addresses: tAddresses = {
-    ipv4: ipv4Pattern.test(addr) ? addr : undefined,
-    ipv6: ipv6Pattern.test(addr) ? addr : undefined,
-    domain: domainPattern.test(addr) ? addr : undefined,
-  };
-
-  // Check if target already exist
-  const doExist = store
-    .getProjectsTargets(store.openedProject)
-    .some(
-      (t) =>
-        (t.ipv4 !== undefined && t.ipv4 === addresses.ipv4) ||
-        (t.domain !== undefined && t.domain === addresses.domain) ||
-        (t.ipv6 !== undefined && t.ipv6 === addresses.ipv6),
-    );
-
-  if (doExist) {
-    // Do not allow the same targets
-    toast.error($t("notify.address_already_exist"), {
-      position: toast.POSITION.TOP_CENTER,
-    });
-
-    return;
-  }
-
-  const t = TargetFactory(addresses, store.openedProject);
-  store.addProjectsTarget(t);
-
-  target.value = "";
-}
 
 function deleteTarget(id: string) {
   store.deleteTarget(id);
