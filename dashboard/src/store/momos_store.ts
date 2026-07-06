@@ -1,5 +1,5 @@
-import { defineStore, mapStores } from "pinia";
-import { defineComponent } from "vue";
+import { defineStore } from "pinia";
+import { getAllProjects, putProject, type PutProjectData } from "@/api";
 import type { tProject, tTarget } from "@/types";
 
 interface State {
@@ -10,10 +10,7 @@ interface State {
 
 export const useMomosStore = defineStore("momos", {
   state: (): State => ({
-    projects: [
-      { id: "123", name: "test1" },
-      { id: "213", name: "test2" },
-    ],
+    projects: [],
     targets: [],
     openedProject: ''
   }),
@@ -25,11 +22,25 @@ export const useMomosStore = defineStore("momos", {
   },
 
   actions: {
-    addProject(project: tProject) {
-        /* Ensure unique ID */
-        project.id = crypto.randomUUID()
+    async reload_projects(){     
+      const result = await getAllProjects()
 
-        this.projects.push(project)
+      if(result.response?.status !== 200){
+        throw Error("Could not load database")
+      }
+      
+      this.projects = result.data || []
+    },
+
+    async addProject(name: string) {
+        // Try adding project     
+        const result = await putProject({body: {name: name}})
+
+        if(result.response?.status !== 200 || result.data === undefined){
+          throw Error("Could not add new project")
+        }
+        
+        this.projects.push(result.data)
     },
 
     addProjectsTarget(target: tTarget){

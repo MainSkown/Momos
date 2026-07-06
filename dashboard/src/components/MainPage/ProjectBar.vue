@@ -11,7 +11,7 @@
       {{ p.name }}
     </div>
 
-    <div class="add-button button border" @click="">+</div>
+    <div class="add-button button border" @click="add_Project">+</div>
   </div>
 </template>
 
@@ -23,6 +23,10 @@ const store = useMomosStore();
 
 if (store.openedProject === "") {
   store.openedProject = store.getProjects[0]?.id ?? "";
+}
+
+function add_Project(){
+  store.addProject('kebab')
 }
 </script>
 

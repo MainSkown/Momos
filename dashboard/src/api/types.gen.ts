@@ -4,16 +4,107 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
-export type ReadRootApiGetData = {
+/**
+ * HTTPValidationError
+ */
+export type HttpValidationError = {
+    /**
+     * Detail
+     */
+    detail?: Array<ValidationError>;
+};
+
+/**
+ * ProjectBase
+ */
+export type ProjectBase = {
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
+ * Project
+ */
+export type ProjectResponse = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Id
+     */
+    id: string;
+};
+
+/**
+ * ValidationError
+ */
+export type ValidationError = {
+    /**
+     * Location
+     */
+    loc: Array<string | number>;
+    /**
+     * Message
+     */
+    msg: string;
+    /**
+     * Error Type
+     */
+    type: string;
+    /**
+     * Input
+     */
+    input?: unknown;
+    /**
+     * Context
+     */
+    ctx?: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetAllProjectsData = {
     body?: never;
     path?: never;
     query?: never;
-    url: '/api';
+    url: '/api/projects';
 };
 
-export type ReadRootApiGetResponses = {
+export type GetAllProjectsResponses = {
+    /**
+     * Response Getallprojects
+     *
+     * Successful Response
+     */
+    200: Array<ProjectResponse>;
+};
+
+export type GetAllProjectsResponse = GetAllProjectsResponses[keyof GetAllProjectsResponses];
+
+export type PutProjectData = {
+    body: ProjectBase;
+    path?: never;
+    query?: never;
+    url: '/api/project';
+};
+
+export type PutProjectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PutProjectError = PutProjectErrors[keyof PutProjectErrors];
+
+export type PutProjectResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: ProjectResponse;
 };
+
+export type PutProjectResponse = PutProjectResponses[keyof PutProjectResponses];

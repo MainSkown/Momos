@@ -1,14 +1,12 @@
+import type { ProjectResponse } from "./api";
+
 export type tTool = {
   key: string;
   name: string;
   icon?: string;
 };
 
-export type tProject = {
-  id: string;
-  name: string;
-  createdAt?: string;
-};
+export type tProject = ProjectResponse
 
 export type tAddresses = {
   ipv4?: string;
