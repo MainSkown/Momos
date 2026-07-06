@@ -43,7 +43,7 @@ class DatabaseManager:
         return self.get_all(Project)
 
     def add_project(self, project: Project):
-        self.add_to_database(project)
+        return self.add_to_database(project)
 
 db_manager = DatabaseManager(settings.database_url)
 

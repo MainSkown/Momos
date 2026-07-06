@@ -30,6 +30,10 @@ export const useMomosStore = defineStore("momos", {
       }
       
       this.projects = result.data || []
+
+      if (this.openedProject === ''){
+          this.openedProject = this.projects.at(0)?.id || ''
+        }
     },
 
     async addProject(name: string) {
@@ -41,6 +45,10 @@ export const useMomosStore = defineStore("momos", {
         }
         
         this.projects.push(result.data)
+
+        if (this.openedProject === ''){
+          this.openedProject = this.projects.at(0)?.id || ''
+        }
     },
 
     addProjectsTarget(target: tTarget){
