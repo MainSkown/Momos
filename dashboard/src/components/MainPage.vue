@@ -23,7 +23,7 @@ const store = useMomosStore()
 
 onMounted(async () => {
   try{
-    await store.reload_projects();
+    await store.reloadProjects();
   } catch (err){
     console.log("Something went wrong when reloading projects:", err)
   }

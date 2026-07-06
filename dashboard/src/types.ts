@@ -16,6 +16,10 @@ export type tAddresses = {
 
 export type tTarget = ResponseTarget
 
+export function getTarget(target: tTarget): string {
+  return target.ipv4 || target.ipv6 || target.domain || "";
+}
+
 /* Those are not types, but still useful */
 
 export const ipv4Pattern =

@@ -10,21 +10,23 @@
         <input
           v-model="target"
           class="input-field"
-          :placeholder="$t('targets.enter_addr')"
-          @keydown.enter=""
+          :placeholder="$t('targets.enter_name')"
+          @keydown.enter="addTarget"
         />
       </div>
-      <div class="add-button button border" @click="">+</div>
+      <div class="add-button button border" @click="addTarget">+</div>
     </div>
 
     <!-- Table -->
     <div class="column table">
       <!-- Head-row -->
       <div class="row table-row">
+        <!-- Name -->
         <div class="border cell text-center">{{ $t("targets.name") }}</div>
-        <div class="border cell text-center">{{ $t("targets.ipv4") }}</div>
-        <div class="border cell text-center">{{ $t("targets.ipv6") }}</div>
-        <div class="border cell text-center">{{ $t("targets.domain") }}</div>
+        <!-- Target -->
+        <div class="border cell text-center">{{ $t("targets.target") }}</div>
+        <!-- Settings -->
+        <div class="border small-cell" />
         <div class="border small-cell" />
       </div>
 
@@ -38,35 +40,15 @@
           v-for="t in store.getProjectsTargets(store.openedProject)"
         >
           <div class="border cell text-center">
-            <input
-              v-model="t.name"
-              class="input-field no-border text-center"
-              :placeholder="$t('targets.no_name')"
-            />
+            {{ t.name }}
           </div>
           <div class="border cell text-center">
-            <input
-              :value="t.ipv4"
-              class="input-field no-border text-center"
-              :placeholder="$t('targets.no_ipv4')"
-              @input="(event) => (t.ipv4 = handleIPv4Input(event))"
-            />
-          </div>
-          <div class="border cell text-center">
-            <input
-              :value="t.ipv6"
-              class="input-field no-border text-center"
-              :placeholder="$t('targets.no_ipv6')"
-              @input="(event) => (t.ipv6 = handleIPv6Input(event))"
-            />
-          </div>
-          <div class="border cell text-center">
-            <input
-              :value="t.domain"
-              class="input-field no-border text-center"
-              :placeholder="$t('targets.no_domain')"
-              @input="(event) => (t.domain = handleDomainInput(event))"
-            />
+            {{ getTarget(t) || $t('targets.no_target') }}
+          </div>          
+          <div class="button border small-cell" @click="deleteTarget(t.id)">
+            <span class="material-icons-outlined" data-fallback="✕">
+              settings
+            </span>
           </div>
           <div class="button border small-cell" @click="deleteTarget(t.id)">
             <span class="material-icons-outlined" data-fallback="✕">
@@ -87,10 +69,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
 import {
   domainPattern,
+  getTarget,
   ipv4Pattern,
   ipv6Pattern,
   isAddressValid,
@@ -101,6 +84,24 @@ import { useI18n } from "vue-i18n";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
+
+function loadTargets(){
+  store.loadTargets(store.openedProject)
+}
+
+onMounted(() => {
+  loadTargets()
+})
+
+// Load targets when opened project changes
+watch(
+  () => store.openedProject,
+  (newProject, oldProject) => {
+    if (newProject !== oldProject){
+      store.loadTargets(store.openedProject)
+    }
+  }
+)
 
 const target = ref<string>("");
 
@@ -169,6 +170,17 @@ const handleDomainInput = (event: Event): string => {
   return value;
 };
 
+function addTarget(){
+  const name = target.value
+
+  if (name.length === 0){
+    toast.error($t('targets.name_empty'), {position:toast.POSITION.TOP_CENTER})
+  }
+
+  store.addTarget2Project(name, store.openedProject)
+  target.value = ''
+}
+
 
 function deleteTarget(id: string) {
   store.deleteTarget(id);
@@ -200,6 +212,8 @@ function deleteTarget(id: string) {
 }
 
 .cell {
+  padding-top: 5px;
+  padding-bottom: 5px;
   flex-grow: 1;
   width: 25%;
 }

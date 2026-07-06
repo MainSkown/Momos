@@ -6,6 +6,7 @@ import {
   type TargetBase,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
+import { getAllTargetsInProject } from "../api/sdk.gen";
 
 interface State {
   openedProject: string;
@@ -27,11 +28,12 @@ export const useMomosStore = defineStore("momos", {
   },
 
   actions: {
-    async reload_projects() {
+    /* Projects */
+    async reloadProjects() {
       const result = await getAllProjects();
 
       if (result.response?.status !== 200) {
-        throw Error("Could not load database");
+        throw Error("Could not load projects");
       }
 
       this.projects = result.data || [];
@@ -54,6 +56,25 @@ export const useMomosStore = defineStore("momos", {
       if (this.openedProject === "") {
         this.openedProject = this.projects.at(0)?.id || "";
       }
+    },
+
+    /* Targets */
+    async loadTargets(projectID: string) {
+      const result = await getAllTargetsInProject({
+        path: { project_id: projectID },
+      });
+
+      if (result.response?.status !== 200) {
+        throw Error("Could not load targets");
+      }
+
+      this.targets = [
+        ...this.targets,
+        ...(result.data?.filter(
+          // Filter out if for some reason loads the same targets
+          (newT) => !this.targets.some((oldT) => oldT.id === newT.id),
+        ) || []),
+      ];
     },
 
     async addTarget2Project(name: string, projectID: string) {
