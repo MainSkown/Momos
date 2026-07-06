@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from src.routers import project_router
 
 app = FastAPI()
 
@@ -8,8 +9,8 @@ def custom_openapi():
         return app.openapi_schema
     
     openapi_schema= get_openapi(
-        title="Momos Backend API",
-        version="0.0.1",
+        title="Momos Backend API",     
+        version="0.0.1",   
         routes=app.routes
     )
 
@@ -20,7 +21,5 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-
-@app.get("/api")
-def read_root():
-    return {"Hello": "World"}
+# Routers
+app.include_router(project_router, prefix="/api")

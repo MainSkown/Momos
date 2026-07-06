@@ -28,6 +28,10 @@ services:
   db:
     container_name: "momos-db"
     image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: momos
+      POSTGRES_PASSWORD: momos
+      POSTGRES_DB: momos_db
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
