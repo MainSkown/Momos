@@ -18,6 +18,7 @@
     </div>
 
     <!-- Table -->
+     <div class="flex flex-center">
     <div class="column table">
       <!-- Head-row -->
       <div class="row table-row">
@@ -44,7 +45,7 @@
           v-for="t in store.getProjectsTargets(store.openedProject)"
         >
           <div class="border cell text-center truncate-text">
-            {{ t.name }}
+            <span>{{ t.name }}</span>
           </div>
           <div class="border cell text-center">
             <span>{{ getTarget(t) || $t("targets.no_target") }} </span>
@@ -88,14 +89,14 @@
                     toDelete = '';
                   "
                 >
-                  <span>{{ $t("targets.delete_yes") }}</span>
+                  <span>{{ $t("universal.yes") }}</span>
                 </button>
                 <button
                   class="button border"
                   style="flex-grow: 1"
                   @click="toDelete = ''"
                 >
-                  <span>{{ $t("targets.delete_no") }}</span>
+                  <span>{{ $t('universal.no') }}</span>
                 </button>
               </div>
             </Dialog>
@@ -122,6 +123,7 @@
         </div>
       </div>
     </div>
+  </div>
   </div>
 </template>
 
@@ -192,27 +194,32 @@ function deleteTarget(id: string) {
 }
 
 .table {
-  justify-content: center;
-  align-items: safe center;
-  margin: 5px 5px 0 5px;
-  width: 98.8%;
+  width: calc(100% - 10px)
 }
 
 .table-row {
+  display: flex;
   width: 100%;
 }
 
-.cell {
-  padding-top: 5px;
-  padding-bottom: 5px;
-  padding-inline: 8px;
-  flex-grow: 1;
-  width: 25%;
+.table-row > div {
+  margin-left: -1px;
+}
 
+.table-row > div:first-child {
+  margin-left: 0;
+}
+
+.cell {
+  flex: 1 1 0px;
+  padding: 5px 8px;
   min-width: 0;
 }
 
 .small-cell {
-  width: 4%;
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

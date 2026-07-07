@@ -26,14 +26,25 @@ export const en = {
         no_domain: "Enter target's domain",
         no_ports: "Enter target's ports",
         to_delete: "Are you sure you want to delete this target?",
-        delete_info: "This action cannot be undone.",
-        delete_yes: "Yes",
-        delete_no: "No",
+        delete_info: "This action cannot be undone.",      
     },
 
     notify: {
         address_already_exist: 'There is already a target with given address',
         address_empty: 'Address can not be empty',
         invalid_addr: 'Invalid address. It should be: IPv4, IPv6 or a domain address'
-    }
+    },
+
+    project: {
+        name: "Project's name",
+        create_new: "Create new project",
+        no_projects: "There are no projects yet",
+        enter_name: "Enter project's name"
+    },
+
+    universal:{
+        yes: "Yes",
+        no: "No",
+        add: "Add",
+    },
 }

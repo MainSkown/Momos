@@ -16,20 +16,23 @@
 
   <div v-if="store.projects.length === 0" class="flex-center">
     <div class="column text-center text-red">
-      <h4>There are no projects yet.</h4>
+      <h4>{{ $t('project.no_projects') }}.</h4>
       <button class="button border" style="width: 300px" @click="show_add_project = true">
-        <h4>Create new project</h4>
+        <h4>{{ $t('project.create_new') }}</h4>
       </button>
     </div>
   </div>
 
   <Dialog v-model:visible="show_add_project">
     <template v-slot:title>
-      <h3 class="no-margin">Create New Project</h3>
+      <h3 class="no-margin">{{ $t('project.create_new') }}</h3>
     </template>
     <div class="column" style="gap: 10px;">
-    <input class="input-field" placeholder="Project's Name" v-model="projects_name"/>
-    <button class="button border" @click="add_Project">Add</button>
+      <div class="input-wrapper">
+      <label class="floating-label">{{ $t('project.name') }}</label>
+    <input class="input-field" :placeholder="$t('project.enter_name')" v-model="projects_name"/>
+    </div>
+    <button class="button border" @click="add_Project">{{ $t('universal.add') }}</button>
     </div>
   </Dialog>
 </template>
