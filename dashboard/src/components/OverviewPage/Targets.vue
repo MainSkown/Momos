@@ -22,9 +22,13 @@
       <!-- Head-row -->
       <div class="row table-row">
         <!-- Name -->
-        <div class="border cell text-center">{{ $t("targets.name") }}</div>
+        <div class="border cell text-center">
+          <span>{{ $t("targets.name") }}</span>
+        </div>
         <!-- Target -->
-        <div class="border cell text-center">{{ $t("targets.target") }}</div>
+        <div class="border cell text-center">
+          <span>{{ $t("targets.target") }}</span>
+        </div>
         <!-- Settings -->
         <div class="border small-cell" />
         <div class="border small-cell" />
@@ -39,22 +43,75 @@
           class="row table-row"
           v-for="t in store.getProjectsTargets(store.openedProject)"
         >
-          <div class="border cell text-center">
+          <div class="border cell text-center truncate-text">
             {{ t.name }}
           </div>
           <div class="border cell text-center">
-            {{ getTarget(t) || $t('targets.no_target') }}
-          </div>          
-          <div class="button border small-cell" @click="deleteTarget(t.id)">
+            <span>{{ getTarget(t) || $t("targets.no_target") }} </span>
+          </div>
+          <div
+            class="button border small-cell"
+            @click="
+              showDialogFor = t.id;
+              console.log('Huh', showDialogFor);
+            "
+          >
             <span class="material-icons-outlined" data-fallback="✕">
               settings
             </span>
           </div>
-          <div class="button border small-cell" @click="deleteTarget(t.id)">
+          <div class="button border small-cell" @click="toDelete = t.id">
             <span class="material-icons-outlined" data-fallback="✕">
               delete_outline
             </span>
+
+            <Dialog
+              v-if="toDelete === t.id"
+              :visible="toDelete === t.id"
+              :title="$t('targets.to_delete')"
+              :no-close-button="true"
+            >
+              <span
+                class="text-center flex-center"
+                style="margin-bottom: 20px"
+                >{{ $t("targets.delete_info") }}</span
+              >
+              <div
+                class="row flex-center gap-high"
+                style="padding-inline: 10px"
+              >
+                <button
+                  class="button border"
+                  style="flex-grow: 1"
+                  @click="
+                    deleteTarget(toDelete);
+                    toDelete = '';
+                  "
+                >
+                  <span>{{ $t("targets.delete_yes") }}</span>
+                </button>
+                <button
+                  class="button border"
+                  style="flex-grow: 1"
+                  @click="toDelete = ''"
+                >
+                  <span>{{ $t("targets.delete_no") }}</span>
+                </button>
+              </div>
+            </Dialog>
           </div>
+
+          <!-- Settings Dialog -->
+          <TargetSettingsDialog
+            v-if="showDialogFor == t.id"
+            :visible="showDialogFor == t.id"
+            @update:visible="
+              (v) => {
+                if (!v) showDialogFor = '';
+              }
+            "
+            :target="t"
+          />
         </div>
 
         <div
@@ -71,116 +128,50 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
-import {
-  domainPattern,
-  getTarget,
-  ipv4Pattern,
-  ipv6Pattern,
-  isAddressValid,
-  type tAddresses,
-} from "@/types";
+import { getTarget } from "@/types";
 import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
+import TargetSettingsDialog from "./TargetSettingsDialog.vue";
+import Dialog from "../reusable/Dialog.vue";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
 
-function loadTargets(){
-  store.loadTargets(store.openedProject)
+const showDialogFor = ref<string>("");
+const toDelete = ref<string>("");
+
+function loadTargets() {
+  store.loadTargets(store.openedProject);
 }
 
 onMounted(() => {
-  loadTargets()
-})
+  loadTargets();
+});
 
 // Load targets when opened project changes
 watch(
   () => store.openedProject,
   (newProject, oldProject) => {
-    if (newProject !== oldProject){
-      store.loadTargets(store.openedProject)
+    if (newProject !== oldProject) {
+      store.loadTargets(store.openedProject);
     }
-  }
-)
+  },
+);
 
 const target = ref<string>("");
 
-const handleIPv4Input = (event: Event): string => {
-  const e = event.target as HTMLInputElement;
-  let value = e.value;
+function addTarget() {
+  const name = target.value;
 
-  // 1. Instantly remove any character that isn't a digit or a dot
-  value = value.replace(/[^0-9.]/g, "");
-
-  // 2. Split the string into segments by the dots
-  const segments = value.split(".");
-
-  // 3. Sanitize each segment (limit to a max of 4 segments total)
-  const cleanedSegments = segments.slice(0, 4).map((segment) => {
-    let clean = segment.slice(0, 3);
-
-    if (parseInt(clean, 10) > 255) {
-      clean = "255";
-    }
-    return clean;
-  });
-
-  const joinedResult = cleanedSegments.join(".");
-
-  // FORCE THE DOM SYNC: This instantly vanishes illegal characters from the screen
-  e.value = joinedResult;
-
-  return joinedResult;
-};
-
-const handleIPv6Input = (event: Event): string => {
-  const e = event.target as HTMLInputElement;
-  let value = e.value;
-
-  // 1. Keep only hex characters and colons (case-insensitive)
-  value = value.replace(/[^0-9a-fA-F:]/g, "");
-
-  // 2. Split into segments by colons
-  const segments = value.split(":");
-
-  // 3. Max 8 segments total, max 4 characters per segment
-  const cleanedSegments = segments.slice(0, 8).map((segment) => {
-    return segment.slice(0, 4);
-  });
-
-  const joinedResult = cleanedSegments.join(":");
-
-  // Force DOM sync
-  e.value = joinedResult;
-  return joinedResult;
-};
-
-const handleDomainInput = (event: Event): string => {
-  const e = event.target as HTMLInputElement;
-  let value = e.value;
-
-  // 1. Lowercase it automatically and strip non-domain characters
-  value = value.toLowerCase().replace(/[^a-z0-9.-]/g, "");
-
-  // 2. Prevent consecutive dots (e.g., typing 'google..com' instantly becomes 'google.com')
-  value = value.replace(/\.{2,}/g, ".");
-
-  // Force DOM sync
-  e.value = value;
-  return value;
-};
-
-function addTarget(){
-  const name = target.value
-
-  if (name.length === 0){
-    toast.error($t('targets.name_empty'), {position:toast.POSITION.TOP_CENTER})
+  if (name.length === 0) {
+    toast.error($t("targets.name_empty"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
   }
 
-  store.addTarget2Project(name, store.openedProject)
-  target.value = ''
+  store.addTarget2Project(name, store.openedProject);
+  target.value = "";
 }
-
 
 function deleteTarget(id: string) {
   store.deleteTarget(id);
@@ -214,8 +205,11 @@ function deleteTarget(id: string) {
 .cell {
   padding-top: 5px;
   padding-bottom: 5px;
+  padding-inline: 8px;
   flex-grow: 1;
   width: 25%;
+
+  min-width: 0;
 }
 
 .small-cell {

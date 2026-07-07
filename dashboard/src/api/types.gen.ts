@@ -268,3 +268,31 @@ export type DeleteTargetResponses = {
 };
 
 export type DeleteTargetResponse = DeleteTargetResponses[keyof DeleteTargetResponses];
+
+export type UpdateTargetData = {
+    body: TargetBase;
+    path: {
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/target/{target_id}';
+};
+
+export type UpdateTargetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateTargetError = UpdateTargetErrors[keyof UpdateTargetErrors];
+
+export type UpdateTargetResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};

@@ -4,7 +4,8 @@ import {
   postProject,
   postTarget,
   getAllTargetsInProject,
-  deleteTarget
+  deleteTarget,
+  updateTarget
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 
@@ -105,5 +106,16 @@ export const useMomosStore = defineStore("momos", {
 
       this.targets = this.targets.filter((t) => t.id !== targetID);
     },
+
+    async updateTarget(target: tTarget){
+      const result = await updateTarget({body: {...target}, path: {target_id: target.id}})
+
+      if (result.response?.status !== 200){
+        throw Error('Could not update target: ' + target.id)
+      }
+
+      const index = this.targets.findIndex((t) => t.id === target.id)
+      this.targets[index] = target
+    }
   },
 });

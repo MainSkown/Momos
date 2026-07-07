@@ -141,6 +141,11 @@ a:hover {
 .full-width {
   width: 100%;
 }
+
+.full-height {
+  height: 100%;
+}
+
 .column {
   display: flex;
   flex-direction: column;
@@ -159,6 +164,12 @@ a:hover {
   padding-left: 20px;
   margin-top: 5px;
   margin-bottom: 5px;
+}
+
+.truncate-text {
+  white-space: nowrap;  
+  overflow: hidden;    
+  text-overflow: ellipsis; 
 }
 
 .separator {
@@ -209,12 +220,22 @@ a:hover {
 }
 
 .input-field.is-invalid {
-  border-color: var(--status-critical);
-  box-shadow: 0 0 10px rgba(220, 38, 38, 0.4);
+  border-color: var(--status-critical) !important;
+  background-color: var(--card-bg) !important; 
+  box-shadow: var(--shadow-red-strong) !important;
+  color: var(--text-white) !important;
+  animation: shake 0.3s ease-in-out;
 }
 
 .input-field.is-invalid:focus {
-  box-shadow: 0 0 15px rgba(220, 38, 38, 0.6);
+  border-color: var(--text-white) !important;
+  background-color: var(--red-darker) !important;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }
 
 .terminal-input-group {
@@ -242,6 +263,29 @@ a:hover {
 /* 3. Pushing the user's text to the right so it doesn't overlap the character */
 .terminal-input-group .input-field {
   padding-left: calc(var(--spacing-md) + 1.25rem);
+}
+
+.input-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.input-wrapper:has(.floating-label) .input-field {
+  padding-top: 15px !important; 
+}
+
+.floating-label {
+  position: absolute;
+  top: 4px;      
+  left: 10px;    
+  font-size: 0.65rem;
+  color: var(--red-primary); 
+  font-family: var(--font-mono); 
+  font-weight: bold;
+  letter-spacing: 1px;
+  pointer-events: none; 
+  z-index: 1;
 }
 
 /* Gaps */

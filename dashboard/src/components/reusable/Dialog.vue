@@ -1,40 +1,47 @@
 <template>
-  <Transition name="fade">
-    <div v-if="visible" class="dialog-overlay" @click.self="visible = false">
-      <div class="dialog-content border">        
-        <div class="dialog-header">
-          <slot name="title"><h3 class="no-margin">Title</h3></slot>
-          <button class="button border" @click="visible = false">✕</button>          
-        </div>
+  <Teleport to="body">
+    <Transition name="fade">
+      <div v-if="visible" class="dialog-overlay" @click.self="visible = false">
+        <div class="dialog-content border">
+          <div class="dialog-header" v-if="showTitle">
+            <slot name="title"
+              ><h3 class="no-margin truncate-text">{{ title }}</h3></slot
+            >
+            <button v-if="!noCloseButton" class="button border" @click="visible = false">✕</button>
+          </div>
 
-        <div class="dialog-body">
-          <slot />
-        </div>
+          <div class="dialog-body">
+            <slot />
+          </div>
 
-        <div class="dialog-footer">
-          <slot name="footer">            
-          </slot>
+          <div class="dialog-footer">
+            <slot name="footer"> </slot>
+          </div>
         </div>
       </div>
-    </div>
-  </Transition>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
 const visible = defineModel("visible", { type: Boolean, default: false });
+withDefaults(defineProps<{ title?: string; showTitle?: boolean, noCloseButton?: boolean }>(), {
+  showTitle: true,
+  noCloseButton: false
+});
 </script>
 
 <style scoped>
-.dialog-header{
-    display: flex;
-    justify-content: center;
-    margin-bottom: 10px;
+.dialog-header {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
 }
 
-.button{
-    align-self: center;
-    margin-left: auto;
-    margin-right: -10px;
+.button {
+  align-self: center;
+  margin-left: auto;
+  margin-right: -10px;
 }
 
 .dialog-overlay {
@@ -54,7 +61,7 @@ const visible = defineModel("visible", { type: Boolean, default: false });
   padding-top: 10px;
   padding-bottom: 20px;
   border-radius: 8px;
-  width: 400px;
+  width: auto;
 }
 .fade-enter-active,
 .fade-leave-active {

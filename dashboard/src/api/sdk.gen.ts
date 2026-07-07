@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses } from './types.gen';
+import type { DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -56,3 +56,15 @@ export const postTarget = <ThrowOnError extends boolean = false>(options: Option
  * Delete Target
  */
 export const deleteTarget = <ThrowOnError extends boolean = false>(options: Options<DeleteTargetData, ThrowOnError>): RequestResult<DeleteTargetResponses, DeleteTargetErrors, ThrowOnError> => (options.client ?? client).delete<DeleteTargetResponses, DeleteTargetErrors, ThrowOnError>({ url: '/api/target/{target_id}', ...options });
+
+/**
+ * Update Target
+ */
+export const updateTarget = <ThrowOnError extends boolean = false>(options: Options<UpdateTargetData, ThrowOnError>): RequestResult<UpdateTargetResponses, UpdateTargetErrors, ThrowOnError> => (options.client ?? client).put<UpdateTargetResponses, UpdateTargetErrors, ThrowOnError>({
+    url: '/api/target/{target_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
