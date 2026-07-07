@@ -2,7 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, status
 from src.services import TargetService
-from src.schemas import ResponseTarget, TargetBase
+from src.schemas import ResponseTarget, TargetBase, Target
 
 router = APIRouter()
 
@@ -42,3 +42,17 @@ def delete_target(target_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not delete target: {target_id}",
         )
+
+@router.put("/target/{target_id}", status_code=status.HTTP_200_OK, operation_id="UpdateTarget")
+def update_target(target_id: str, data: TargetBase):
+    target = Target(**data.model_dump(), id= target_id)
+    try:
+        TargetService.update_target(target)
+        return
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not update target: {target_id}",
+        )
+    

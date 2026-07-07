@@ -74,6 +74,19 @@ class DatabaseManager:
             statement = delete(Target).where(Target.id == parsed_uuid)
             session.exec(statement)
             session.commit()
+            
+    def update_target(self, target: Target):
+        with Session(self.engine) as session:
+            session.merge(target)
+            session.commit()
+            
+    def get_target(self, target_id: str) -> Target | None:
+        parsed_uuid = uuid.UUID(target_id)
+        
+        with Session(self.engine) as session:
+            target = session.get(Target, parsed_uuid)
+            return target
+        
 
 
 db_manager = DatabaseManager(settings.database_url)

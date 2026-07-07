@@ -9,13 +9,15 @@ if TYPE_CHECKING:
 
 ValidPort = Annotated[int, PydanticField(ge=1, le=65535)]
 
+
 class TargetBase(SQLModel):
     name: str
     ipv4: str | None
     ipv6: str | None
     domain: str | None
     description: str | None
-    ports: List[ValidPort] | None = Field(sa_column=Column(ARRAY(Integer))) 
+    ports: List[ValidPort] | None = Field(sa_column=Column(ARRAY(Integer)))
+
 
 class Target(TargetBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -28,6 +30,4 @@ class ResponseTarget(TargetBase):
     id: uuid.UUID
     project_id: uuid.UUID
 
-    model_config = {
-        "from_attributes": True
-    }
+    model_config = {"from_attributes": True}
