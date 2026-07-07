@@ -187,7 +187,7 @@ function deleteTarget(id: string) {
 
 .add-button {
   aspect-ratio: 1;
-  width: 4%;
+  width: 5%;
 
   font-size: x-large;
   margin: 5px;
