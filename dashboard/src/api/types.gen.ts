@@ -39,6 +39,20 @@ export type ProjectResponse = {
 };
 
 /**
+ * ReceiveCommandOutputMessage
+ */
+export type ReceiveCommandOutputMessage = {
+    /**
+     * Type
+     */
+    type?: 'ReceiveCommandOutputMessage';
+    /**
+     * Output
+     */
+    output: string;
+};
+
+/**
  * ResponseTarget
  */
 export type ResponseTarget = {
@@ -74,6 +88,24 @@ export type ResponseTarget = {
      * Project Id
      */
     project_id: string;
+};
+
+/**
+ * SendCommandMessage
+ */
+export type SendCommandMessage = {
+    /**
+     * Type
+     */
+    type?: 'SendCommandMessage';
+    /**
+     * Command
+     */
+    command: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
 };
 
 /**
@@ -132,6 +164,16 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * WebsocketTraffic
+ */
+export type WebsocketTraffic = {
+    /**
+     * Items
+     */
+    items: Array<SendCommandMessage | ReceiveCommandOutputMessage>;
 };
 
 export type GetAllProjectsData = {
@@ -296,3 +338,19 @@ export type UpdateTargetResponses = {
      */
     200: unknown;
 };
+
+export type WsTypesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/ws/_internal/ws-types';
+};
+
+export type WsTypesResponses = {
+    /**
+     * Successful Response
+     */
+    200: WebsocketTraffic;
+};
+
+export type WsTypesResponse = WsTypesResponses[keyof WsTypesResponses];

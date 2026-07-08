@@ -1,0 +1,87 @@
+from typing import Dict, List, Callable, Awaitable, TypeVar
+from fastapi import WebSocket
+from pydantic import TypeAdapter, ValidationError
+from src.websocket import WebSocketMessage, WebSocketTrafficUnion
+import asyncio
+
+TMessage = TypeVar("TMessage", bound=WebSocketMessage)
+
+
+class WebSocketRegistry:
+    def __init__(self):
+        self.active_sockets: Dict[str, WebSocket] = {}
+
+        # Nested Dictionary: { project_id: { message_type: [callbacks] } }
+        self.hooks: Dict[
+            str, Dict[str, List[Callable[[str, WebSocketMessage], Awaitable[None]]]]
+        ] = {}
+
+        self.message_adapter = TypeAdapter(WebSocketTrafficUnion)
+
+    def add_hook(
+        self,
+        project_id: str,
+        message_type: str,
+        callback: Callable[[str, TMessage], Awaitable[None]],
+    ):
+        """Register an async function to trigger for a SPECIFIC project and message type."""
+        # 1. Ensure the project dictionary exists
+        if project_id not in self.hooks:
+            self.hooks[project_id] = {}
+
+        # 2. Ensure the message type list exists for this project
+        if message_type not in self.hooks[project_id]:
+            self.hooks[project_id][message_type] = []
+
+        # 3. Add the callback
+        self.hooks[project_id][message_type].append(callback)
+
+    async def connect(self, project_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_sockets[project_id] = websocket
+
+        try:
+            async for raw_data in websocket.iter_text():
+                try:
+                    message = self.message_adapter.validate_json(raw_data)
+
+                    # Look up hooks ONLY for this specific project
+                    project_hooks = self.hooks.get(project_id, {})
+                    handlers = project_hooks.get(message.type, [])
+
+                    for handler in handlers:
+                        asyncio.create_task(handler(project_id, message))
+
+                except ValidationError as e:
+                    print(f"Invalid message format received: {e}")
+                except Exception as e:
+                    print(f"Error executing hook for {project_id}: {e}")
+
+        finally:
+            print(f"Client {project_id} disconnected.")
+            self.disconnect(project_id)
+
+    def disconnect(self, project_id: str):
+        """Clean up the socket and optionally the hooks."""
+        if project_id in self.active_sockets:
+            del self.active_sockets[project_id]
+
+    def remove_hooks(self, project_id: str):
+        """Clean up hooks if not used anymore"""
+        if project_id in self.hooks:
+            del self.hooks[project_id]
+
+    async def send_message(self, project_id: str, message: WebSocketMessage):
+        websocket = self.active_sockets.get(project_id)
+        if not websocket:
+            print(f"Cannot send message: No active connection for {project_id}")
+            return
+
+        try:
+            await websocket.send_text(message.model_dump_json())
+        except Exception as e:
+            print(f"Connection lost while sending to {project_id}: {e}")
+            self.disconnect(project_id)
+
+
+ws_registry = WebSocketRegistry()
