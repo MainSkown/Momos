@@ -1,7 +1,7 @@
 from typing import Dict, List, Callable, Awaitable, TypeVar
 from fastapi import WebSocket
 from pydantic import TypeAdapter, ValidationError
-from src.websocket import WebSocketMessage, WebSocketTrafficUnion
+from src.websocket import WebSocketMessage, WebSocketTrafficUnion, WsTypes
 import asyncio
 
 TMessage = TypeVar("TMessage", bound=WebSocketMessage)
@@ -11,30 +11,45 @@ class WebSocketRegistry:
     def __init__(self):
         self.active_sockets: Dict[str, WebSocket] = {}
 
-        # Nested Dictionary: { project_id: { message_type: [callbacks] } }
-        self.hooks: Dict[
-            str, Dict[str, List[Callable[[str, WebSocketMessage], Awaitable[None]]]]
+        # Global hooks, mainly used for creating stuff { message_type: [callbacks(project_id, message)] } }
+        self.global_hooks: Dict[
+            WsTypes, List[Callable[[str, WebSocketMessage], Awaitable[None]]]
+        ] = {}
+
+        # Nested Dictionary: { project_id: { message_type: [callbacks(project_id, message)] } }
+        self.project_hooks: Dict[
+            str, Dict[WsTypes, List[Callable[[str, WebSocketMessage], Awaitable[None]]]]
         ] = {}
 
         self.message_adapter = TypeAdapter(WebSocketTrafficUnion)
+        
+    def add_global_hook(
+        self,
+        message_type: WsTypes,
+        callback: Callable[[str, TMessage], Awaitable[None]]
+    ):
+        if message_type not in self.global_hooks:
+            self.global_hooks[message_type] = []
+        
+        self.global_hooks[message_type].append(callback)
 
-    def add_hook(
+    def add_project_hook(
         self,
         project_id: str,
-        message_type: str,
+        message_type: WsTypes,
         callback: Callable[[str, TMessage], Awaitable[None]],
     ):
         """Register an async function to trigger for a SPECIFIC project and message type."""
         # 1. Ensure the project dictionary exists
-        if project_id not in self.hooks:
-            self.hooks[project_id] = {}
+        if project_id not in self.project_hooks:
+            self.project_hooks[project_id] = {}
 
         # 2. Ensure the message type list exists for this project
-        if message_type not in self.hooks[project_id]:
-            self.hooks[project_id][message_type] = []
+        if message_type not in self.project_hooks[project_id]:
+            self.project_hooks[project_id][message_type] = []
 
         # 3. Add the callback
-        self.hooks[project_id][message_type].append(callback)
+        self.project_hooks[project_id][message_type].append(callback)
 
     async def connect(self, project_id: str, websocket: WebSocket):
         await websocket.accept()
@@ -44,9 +59,17 @@ class WebSocketRegistry:
             async for raw_data in websocket.iter_text():
                 try:
                     message = self.message_adapter.validate_json(raw_data)
+                    
+                    # Look up global hooks
+                    global_handlers = self.global_hooks.get(message.type, [])
+                    
+                    for handler in global_handlers:
+                        # We still want to know from which project the message came from
+                        asyncio.create_task(handler(project_id, message))
+                    
 
                     # Look up hooks ONLY for this specific project
-                    project_hooks = self.hooks.get(project_id, {})
+                    project_hooks = self.project_hooks.get(project_id, {})
                     handlers = project_hooks.get(message.type, [])
 
                     for handler in handlers:
@@ -68,8 +91,8 @@ class WebSocketRegistry:
 
     def remove_hooks(self, project_id: str):
         """Clean up hooks if not used anymore"""
-        if project_id in self.hooks:
-            del self.hooks[project_id]
+        if project_id in self.project_hooks:
+            del self.project_hooks[project_id]
 
     async def send_message(self, project_id: str, message: WebSocketMessage):
         websocket = self.active_sockets.get(project_id)

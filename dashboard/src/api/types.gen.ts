@@ -5,6 +5,20 @@ export type ClientOptions = {
 };
 
 /**
+ * CreateUserKaliMessage
+ */
+export type CreateUserKaliMessage = {
+    /**
+     * Type
+     */
+    type: 'CreateUserKaliMessage';
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -45,11 +59,7 @@ export type ReceiveCommandOutputMessage = {
     /**
      * Type
      */
-    type?: 'ReceiveCommandOutputMessage';
-    /**
-     * Output
-     */
-    output: string;
+    type: 'ReceiveCommandOutputMessage';
 };
 
 /**
@@ -97,7 +107,7 @@ export type SendCommandMessage = {
     /**
      * Type
      */
-    type?: 'SendCommandMessage';
+    type: 'SendCommandMessage';
     /**
      * Command
      */
@@ -173,7 +183,7 @@ export type WebsocketTraffic = {
     /**
      * Items
      */
-    items: Array<SendCommandMessage | ReceiveCommandOutputMessage>;
+    items: Array<SendCommandMessage | ReceiveCommandOutputMessage | CreateUserKaliMessage>;
 };
 
 export type GetAllProjectsData = {
