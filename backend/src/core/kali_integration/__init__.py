@@ -1,5 +1,5 @@
-from .kali_registry import KaliRegistry
+from .kali_registry import kali_registry
 
 __all__ = [
-    "KaliRegistry"
+    "kali_registry"
 ]

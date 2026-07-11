@@ -9,7 +9,7 @@ router = APIRouter()
 @router.websocket("/{project_id}")
 async def websocket_endpoint(project_id: str, websocket: WebSocket):
     try:
-        ws_registry.connect(project_id, websocket)
+        await ws_registry.connect(project_id, websocket)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

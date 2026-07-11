@@ -10,6 +10,7 @@ class WsTypes(str, Enum):
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
     CreateUserKaliMessage = "CreateUserKaliMessage"
+    UserKaliCreatedMessage = "UserKaliCreatedMessage"
 
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -35,12 +36,16 @@ class SendCommandMessage(WebSocketMessage):
 
 class ReceiveCommandOutputMessage(WebSocketMessage):
     type: Literal[WsTypes.ReceiveCommandOutputMessage]
+    output: str
     
 
 class CreateUserKaliMessage(WebSocketMessage):
     type: Literal[WsTypes.CreateUserKaliMessage]
     project_id: str
 
-
+class UserKaliCreatedMessage(WebSocketMessage):
+    type: Literal[WsTypes.UserKaliCreatedMessage]
+    client_id: str
+    
 # Must be at the end, filled on runtime
 WebSocketTrafficUnion = Union[*REGISTERED_WS_MESSAGES]

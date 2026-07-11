@@ -102,7 +102,8 @@ class KaliManger:
 
         return output
 
-    async def execute(self, command: str) -> str: ...
+    async def execute(self, command: str, user: str = "momos") -> str: 
+        return await self._exec_in_container(command, user)
 
     async def stop(self):
         if self.container:
