@@ -60,6 +60,10 @@ export type ReceiveCommandOutputMessage = {
      * Type
      */
     type: 'ReceiveCommandOutputMessage';
+    /**
+     * Output
+     */
+    output: string;
 };
 
 /**
@@ -149,6 +153,20 @@ export type TargetBase = {
 };
 
 /**
+ * UserKaliCreatedMessage
+ */
+export type UserKaliCreatedMessage = {
+    /**
+     * Type
+     */
+    type: 'UserKaliCreatedMessage';
+    /**
+     * Client Id
+     */
+    client_id: string;
+};
+
+/**
  * ValidationError
  */
 export type ValidationError = {
@@ -183,7 +201,7 @@ export type WebsocketTraffic = {
     /**
      * Items
      */
-    items: Array<SendCommandMessage | ReceiveCommandOutputMessage | CreateUserKaliMessage>;
+    items: Array<SendCommandMessage | ReceiveCommandOutputMessage | CreateUserKaliMessage | UserKaliCreatedMessage>;
 };
 
 export type GetAllProjectsData = {
