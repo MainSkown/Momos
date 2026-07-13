@@ -1,7 +1,7 @@
 from typing import Dict, List, Callable, Awaitable, TypeVar
 from fastapi import WebSocket
 from pydantic import TypeAdapter, ValidationError
-from src.websocket import WebSocketMessage, WebSocketTrafficUnion, WsTypes
+from src.websocket import WebSocketMessage, InboundTrafficUnion, OutboundTrafficUnion, WsTypes
 import asyncio
 
 TMessage = TypeVar("TMessage", bound=WebSocketMessage)
@@ -21,7 +21,7 @@ class WebSocketRegistry:
             str, Dict[WsTypes, List[Callable[[str, WebSocketMessage], Awaitable[None]]]]
         ] = {}
 
-        self.message_adapter = TypeAdapter(WebSocketTrafficUnion)
+        self.inbound_message_adapter = TypeAdapter(InboundTrafficUnion)
         
     def add_global_hook(
         self,
@@ -58,7 +58,7 @@ class WebSocketRegistry:
         try:
             async for raw_data in websocket.iter_text():
                 try:
-                    message = self.message_adapter.validate_json(raw_data)
+                    message = self.inbound_message_adapter.validate_json(raw_data)
                     
                     # Look up global hooks
                     global_handlers = self.global_hooks.get(message.type, [])
@@ -94,7 +94,7 @@ class WebSocketRegistry:
         if project_id in self.project_hooks:
             del self.project_hooks[project_id]
 
-    async def send_message(self, project_id: str, message: WebSocketMessage):
+    async def send_message(self, project_id: str, message: OutboundTrafficUnion):
         websocket = self.active_sockets.get(project_id)
         if not websocket:
             print(f"Cannot send message: No active connection for {project_id}")

@@ -29,6 +29,16 @@ export type HttpValidationError = {
 };
 
 /**
+ * InboundTraffic
+ */
+export type InboundTraffic = SendCommandMessage | CreateUserKaliMessage;
+
+/**
+ * OutboundTraffic
+ */
+export type OutboundTraffic = ReceiveCommandOutputMessage | UserKaliCreatedMessage;
+
+/**
  * ProjectBase
  */
 export type ProjectBase = {
@@ -195,13 +205,11 @@ export type ValidationError = {
 };
 
 /**
- * WebsocketTraffic
+ * WebsocketTrafficSchema
  */
-export type WebsocketTraffic = {
-    /**
-     * Items
-     */
-    items: Array<SendCommandMessage | ReceiveCommandOutputMessage | CreateUserKaliMessage | UserKaliCreatedMessage>;
+export type WebsocketTrafficSchema = {
+    inbound_traffic: InboundTraffic;
+    outbound_traffic: OutboundTraffic;
 };
 
 export type GetAllProjectsData = {
@@ -378,7 +386,7 @@ export type WsTypesResponses = {
     /**
      * Successful Response
      */
-    200: WebsocketTraffic;
+    200: WebsocketTrafficSchema;
 };
 
 export type WsTypesResponse = WsTypesResponses[keyof WsTypesResponses];
