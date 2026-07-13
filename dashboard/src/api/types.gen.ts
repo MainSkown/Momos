@@ -5,6 +5,21 @@ export type ClientOptions = {
 };
 
 /**
+ * CreatedKaliUserMessage
+ */
+export type CreatedKaliUserMessage = {
+    /**
+     * Type
+     */
+    type: 'CreatedKaliUserMessage';
+    error?: WebSocketError | null;
+    /**
+     * Client Id
+     */
+    client_id: string;
+};
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -32,7 +47,7 @@ export type KaliUser = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage;
 
 /**
  * ProjectBase

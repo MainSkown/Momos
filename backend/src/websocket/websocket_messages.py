@@ -10,6 +10,7 @@ class WsTypes(str, Enum):
     WebSocketMessage = "WebSocketMessage"
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
+    CreatedKaliUserMessage = "CreatedKaliUserMessage"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -58,6 +59,10 @@ class SendCommandMessage(InboundMessage):
 class ReceiveCommandOutputMessage(OutboundMessage):
     type: Literal[WsTypes.ReceiveCommandOutputMessage]
     output: str
+    
+class CreatedKaliUserMessage(OutboundMessage):
+    type: Literal[WsTypes.CreatedKaliUserMessage]
+    client_id: str
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

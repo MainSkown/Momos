@@ -5,9 +5,17 @@ from src.websocket import (
     WsTypes,
     SendCommandMessage,
     ReceiveCommandOutputMessage,
+    CreatedKaliUserMessage
 )
 from .kali_registry import kali_registry
 
+def _send_created_message(project_id: str, client_id: str):
+    message = CreatedKaliUserMessage(
+        type=WsTypes.CreatedKaliUserMessage,
+        client_id=client_id
+    )
+    
+    ws_registry.send_message(project_id, message)
 
 class KaliUserRegistry:
     def __init__(self):
@@ -16,6 +24,11 @@ class KaliUserRegistry:
     async def create_user(self, project_id: str) -> str:        
         user = await KaliUser.create(project_id)
         self.active_users.append(user)
+        
+        # It may take some time to create user when container has to be created
+        # Sending websocket message to make sure that user a) knows even if post req was broken
+        _send_created_message(project_id, user.client_id)
+        
         return user.client_id
 
 kali_user_registry = KaliUserRegistry()
