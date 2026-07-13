@@ -1,70 +1,122 @@
-import type { InboundTraffic } from "@/api"
+import type { InboundTraffic, OutboundTraffic } from "@/api";
 
+type tCallback = (
+  project_id: string,
+  message: OutboundTraffic,
+) => void | Promise<void>;
 
-class WebSocketClient{
-    private static instance: WebSocketClient | null = null
+class WebSocketClient {
+  private static instance: WebSocketClient | null = null;
 
-    active_sockets: {[project_id: string] : WebSocket}
-    readonly baseUrl: string = '/ws'
+  active_sockets: { [project_id: string]: WebSocket };
+  hooks: {
+    [project_id: string]: {
+      type: OutboundTraffic["type"];
+      callback: tCallback;
+    }[];
+  };
 
-    constructor() {
-        this.active_sockets = {}
+  readonly baseUrl: string = "/ws";
+
+  constructor() {
+    this.active_sockets = {};
+    this.hooks = {};
+  }
+
+  public static getInstance(): WebSocketClient {
+    if (!WebSocketClient.instance) {
+      WebSocketClient.instance = new WebSocketClient();
     }
 
-    public static getInstance(): WebSocketClient {
-        if (!WebSocketClient.instance){
-            WebSocketClient.instance = new WebSocketClient()
+    return WebSocketClient.instance;
+  }
+
+  add_hook(
+    project_id: string,
+    type: OutboundTraffic["type"],
+    callback: tCallback,
+  ) {
+    if (this.hooks[project_id] === undefined) this.hooks[project_id] = [];
+    this.hooks[project_id].push({ type: type, callback: callback });
+  }
+
+  private add_listener(project_id: string, socket: WebSocket) {
+    socket.onmessage = (event: MessageEvent) => {
+      try {
+        const rawMessage = JSON.parse(event.data);
+
+        if (!rawMessage || typeof rawMessage.type !== "string") {
+          console.warn("Received malformed message: ", rawMessage);
+          return;
         }
 
-        return WebSocketClient.instance
-    }
+        const message = rawMessage as OutboundTraffic;
 
-    async connect(project_id: string): Promise<WebSocket> {
+        const handlers = this.hooks[project_id]?.filter(
+          (hook) => hook.type === message.type,
+        );
+
+        if (handlers) {
+          handlers.forEach(async (hook) => {
+            await hook.callback(project_id, message);
+          });
+        }
+      } catch (error) {
+        console.error("Failed to parse incoming message: ", error);
+      }
+    };
+  }
+
+  async connect(project_id: string): Promise<WebSocket> {
     const socketUrl = `${this.baseUrl}/${project_id}`;
-    const socket = new WebSocket(socketUrl);        
+    const socket = new WebSocket(socketUrl);
 
     // Wrap the connection logic in a Promise
-    return new Promise((resolve, reject) => {        
-        const handleOpen = () => {
-            cleanup();
+    return new Promise((resolve, reject) => {
+      const handleOpen = () => {
+        cleanup();
 
-            this.active_sockets[project_id] = socket;
-            resolve(socket);
-        };
+        this.active_sockets[project_id] = socket;
+        this.add_listener(project_id, socket);
 
-        const handleError = (error: Event) => {
-            cleanup();
-            reject(error);
-        };
+        resolve(socket);
+      };
 
-        // Helper to remove listeners once one of them fires
-        const cleanup = () => {
-            socket.removeEventListener('open', handleOpen);
-            socket.removeEventListener('error', handleError);
-        };
+      const handleError = (error: Event) => {
+        cleanup();
+        reject(error);
+      };
 
-        socket.addEventListener('open', handleOpen);
-        socket.addEventListener('error', handleError);
+      // Helper to remove listeners once one of them fires
+      const cleanup = () => {
+        socket.removeEventListener("open", handleOpen);
+        socket.removeEventListener("error", handleError);
+      };
+
+      socket.addEventListener("open", handleOpen);
+      socket.addEventListener("error", handleError);
     });
-}
+  }
 
-    send_message(project_id: string, message: InboundTraffic){
-        const socket = this.active_sockets[project_id]
+  send_message(project_id: string, message: InboundTraffic) {
+    const socket = this.active_sockets[project_id];
 
-        // Check if socket exists
-        if(socket === undefined){
-            throw Error("Trying to send message when socket is not created")
-        }
-
-        // Check if socket is ready
-        if (socket.readyState !== WebSocket.OPEN) {
-            throw Error(`Cannot send message. Socket state is ${socket.readyState} (not OPEN)`)
-        }
-
-        socket.send(JSON.stringify(message))
+    // Check if socket exists
+    if (socket === undefined) {
+      throw Error("Trying to send message when socket is not created");
     }
+
+    // Check if socket is ready
+    if (socket.readyState !== WebSocket.OPEN) {
+      throw Error(
+        `Cannot send message. Socket state is ${socket.readyState} (not OPEN)`,
+      );
+    }
+
+    socket.send(JSON.stringify(message));
+  }
 }
 
-export function useWebSocketClient(){
-    return WebSocketClient.getInstance()
+export function useWebSocketClient() {
+  return WebSocketClient.getInstance();
 }

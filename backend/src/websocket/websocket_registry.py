@@ -59,6 +59,7 @@ class WebSocketRegistry:
             async for raw_data in websocket.iter_text():
                 try:
                     message = self.inbound_message_adapter.validate_json(raw_data)
+                    print(f"Got message: {message}")
                     
                     # Look up global hooks
                     global_handlers = self.global_hooks.get(message.type, [])
