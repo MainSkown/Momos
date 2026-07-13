@@ -16,6 +16,10 @@ export type tAddresses = {
 
 export type tTarget = ResponseTarget
 
+export enum LocalStoreKeys{
+  CLIENT_ID = 'client_id'
+}
+
 /* Those are not types, but still useful */
 
 export function getTarget(target: tTarget): string {

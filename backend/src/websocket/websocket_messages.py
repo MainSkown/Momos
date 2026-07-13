@@ -10,9 +10,7 @@ class WsTypes(str, Enum):
     WebSocketMessage = "WebSocketMessage"
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
-    CreateUserKaliMessage = "CreateUserKaliMessage"
-    UserKaliCreatedMessage = "UserKaliCreatedMessage"
-
+    
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
 
@@ -55,19 +53,11 @@ class SendCommandMessage(InboundMessage):
     command: str
     user: Literal["root", "momos"]
 
-class CreateUserKaliMessage(InboundMessage):
-    type: Literal[WsTypes.CreateUserKaliMessage]
-    project_id: str
-
 # --- Outbound Subclasses (Server Sends) ---
 
 class ReceiveCommandOutputMessage(OutboundMessage):
     type: Literal[WsTypes.ReceiveCommandOutputMessage]
     output: str
-
-class UserKaliCreatedMessage(OutboundMessage):
-    type: Literal[WsTypes.UserKaliCreatedMessage]
-    client_id: str
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

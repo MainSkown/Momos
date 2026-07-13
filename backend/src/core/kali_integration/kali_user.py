@@ -3,31 +3,20 @@ from typing import List
 from src.websocket import (
     ws_registry,
     WsTypes,
-    CreateUserKaliMessage,
     SendCommandMessage,
     ReceiveCommandOutputMessage,
-    UserKaliCreatedMessage,
 )
 from .kali_registry import kali_registry
 
 
 class KaliUserRegistry:
     def __init__(self):
-        self.active_users: List[KaliUser] = []
-        print("Created registry")
-        ws_registry.add_global_hook(
-            WsTypes.CreateUserKaliMessage, self._create_user_callback
-        )
+        self.active_users: List[KaliUser] = []        
 
-    async def _create_user_callback(self, project_id: str, message: CreateUserKaliMessage):
-        if project_id != message.project_id:
-            raise RuntimeError(
-                "Tried to create user with different project id, than socket was set for."
-            )
-
-        user = await KaliUser.create(message.project_id)
+    async def create_user(self, project_id: str) -> str:        
+        user = await KaliUser.create(project_id)
         self.active_users.append(user)
-
+        return user.client_id
 
 kali_user_registry = KaliUserRegistry()
 
@@ -53,12 +42,6 @@ class KaliUser:
         ws_registry.add_project_hook(
             project_id, WsTypes.SendCommandMessage, instance._send_command_hook
         )
-
-        # Send the confirmation message back to the frontend
-        message = UserKaliCreatedMessage(
-            type=WsTypes.UserKaliCreatedMessage, client_id=str(client_id)
-        )
-        await ws_registry.send_message(project_id, message)
 
         return instance
 

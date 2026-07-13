@@ -5,20 +5,6 @@ export type ClientOptions = {
 };
 
 /**
- * CreateUserKaliMessage
- */
-export type CreateUserKaliMessage = {
-    /**
-     * Type
-     */
-    type: 'CreateUserKaliMessage';
-    /**
-     * Project Id
-     */
-    project_id: string;
-};
-
-/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -31,12 +17,22 @@ export type HttpValidationError = {
 /**
  * InboundTraffic
  */
-export type InboundTraffic = SendCommandMessage | CreateUserKaliMessage;
+export type InboundTraffic = SendCommandMessage;
+
+/**
+ * KaliUser
+ */
+export type KaliUser = {
+    /**
+     * Client Id
+     */
+    client_id: string;
+};
 
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | UserKaliCreatedMessage;
+export type OutboundTraffic = ReceiveCommandOutputMessage;
 
 /**
  * ProjectBase
@@ -161,21 +157,6 @@ export type TargetBase = {
      * Ports
      */
     ports: Array<number> | null;
-};
-
-/**
- * UserKaliCreatedMessage
- */
-export type UserKaliCreatedMessage = {
-    /**
-     * Type
-     */
-    type: 'UserKaliCreatedMessage';
-    error?: WebSocketError | null;
-    /**
-     * Client Id
-     */
-    client_id: string;
 };
 
 /**
@@ -390,6 +371,66 @@ export type UpdateTargetResponses = {
      */
     200: unknown;
 };
+
+export type KaliClientExistsData = {
+    body?: never;
+    path: {
+        /**
+         * Client Id
+         */
+        client_id: string;
+    };
+    query?: never;
+    url: '/api/kali_client/{client_id}';
+};
+
+export type KaliClientExistsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type KaliClientExistsError = KaliClientExistsErrors[keyof KaliClientExistsErrors];
+
+export type KaliClientExistsResponses = {
+    /**
+     * Successful Response
+     */
+    200: KaliUser;
+};
+
+export type KaliClientExistsResponse = KaliClientExistsResponses[keyof KaliClientExistsResponses];
+
+export type CreateKaliUserData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/kali_client';
+};
+
+export type CreateKaliUserErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateKaliUserError = CreateKaliUserErrors[keyof CreateKaliUserErrors];
+
+export type CreateKaliUserResponses = {
+    /**
+     * Successful Response
+     */
+    200: KaliUser;
+};
+
+export type CreateKaliUserResponse = CreateKaliUserResponses[keyof CreateKaliUserResponses];
 
 export type WsTypesData = {
     body?: never;
