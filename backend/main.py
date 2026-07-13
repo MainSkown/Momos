@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from src.routers import project_router, target_router, websocket_router
+from src.core.kali_integration import kali_user_registry # Import for loading registry
 
 app = FastAPI()
-
 
 def custom_openapi():
     if app.openapi_schema:

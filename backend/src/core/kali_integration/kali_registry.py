@@ -9,7 +9,7 @@ class KaliRegistry:
 
     async def get_manager(self, project_id: str) -> KaliManger:
         async with self._lock:
-            if project_id in self._active_managers:
+            if project_id in self._active_managers.keys():
                 return self._active_managers[project_id]
 
             manager = KaliManger(container_name=f"momos-kali-worker-{project_id}")

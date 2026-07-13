@@ -9,7 +9,7 @@ logger = logging.getLogger("momos.kali")
 MOMOS_USER: Final = "momos"
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     "kali-linux-headless",
-    "wordlist",
+    "wordlists",
     "curl",
     "wget",
     "nmap",
@@ -44,14 +44,14 @@ class KaliManger:
     async def start(self):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._create_container)
-        logger.info(f"Successfully created Kali container: {self.container_name}")
+        print(f"Successfully created Kali container: {self.container_name}", flush=True)
 
     def _create_container(self):
         # Check if container with same exist
         try:
-            self.client.containers.get(self.container_name)
-            logger.error(f"Container {self.container_name} already exists.")
-            raise RuntimeError(f"Container {self.container_name} already exists")
+            old_container = self.client.containers.get(self.container_name)
+            print(f"Container {self.container_name} already exists. Removing.", flush=True)
+            old_container.remove(force=True)
         except docker.errors.NotFound:
             pass
 
@@ -82,12 +82,15 @@ class KaliManger:
         self._exec_in_container(
             f"install -d -o {MOMOS_USER} -g {MOMOS_USER} /home/{MOMOS_USER}"
         )
+        
 
     def _exec_in_container(self, command: str, user: str = "root"):
+        shell_cmd = ["/bin/bash", "-c", command]
+        
         if self.container is None:
             raise RuntimeError("Container is not running")
 
-        result = self.container.exec_run(cmd=command, user=user)
+        result = self.container.exec_run(cmd=shell_cmd, user=user)
         exit_code = result.exit_code
         output = (
             result.output.decode(errors="replace")
@@ -103,7 +106,14 @@ class KaliManger:
         return output
 
     async def execute(self, command: str, user: str = "momos") -> str: 
-        return await self._exec_in_container(command, user)
+        loop = asyncio.get_running_loop()
+   
+        return await loop.run_in_executor(
+            None, 
+            self._exec_in_container, 
+            command, 
+            user
+        )
 
     async def stop(self):
         if self.container:

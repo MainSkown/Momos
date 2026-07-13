@@ -14,7 +14,7 @@ from .kali_registry import kali_registry
 class KaliUserRegistry:
     def __init__(self):
         self.active_users: List[KaliUser] = []
-        
+        print("Created registry")
         ws_registry.add_global_hook(
             WsTypes.CreateUserKaliMessage, self._create_user_callback
         )
@@ -56,7 +56,7 @@ class KaliUser:
 
         # Send the confirmation message back to the frontend
         message = UserKaliCreatedMessage(
-            type=WsTypes.UserKaliCreatedMessage, client_id=client_id
+            type=WsTypes.UserKaliCreatedMessage, client_id=str(client_id)
         )
         await ws_registry.send_message(project_id, message)
 
