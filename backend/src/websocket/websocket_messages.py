@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Literal, Type, Union
+from typing import Literal, Optional, Type, Union
 from enum import Enum
 
 # Separate registries for cleaner typing definitions
@@ -24,6 +24,11 @@ class WebSocketMessage(BaseModel):
             raise TypeError(
                 f"Class '{cls.__name__}' must explicitly override the 'type' field"
             )
+            
+# --- Errors ---
+class WebSocketError(BaseModel):
+    code: str
+    message: Optional[str]    
 
 # --- Directional Base Classes ---
 
@@ -36,6 +41,8 @@ class InboundMessage(WebSocketMessage):
 
 class OutboundMessage(WebSocketMessage):
     type: Literal['OutboundMessage']
+    error: Optional[WebSocketError] = None
+    
     """Messages sent from SERVER -> CLIENT"""
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

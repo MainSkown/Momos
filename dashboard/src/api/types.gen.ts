@@ -70,6 +70,7 @@ export type ReceiveCommandOutputMessage = {
      * Type
      */
     type: 'ReceiveCommandOutputMessage';
+    error?: WebSocketError | null;
     /**
      * Output
      */
@@ -170,6 +171,7 @@ export type UserKaliCreatedMessage = {
      * Type
      */
     type: 'UserKaliCreatedMessage';
+    error?: WebSocketError | null;
     /**
      * Client Id
      */
@@ -202,6 +204,20 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * WebSocketError
+ */
+export type WebSocketError = {
+    /**
+     * Code
+     */
+    code: string;
+    /**
+     * Message
+     */
+    message: string | null;
 };
 
 /**
