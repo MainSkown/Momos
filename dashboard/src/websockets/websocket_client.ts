@@ -5,14 +5,10 @@ class WebSocketClient{
     private static instance: WebSocketClient | null = null
 
     active_sockets: {[project_id: string] : WebSocket}
-    readonly baseUrl: string
+    readonly baseUrl: string = '/ws'
 
     constructor() {
         this.active_sockets = {}
-
-        const protocol = window.location.protocol === "https:" ? 'wss:' : 'ws'
-
-        this.baseUrl = `/ws`
     }
 
     public static getInstance(): WebSocketClient {
@@ -52,7 +48,7 @@ class WebSocketClient{
     });
 }
 
-    async send_message(project_id: string, message: InboundTraffic){
+    send_message(project_id: string, message: InboundTraffic){
         const socket = this.active_sockets[project_id]
 
         // Check if socket exists
@@ -62,7 +58,7 @@ class WebSocketClient{
 
         // Check if socket is ready
         if (socket.readyState !== WebSocket.OPEN) {
-        throw Error(`Cannot send message. Socket state is ${socket.readyState} (not OPEN)`)
+            throw Error(`Cannot send message. Socket state is ${socket.readyState} (not OPEN)`)
         }
 
         socket.send(JSON.stringify(message))
