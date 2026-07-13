@@ -20,9 +20,10 @@ export default defineConfig({
 
       // Websockets
       "/ws": {
-        target: "http://momos-backend:8000",
+        target: "ws://momos-backend:8000",
         changeOrigin: true,
         ws: true, 
+        rewriteWsOrigin: true,
       },
     },
   },
