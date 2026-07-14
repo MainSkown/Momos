@@ -1,6 +1,6 @@
 import type { InboundTraffic, OutboundTraffic } from "@/api";
 
-type tCallback = (
+export type tCallback = (
   project_id: string,
   message: OutboundTraffic,
 ) => void | Promise<void>;
@@ -31,13 +31,36 @@ class WebSocketClient {
     return WebSocketClient.instance;
   }
 
+  hook_exists(
+    project_id: string,
+    type: OutboundTraffic["type"],
+    callback: tCallback,
+  ) {
+    const hookExists = this.hooks[project_id]?.some(
+      (hook) => hook.type === type && hook.callback === callback,
+    );
+
+    return hookExists
+  }
+
   add_hook(
     project_id: string,
     type: OutboundTraffic["type"],
     callback: tCallback,
   ) {
-    if (this.hooks[project_id] === undefined) this.hooks[project_id] = [];
-    this.hooks[project_id].push({ type: type, callback: callback });
+    if (this.hooks[project_id] === undefined) {
+      this.hooks[project_id] = [];
+    }    
+
+    if (this.hook_exists(project_id, type, callback)) {
+      // Log a warning or just return early silently
+      console.warn(
+        `Duplicate hook detected for type "${type}" in project "${project_id}". Ignoring.`,
+      );
+      return;
+    }
+
+    this.hooks[project_id].push({ type, callback });
   }
 
   private add_listener(project_id: string, socket: WebSocket) {
@@ -114,6 +137,10 @@ class WebSocketClient {
     }
 
     socket.send(JSON.stringify(message));
+  }
+
+  isSocketActive(project_id: string) {
+    return this.active_sockets[project_id]?.OPEN === WebSocket.OPEN;
   }
 }
 

@@ -54,7 +54,8 @@ class KaliManger:
             old_container.remove(force=True)
         except docker.errors.NotFound:
             pass
-
+        
+        print('Starting container')
         self.container = self.client.containers.run(
             image="kalilinux/kali-rolling:latest",
             name=self.container_name,
@@ -67,22 +68,23 @@ class KaliManger:
         self._configure_container()
 
     def _configure_container(self):
+        print('Updating and downloading packages')
         self._exec_in_container("apt-get update")
         self._exec_in_container(
             "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
             + " ".join(self.packages)
         )
-
-        # Create momos user without sudo permissions
+        print('Setting up momos user')
+        
+        # Create momos user without sudo permissions 
         self._exec_in_container(
-            f"id -u {MOMOS_USER} >/dev/null 2>&1 || adduser --disabled-password --gecos '' --home /home/{MOMOS_USER} --shell /bin/bash {MOMOS_USER}"
+            f"id -u {MOMOS_USER} >/dev/null 2>&1 || useradd -s /bin/bash {MOMOS_USER}"
         )
 
         # Make sure the home directory exists and belongs to momos
         self._exec_in_container(
             f"install -d -o {MOMOS_USER} -g {MOMOS_USER} /home/{MOMOS_USER}"
         )
-        
 
     def _exec_in_container(self, command: str, user: str = "root"):
         shell_cmd = ["/bin/bash", "-c", command]

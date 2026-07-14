@@ -13,6 +13,7 @@ interface State {
   openedProject: string;
   projects: tProject[];
   targets: tTarget[];
+  cmd_outputs: {[project_id: string]: string[]}
 }
 
 export const useMomosStore = defineStore("momos", {
@@ -20,6 +21,7 @@ export const useMomosStore = defineStore("momos", {
     projects: [],
     targets: [],
     openedProject: "",
+    cmd_outputs: {}
   }),
 
   getters: {

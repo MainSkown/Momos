@@ -16,13 +16,9 @@
 
     <!-- Second row -->
     <div class="row">
-      <!-- Removed style="height: 100%" because flex: 1 on the parent handles it -->
-      <div class="border field">
-        <span class="text-red" style="padding-left: 10px;">Agent Info</span>
-        <div class="separator" />
-        <div></div>
-      </div>
-
+      <!-- User Console-->
+       <UserConsole class="field"/>
+      
       <div class="border field">
         <span class="text-red" style="padding-left: 10px">Agent Logs</span>
         <div class="separator" />
@@ -35,6 +31,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import Targets from "./Targets.vue";
+import UserConsole from "./UserConsole.vue";
 
 const target = ref<string>();
 </script>

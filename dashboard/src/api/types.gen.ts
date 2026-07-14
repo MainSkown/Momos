@@ -42,6 +42,10 @@ export type KaliUser = {
      * Client Id
      */
     client_id: string;
+    /**
+     * Pending
+     */
+    pending?: boolean | null;
 };
 
 /**

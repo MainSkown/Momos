@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 from typing import List
 from src.websocket import (
     ws_registry,
@@ -8,28 +9,33 @@ from src.websocket import (
     CreatedKaliUserMessage
 )
 from .kali_registry import kali_registry
-
-def _send_created_message(project_id: str, client_id: str):
-    message = CreatedKaliUserMessage(
-        type=WsTypes.CreatedKaliUserMessage,
-        client_id=client_id
-    )
     
-    ws_registry.send_message(project_id, message)
 
 class KaliUserRegistry:
     def __init__(self):
         self.active_users: List[KaliUser] = []        
+        self.pending_users: List[uuid.UUID] = [] # List of pending users - in process of creation 
 
     async def create_user(self, project_id: str) -> str:        
-        user = await KaliUser.create(project_id)
+        client_id = uuid.uuid4()
+        self.pending_users.append(client_id)       
+        
+        asyncio.create_task(self._create_user(project_id, client_id))
+        
+        return str(client_id)
+    
+    async def _create_user(self, project_id: str, client_id: uuid.UUID):
+        user = await KaliUser.create(project_id, client_id)
+        
         self.active_users.append(user)
+        self.pending_users.remove(client_id)
         
-        # It may take some time to create user when container has to be created
-        # Sending websocket message to make sure that user a) knows even if post req was broken
-        _send_created_message(project_id, user.client_id)
+        message = CreatedKaliUserMessage(
+            type=WsTypes.CreatedKaliUserMessage,
+            client_id=str(client_id)
+        )
         
-        return user.client_id
+        await ws_registry.send_message(project_id, message)
 
 kali_user_registry = KaliUserRegistry()
 
@@ -40,15 +46,14 @@ class KaliUser:
         self.client_id = client_id
 
     @classmethod
-    async def create(cls, project_id: str):
+    async def create(cls, project_id: str, client_id: uuid.UUID):
         # Check/Get the manager async
         manager = await kali_registry.get_manager(project_id)
         if not manager:
             raise RuntimeError(
                 f"Could not create Kali Manager for project: {project_id}"
             )
-
-        client_id = uuid.uuid4()
+                    
         instance = cls(project_id, client_id)
 
         # Attach project-scoped hooks
