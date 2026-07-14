@@ -301,7 +301,7 @@ check_client(store.openedProject);
 .terminal-output-screen {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  /*justify-content: flex-end;*/
 
   width: 100%;
   box-sizing: border-box;
@@ -312,12 +312,13 @@ check_client(store.openedProject);
   font-size: 0.9rem;
   color: var(--text-white);
 
-  padding: 40px var(--spacing-md) var(--spacing-md) var(--spacing-md);
+  padding: 10px var(--spacing-md) var(--spacing-md) var(--spacing-md);
 
   height: 240px;
 }
 
 .system-message {
+  margin-top: auto;
   color: var(--text-gray-dark);
   margin-bottom: var(--spacing-sm);
   font-style: italic;
@@ -327,7 +328,7 @@ check_client(store.openedProject);
   color: var(--status-critical)
 }
 
-.terminal-line {
+.terminal-line {  
   margin-bottom: 4px;
   word-break: break-all;
 }
