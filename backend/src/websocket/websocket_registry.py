@@ -34,22 +34,18 @@ class WebSocketRegistry:
         self.global_hooks[message_type].append(callback)
 
     def add_project_hook(
-        self,
-        project_id: str,
-        message_type: WsTypes,
-        callback: Callable[[str, TMessage], Awaitable[None]],
+    self,
+    project_id: str,
+    message_type: WsTypes,
+    callback: Callable[[str, TMessage], Awaitable[None]],
     ):
         """Register an async function to trigger for a SPECIFIC project and message type."""
-        # 1. Ensure the project dictionary exists
+        # Keep only one active callback per project and message type.
+        # This prevents duplicate handlers after reconnects or page refreshes.
         if project_id not in self.project_hooks:
             self.project_hooks[project_id] = {}
 
-        # 2. Ensure the message type list exists for this project
-        if message_type not in self.project_hooks[project_id]:
-            self.project_hooks[project_id][message_type] = []
-
-        # 3. Add the callback
-        self.project_hooks[project_id][message_type].append(callback)
+        self.project_hooks[project_id][message_type] = [callback]
 
     async def connect(self, project_id: str, websocket: WebSocket):
         await websocket.accept()

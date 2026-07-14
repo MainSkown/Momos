@@ -8,18 +8,18 @@ logger = logging.getLogger("momos.kali")
 
 MOMOS_USER: Final = "momos"
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    "kali-linux-headless",
-    "wordlists",
+    # "kali-linux-headless",
+    # "wordlists",
     "curl",
-    "wget",
-    "nmap",
-    "netcat-openbsd",
-    "nftables",
-    "gobuster",
-    "nikto",
-    "exploitdb",
-    "iputils-ping",
-    "dnsutils"
+    # "wget",
+    # "nmap",
+    # "netcat-openbsd",
+    # "nftables",
+    # "gobuster",
+    # "nikto",
+    # "exploitdb",
+    # "iputils-ping",
+    # "dnsutils"
 )
 
 

@@ -6,7 +6,8 @@ from src.websocket import (
     WsTypes,
     SendCommandMessage,
     ReceiveCommandOutputMessage,
-    CreatedKaliUserMessage
+    CreatedKaliUserMessage,
+    WebSocketError
 )
 from .kali_registry import kali_registry
     
@@ -70,10 +71,18 @@ class KaliUser:
             )
 
         manager = await kali_registry.get_manager(project_id)
-        result = await manager.execute(message.command, message.user)
+        try: 
+            result = await manager.execute(message.command, message.user)
+        except Exception as e:
+            output_message = ReceiveCommandOutputMessage(
+                type=WsTypes.ReceiveCommandOutputMessage, output='',
+                error=WebSocketError(code='CommandError', message=str(e))
+            )
+            await ws_registry.send_message(self.project_id, output_message)
+            return
 
         output_message = ReceiveCommandOutputMessage(
-            type=WsTypes.ReceiveCommandOutputMessage, output=result
+            type=WsTypes.ReceiveCommandOutputMessage, output=result,
         )
 
         await ws_registry.send_message(self.project_id, output_message)
