@@ -3,7 +3,11 @@
     <div class="row">
       <span class="text-red" style="padding-left: 10px">User Console</span>
       <!-- user radio -->
-      <div v-if="client_dict[store.openedProject] !== undefined" class="radio-group" style="margin-left: auto">
+      <div
+        v-if="client_dict[store.openedProject] !== undefined"
+        class="radio-group"
+        style="margin-left: auto"
+      >
         <!-- Root Option -->
         <input
           type="radio"
@@ -15,7 +19,12 @@
         <label
           for="root"
           class="radio-label"
-          style="border-right: none; border-top: none; width: 70px"
+          style="
+            border-right: none;
+            border-top: none;
+            border-bottom: none;
+            width: 70px;
+          "
           >Root</label
         >
 
@@ -30,7 +39,12 @@
         <label
           for="momos"
           class="radio-label"
-          style="border-right: none; border-top: none; width: 70px"
+          style="
+            border-right: none;
+            border-top: none;
+            border-bottom: none;
+            width: 70px;
+          "
           >Momos</label
         >
       </div>
@@ -54,9 +68,15 @@
       <!-- Command input field -->
       <div class="row">
         <div class="terminal-input-group" style="margin: 5px; width: 100%">
-          <input v-model="user_command" class="input-field" @keydown.enter="sendCommand" />
+          <input
+            v-model="user_command"
+            class="input-field"
+            @keydown.enter="sendCommand"
+          />
           <!-- Send button -->
-          <button class="button border send-button" @click="sendCommand">></button>
+          <button class="button border send-button" @click="sendCommand">
+            >
+          </button>
         </div>
       </div>
     </div>
@@ -155,7 +175,7 @@ const onConsoleOutput: tCallback = (project_id, message) => {
 
   if (message.error && message.error.message) {
     console.error(message.error.message);
-    store.cmd_outputs[project_id]?.push(message.error.message)
+    store.cmd_outputs[project_id]?.push(message.error.message);
     return;
   }
 
@@ -247,7 +267,7 @@ watch(
       terminalRef.value.scrollTop = terminalRef.value.scrollHeight;
     }
   },
-  { deep: true }
+  { deep: true },
 );
 
 set_ws(store.openedProject);
@@ -273,9 +293,9 @@ check_client(store.openedProject);
 
 .terminal-output-screen {
   display: flex;
-  flex-direction: column;    
-  justify-content: flex-end;  
-  
+  flex-direction: column;
+  justify-content: flex-end;
+
   width: 100%;
   box-sizing: border-box;
   background-color: var(--black);
