@@ -61,7 +61,15 @@
           :key="idx"
           class="terminal-line"
         >
-          <span class="prompt-prefix">></span> {{ line }}
+          <span v-if="line.type === 'cmd'" class="prompt-prefix"
+            >> {{ line.line }}
+          </span>
+          <span v-if="line.type === 'error'" class="prompt-prefix error-message"
+            >X: {{ line.line }}
+          </span>
+          <span v-if="line.type === 'user'" class="prompt-prefix"
+            >[{{line.user}}]$ {{ line.line }}
+          </span>
         </div>
       </div>
 
@@ -130,6 +138,7 @@ function sendCommand() {
   };
 
   ws_client.send_message(store.openedProject, message);
+  store.pushCmdLine(store.openedProject, user_command.value, 'user', user_picked.value)
   user_command.value = "";
 }
 
@@ -175,13 +184,11 @@ const onConsoleOutput: tCallback = (project_id, message) => {
 
   if (message.error && message.error.message) {
     console.error(message.error.message);
-    store.cmd_outputs[project_id]?.push(message.error.message);
+    store.pushCmdLine(project_id, message.error.message, 'error')
     return;
   }
 
-  if (!store.cmd_outputs[project_id]) store.cmd_outputs[project_id] = [];
-
-  store.cmd_outputs[project_id].push(message.output);
+  store.pushCmdLine(project_id, message.output, 'cmd')
 };
 
 const add_hooks = (project_id: string) => {
@@ -314,6 +321,10 @@ check_client(store.openedProject);
   color: var(--text-gray-dark);
   margin-bottom: var(--spacing-sm);
   font-style: italic;
+}
+
+.error-message {
+  color: var(--status-critical)
 }
 
 .terminal-line {

@@ -5,15 +5,19 @@ import {
   postTarget,
   getAllTargetsInProject,
   deleteTarget,
-  updateTarget
+  updateTarget,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
+
+type tCmd = { line: string; type: "cmd" | "error" | "user", user?: string };
 
 interface State {
   openedProject: string;
   projects: tProject[];
   targets: tTarget[];
-  cmd_outputs: {[project_id: string]: string[]}
+  cmd_outputs: {
+    [project_id: string]: tCmd[];
+  };
 }
 
 export const useMomosStore = defineStore("momos", {
@@ -21,7 +25,7 @@ export const useMomosStore = defineStore("momos", {
     projects: [],
     targets: [],
     openedProject: "",
-    cmd_outputs: {}
+    cmd_outputs: {},
   }),
 
   getters: {
@@ -100,24 +104,38 @@ export const useMomosStore = defineStore("momos", {
       this.targets.push(result.data);
     },
     async deleteTarget(targetID: string) {
-      const result = await deleteTarget({path: {target_id: targetID}})
+      const result = await deleteTarget({ path: { target_id: targetID } });
 
-      if (result.response?.status !== 204){
-        throw Error('Could not delete target: ' + targetID)
+      if (result.response?.status !== 204) {
+        throw Error("Could not delete target: " + targetID);
       }
 
       this.targets = this.targets.filter((t) => t.id !== targetID);
     },
 
-    async updateTarget(target: tTarget){
-      const result = await updateTarget({body: {...target}, path: {target_id: target.id}})
+    async updateTarget(target: tTarget) {
+      const result = await updateTarget({
+        body: { ...target },
+        path: { target_id: target.id },
+      });
 
-      if (result.response?.status !== 200){
-        throw Error('Could not update target: ' + target.id)
+      if (result.response?.status !== 200) {
+        throw Error("Could not update target: " + target.id);
       }
 
-      const index = this.targets.findIndex((t) => t.id === target.id)
-      this.targets[index] = target
-    }
+      const index = this.targets.findIndex((t) => t.id === target.id);
+      this.targets[index] = target;
+    },
+
+    /* --- Commands --- */
+    pushCmdLine(project_id: string, line: string, type: tCmd["type"], user?: string) {
+      if (!this.cmd_outputs[project_id]) this.cmd_outputs[project_id] = [];
+
+      this.cmd_outputs[project_id].push({
+        line,
+        type,
+        user
+      });
+    },
   },
 });
