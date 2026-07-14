@@ -20,9 +20,19 @@ class KaliRegistry:
 
     async def delete_manager(self, project_id: str):
         async with self._lock:
-            if project_id in self._active_managers:
-                manager = self._active_managers[project_id]
-                await manager.stop()
-                del self._active_managers[project_id]
+            manager = self._active_managers.pop(project_id, None)
+
+        if manager is not None:
+            await manager.stop()
+
+    async def shutdown(self):
+        async with self._lock:
+            managers = list(self._active_managers.values())
+            self._active_managers.clear()
+
+        await asyncio.gather(
+            *(manager.stop() for manager in managers),
+            return_exceptions=True,
+        )
 
 kali_registry = KaliRegistry()

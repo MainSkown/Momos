@@ -92,7 +92,7 @@ class KaliManger:
         if self.container is None:
             raise RuntimeError("Container is not running")
 
-        result = self.container.exec_run(cmd=shell_cmd, user=user)
+        result = self.container.exec_run(cmd=shell_cmd, user=user, workdir="/home/momos" if user == "momos" else "/")
         exit_code = result.exit_code
         output = (
             result.output.decode(errors="replace")
@@ -102,7 +102,7 @@ class KaliManger:
 
         if exit_code != 0:
             raise RuntimeError(
-                f"Container command failed with exit code {exit_code}: {command}\n{output}"
+                f"Command failed with exit code {exit_code}: {shell_cmd}\n{output}"
             )
 
         return output
