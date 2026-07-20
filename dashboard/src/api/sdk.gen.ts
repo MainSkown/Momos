@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetModelsListData, GetModelsListResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostModelData, PostModelErrors, PostModelResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -78,6 +78,35 @@ export const kaliClientExists = <ThrowOnError extends boolean = false>(options: 
  * Post Kali User
  */
 export const createKaliUser = <ThrowOnError extends boolean = false>(options: Options<CreateKaliUserData, ThrowOnError>): RequestResult<CreateKaliUserResponses, CreateKaliUserErrors, ThrowOnError> => (options.client ?? client).post<CreateKaliUserResponses, CreateKaliUserErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client', ...options });
+
+/**
+ * Get Models List
+ */
+export const getModelsList = <ThrowOnError extends boolean = false>(options?: Options<GetModelsListData, ThrowOnError>): RequestResult<GetModelsListResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetModelsListResponses, unknown, ThrowOnError>({ url: '/api/ollama/models', ...options });
+
+/**
+ * Delete Model
+ */
+export const deleteModel = <ThrowOnError extends boolean = false>(options: Options<DeleteModelData, ThrowOnError>): RequestResult<DeleteModelResponses, DeleteModelErrors, ThrowOnError> => (options.client ?? client).delete<DeleteModelResponses, DeleteModelErrors, ThrowOnError>({
+    url: '/api/ollama/model',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Post Ollama Model
+ */
+export const postModel = <ThrowOnError extends boolean = false>(options: Options<PostModelData, ThrowOnError>): RequestResult<PostModelResponses, PostModelErrors, ThrowOnError> => (options.client ?? client).post<PostModelResponses, PostModelErrors, ThrowOnError>({
+    url: '/api/ollama/model',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Ws Types Dummy

@@ -49,9 +49,123 @@ export type KaliUser = {
 };
 
 /**
+ * ListResponse
+ */
+export type ListResponse = {
+    /**
+     * Models
+     */
+    models: Array<Model>;
+};
+
+/**
+ * Model
+ */
+export type Model = {
+    /**
+     * Model
+     */
+    model?: string | null;
+    /**
+     * Modified At
+     */
+    modified_at?: string | null;
+    /**
+     * Digest
+     */
+    digest?: string | null;
+    /**
+     * Size
+     */
+    size?: number | null;
+    details?: ModelDetails | null;
+};
+
+/**
+ * ModelData
+ */
+export type ModelData = {
+    /**
+     * Model Name
+     */
+    model_name: string;
+};
+
+/**
+ * ModelDetails
+ */
+export type ModelDetails = {
+    /**
+     * Parent Model
+     */
+    parent_model?: string | null;
+    /**
+     * Format
+     */
+    format?: string | null;
+    /**
+     * Family
+     */
+    family?: string | null;
+    /**
+     * Families
+     */
+    families?: Array<string> | null;
+    /**
+     * Parameter Size
+     */
+    parameter_size?: string | null;
+    /**
+     * Quantization Level
+     */
+    quantization_level?: string | null;
+};
+
+/**
+ * ModelPullingUpdate
+ */
+export type ModelPullingUpdate = {
+    /**
+     * Model
+     */
+    model: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Completed
+     */
+    completed: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Type
+     */
+    type: 'ModelPullingUpdate';
+    error?: WebSocketError | null;
+};
+
+/**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
+
+/**
+ * PostRequestOllamaModel
+ */
+export type PostRequestOllamaModel = {
+    /**
+     * Model Name
+     */
+    model_name: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
 
 /**
  * ProjectBase
@@ -450,6 +564,68 @@ export type CreateKaliUserResponses = {
 };
 
 export type CreateKaliUserResponse = CreateKaliUserResponses[keyof CreateKaliUserResponses];
+
+export type GetModelsListData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/models';
+};
+
+export type GetModelsListResponses = {
+    /**
+     * Successful Response
+     */
+    200: ListResponse;
+};
+
+export type GetModelsListResponse = GetModelsListResponses[keyof GetModelsListResponses];
+
+export type DeleteModelData = {
+    body: ModelData;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/model';
+};
+
+export type DeleteModelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteModelError = DeleteModelErrors[keyof DeleteModelErrors];
+
+export type DeleteModelResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostModelData = {
+    body: PostRequestOllamaModel;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/model';
+};
+
+export type PostModelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostModelError = PostModelErrors[keyof PostModelErrors];
+
+export type PostModelResponses = {
+    /**
+     * Successful Response
+     */
+    202: unknown;
+};
 
 export type WsTypesData = {
     body?: never;
