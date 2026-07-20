@@ -103,5 +103,4 @@ class WebSocketRegistry:
             print(f"Connection lost while sending to {project_id}: {e}")
             self.disconnect(project_id)
 
-
 ws_registry = WebSocketRegistry()

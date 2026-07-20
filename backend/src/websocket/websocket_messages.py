@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Literal, Optional, Type, Union
 from enum import Enum
+from src.schemas import OllamaDownloadProgress
 
 # Separate registries for cleaner typing definitions
 REGISTERED_INBOUND_MESSAGES: list[Type[BaseModel]] = []
@@ -11,6 +12,7 @@ class WsTypes(str, Enum):
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
+    ModelPullingUpdate = "ModelPullingUpdate"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -63,6 +65,9 @@ class ReceiveCommandOutputMessage(OutboundMessage):
 class CreatedKaliUserMessage(OutboundMessage):
     type: Literal[WsTypes.CreatedKaliUserMessage]
     client_id: str
+    
+class ModelPullingUpdate(OutboundMessage, OllamaDownloadProgress):
+    type: Literal[WsTypes.ModelPullingUpdate]
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

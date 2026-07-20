@@ -3,7 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from src.core.kali_integration import kali_registry
-from src.routers import project_router, target_router, websocket_router, kali_router
+from src.routers import (
+    project_router,
+    target_router,
+    websocket_router,
+    kali_router,
+    ollama_router,
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -12,6 +19,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
 
 def custom_openapi():
     if app.openapi_schema:
@@ -34,5 +42,6 @@ app.openapi = custom_openapi
 app.include_router(project_router, prefix="/api")
 app.include_router(target_router, prefix="/api")
 app.include_router(kali_router, prefix="/api")
+app.include_router(ollama_router, prefix="/api")
 # --- WebSockets ---
 app.include_router(websocket_router, prefix="/ws")
