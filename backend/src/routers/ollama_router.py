@@ -1,7 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from src.services import OllamaService
 from ollama import ListResponse
-from src.schemas import OllamaModelName
+from src.schemas import OllamaModelName, OllamaModelData, OllamaModelsList
 
 router = APIRouter()
 
@@ -18,13 +18,13 @@ async def get_models_list():
 
 
 @router.post(
-    "/ollama/model", status_code=status.HTTP_202_ACCEPTED, operation_id="DownloadOllamaModel"
+    "/ollama/model",
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="DownloadOllamaModel",
 )
 async def post_ollama_model(data: OllamaModelName, bg_tasks: BackgroundTasks):
     try:
-        bg_tasks.add_task(
-            OllamaService.download_model, data.model_name
-        )
+        bg_tasks.add_task(OllamaService.download_model, data.model_name)
         return {
             "status": "pending",
             "message": f"Download initiated for {data.model_name}",
@@ -45,3 +45,13 @@ async def delete_model(data: OllamaModelName):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not delete model: {data.model_name}",
         )
+
+
+@router.get(
+    "/ollama/downloadable_models",
+    response_model=OllamaModelsList,
+    operation_id="GetDownloadableModels",
+)
+async def get_ollama_downloadable_models(request: Request):
+    models: list[OllamaModelData] = request.app.state.ollama_models
+    return OllamaModelsList(models=models)

@@ -143,6 +143,36 @@ export type ModelPullingUpdate = {
 };
 
 /**
+ * OllamaModelData
+ */
+export type OllamaModelData = {
+    /**
+     * Family
+     */
+    family: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Parameters Size B
+     */
+    parameters_size_b: number;
+    /**
+     * Thinking
+     */
+    thinking: boolean;
+    /**
+     * Context Window
+     */
+    context_window: number;
+    /**
+     * Size Gb
+     */
+    size_gb: number;
+};
+
+/**
  * OllamaModelName
  */
 export type OllamaModelName = {
@@ -150,6 +180,16 @@ export type OllamaModelName = {
      * Model Name
      */
     model_name: string;
+};
+
+/**
+ * OllamaModelsList
+ */
+export type OllamaModelsList = {
+    /**
+     * Models
+     */
+    models: Array<OllamaModelData>;
 };
 
 /**
@@ -624,6 +664,22 @@ export type DownloadOllamaModelResponses = {
      */
     202: unknown;
 };
+
+export type GetDownloadableModelsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/downloadable_models';
+};
+
+export type GetDownloadableModelsResponses = {
+    /**
+     * Successful Response
+     */
+    200: OllamaModelsList;
+};
+
+export type GetDownloadableModelsResponse = GetDownloadableModelsResponses[keyof GetDownloadableModelsResponses];
 
 export type WsTypesData = {
     body?: never;
