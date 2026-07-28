@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "OllamaModelData": {
+      "properties": {
+        "family": {
+          "title": "Family",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parameters_size_b": {
+          "title": "Parameters Size B",
+          "type": "number"
+        },
+        "thinking": {
+          "title": "Thinking",
+          "type": "boolean"
+        },
+        "context_window": {
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "size_gb": {
+          "title": "Size Gb",
+          "type": "number"
+        }
+      },
+      "required": [
+        "family",
+        "name",
+        "parameters_size_b",
+        "thinking",
+        "context_window",
+        "size_gb"
+      ],
+      "title": "OllamaModelData",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "models": {
+      "items": {
+        "$ref": "#/$defs/OllamaModelData"
+      },
+      "title": "Models",
+      "type": "array"
+    }
+  },
+  "required": [
+    "models"
+  ],
+  "title": "OllamaModelsList",
+  "type": "object"
+}

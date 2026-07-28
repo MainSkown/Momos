@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -10,10 +11,20 @@ from src.routers import (
     kali_router,
     ollama_router,
 )
-
+from src.schemas import export_json_schema, OllamaModelsList
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # == Startup ==
+    export_json_schema(Path("models.schema.json"))
+    
+    json_path = Path("models.json")
+    if json_path.exists():
+        list = OllamaModelsList.model_validate_json(json_path.read_text())
+        app.state.ollama_models = list.models
+    else:
+        app.state.ollama_models = []
+    
     yield
     await kali_registry.shutdown()
 

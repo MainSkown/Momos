@@ -1,0 +1,181 @@
+{
+  "$schema": "./models.schema.json",
+  "models": [
+    {
+      "family": "deepseek",
+      "name": "deepseek-r1:1.5b",
+      "parameters_size_b": 1.5,
+      "thinking": true,
+      "context_window": 128000,
+      "size_gb": 1.1
+    },
+    {
+      "family": "deepseek",
+      "name": "deepseek-r1:8b",
+      "parameters_size_b": 8.0,
+      "thinking": true,
+      "context_window": 128000,
+      "size_gb": 4.9
+    },
+    {
+      "family": "deepseek",
+      "name": "deepseek-r1:14b",
+      "parameters_size_b": 14.0,
+      "thinking": true,
+      "context_window": 128000,
+      "size_gb": 9.0
+    },
+    {
+      "family": "deepseek",
+      "name": "deepseek-r1:7b",
+      "parameters_size_b": 7.0,
+      "thinking": true,
+      "context_window": 128000,
+      "size_gb": 4.7
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5-coder:1.5b",
+      "parameters_size_b": 1.5,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 1.0
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5-coder:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 4.7
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5-coder:14b",
+      "parameters_size_b": 14.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 9.0
+    },
+    {
+      "family": "qwen",
+      "name": "qwen3:0.6b",
+      "parameters_size_b": 0.6,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 0.5
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5:0.5b",
+      "parameters_size_b": 0.5,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 0.4
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5:1.5b",
+      "parameters_size_b": 1.5,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 1.0
+    },
+    {
+      "family": "qwen",
+      "name": "qwen2.5:3b",
+      "parameters_size_b": 3.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 2.0
+    },
+    {
+      "family": "llama",
+      "name": "llama3.2:3b",
+      "parameters_size_b": 3.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 2.0
+    },
+    {
+      "family": "llama",
+      "name": "llama3.1:8b",
+      "parameters_size_b": 8.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 4.9
+    },
+    {
+      "family": "llama",
+      "name": "llama3.2:1b",
+      "parameters_size_b": 1.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 0.8
+    },
+    {
+      "family": "mistral",
+      "name": "dolphin-mistral:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 4.1
+    },
+    {
+      "family": "mistral",
+      "name": "mistral-nemo:12b",
+      "parameters_size_b": 12.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 7.1
+    },
+    {
+      "family": "mistral",
+      "name": "mistrallite:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 4.1
+    },
+    {
+      "family": "mistral",
+      "name": "mistral:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 4.1
+    },
+    {
+      "family": "mistral",
+      "name": "zephyr:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 4.1
+    },
+    {
+      "family": "mistral",
+      "name": "openhermes:7b",
+      "parameters_size_b": 7.0,
+      "thinking": false,
+      "context_window": 32768,
+      "size_gb": 4.1
+    },
+    {
+      "family": "phi",
+      "name": "phi3:3.8b",
+      "parameters_size_b": 3.8,
+      "thinking": false,
+      "context_window": 16384,
+      "size_gb": 2.3
+    },
+    {
+      "family": "phi",
+      "name": "phi3.5:3.8b",
+      "parameters_size_b": 3.8,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 2.2
+    }
+  ]
+}
