@@ -247,6 +247,10 @@ export type SendCommandMessage = {
      */
     type: 'SendCommandMessage';
     /**
+     * Project Id
+     */
+    project_id: string;
+    /**
      * Command
      */
     command: string;

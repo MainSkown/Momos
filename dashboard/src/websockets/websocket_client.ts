@@ -1,69 +1,56 @@
 import type { InboundTraffic, OutboundTraffic } from "@/api";
 
-export type tCallback = (
-  project_id: string,
-  message: OutboundTraffic,
-) => void | Promise<void>;
+export type tCallback = (message: OutboundTraffic) => void | Promise<void>;
 
 class WebSocketClient {
   private static instance: WebSocketClient | null = null;
 
-  active_sockets: { [project_id: string]: WebSocket };
+  active_socket: WebSocket | undefined;
   hooks: {
-    [project_id: string]: {
-      type: OutboundTraffic["type"];
-      callback: tCallback;
-    }[];
+    [K in OutboundTraffic["type"]]?: tCallback[];
   };
 
-  readonly baseUrl: string = "/ws";
+  readonly baseUrl: string = "/ws/client";
 
   constructor() {
-    this.active_sockets = {};
     this.hooks = {};
   }
 
   public static getInstance(): WebSocketClient {
     if (!WebSocketClient.instance) {
       WebSocketClient.instance = new WebSocketClient();
+      WebSocketClient.instance.connect().catch((e) => console.error(e));
     }
 
     return WebSocketClient.instance;
   }
 
-  hook_exists(
-    project_id: string,
-    type: OutboundTraffic["type"],
-    callback: tCallback,
-  ) {
-    const hookExists = this.hooks[project_id]?.some(
-      (hook) => hook.type === type && hook.callback === callback,
-    );
+  hook_exists(type: OutboundTraffic["type"], callback: tCallback) {
+    const hookExists = this.hooks[type]?.some((cb) => cb === callback);
 
-    return hookExists
+    return hookExists;
   }
 
-  add_hook(
-    project_id: string,
+  add_hook(   
     type: OutboundTraffic["type"],
     callback: tCallback,
   ) {
-    if (this.hooks[project_id] === undefined) {
-      this.hooks[project_id] = [];
-    }    
+    if (this.hooks[type] === undefined) {
+      this.hooks[type] = [];
+    }
 
-    if (this.hook_exists(project_id, type, callback)) {
+    if (this.hook_exists(type, callback)) {
       // Log a warning or just return early silently
       console.warn(
-        `Duplicate hook detected for type "${type}" in project "${project_id}". Ignoring.`,
+        `Duplicate hook detected for type "${type}". Ignoring.`,
       );
       return;
     }
 
-    this.hooks[project_id].push({ type, callback });
+    this.hooks[type].push(callback);
   }
 
-  private add_listener(project_id: string, socket: WebSocket) {
+  private add_listener(socket: WebSocket) {
     socket.onmessage = (event: MessageEvent) => {
       try {
         const rawMessage = JSON.parse(event.data);
@@ -75,13 +62,11 @@ class WebSocketClient {
 
         const message = rawMessage as OutboundTraffic;
 
-        const handlers = this.hooks[project_id]?.filter(
-          (hook) => hook.type === message.type,
-        );
+        const handlers = this.hooks[message.type];
 
         if (handlers) {
-          handlers.forEach(async (hook) => {
-            await hook.callback(project_id, message);
+          handlers.forEach(async (callback) => {
+            await callback(message);
           });
         }
       } catch (error) {
@@ -90,8 +75,8 @@ class WebSocketClient {
     };
   }
 
-  async connect(project_id: string): Promise<WebSocket> {
-    const socketUrl = `${this.baseUrl}/${project_id}`;
+  private async connect(): Promise<WebSocket> {
+    const socketUrl = `${this.baseUrl}`;
     const socket = new WebSocket(socketUrl);
 
     // Wrap the connection logic in a Promise
@@ -99,8 +84,8 @@ class WebSocketClient {
       const handleOpen = () => {
         cleanup();
 
-        this.active_sockets[project_id] = socket;
-        this.add_listener(project_id, socket);
+        this.active_socket = socket;
+        this.add_listener(socket);
 
         resolve(socket);
       };
@@ -120,9 +105,9 @@ class WebSocketClient {
       socket.addEventListener("error", handleError);
     });
   }
-
-  send_message(project_id: string, message: InboundTraffic) {
-    const socket = this.active_sockets[project_id];
+  // Inbound traffic -> to backend
+  send_message(message: InboundTraffic) {
+    const socket = this.active_socket;
 
     // Check if socket exists
     if (socket === undefined) {
@@ -139,8 +124,8 @@ class WebSocketClient {
     socket.send(JSON.stringify(message));
   }
 
-  isSocketActive(project_id: string) {
-    return this.active_sockets[project_id]?.OPEN === WebSocket.OPEN;
+  isSocketActive() {
+    return this.active_socket?.readyState === WebSocket.OPEN;
   }
 }
 

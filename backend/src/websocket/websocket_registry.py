@@ -23,12 +23,12 @@ class WebSocketRegistry:
 
         self.inbound_message_adapter = TypeAdapter(InboundTrafficUnion)
 
-    def add_global_hook(
+    def add_hook(
         self,
         message_type: WsTypes,
         callback: Callable[[TMessage], Awaitable[None]],
     ):
-        if message_type not in self.global_hooks:
+        if message_type not in self.hooks:
             self.hooks[message_type] = []
 
         self.hooks[message_type].append(callback)
@@ -84,26 +84,26 @@ class WebSocketRegistry:
     #         del self.project_hooks[project_id]
 
 
-async def send_message(self, message: OutboundTrafficUnion):
-    message_json = message.model_dump_json()
+    async def send_message(self, message: OutboundTrafficUnion):
+        message_json = message.model_dump_json()
 
-    async def _send_to_single_client(websocket):
-        if not websocket:
-            return
+        async def _send_to_single_client(websocket):
+            if not websocket:
+                return
 
-        try:
-            await websocket.send_text(message_json)
-        except Exception as e:
-            # Safely get the client info just in case
-            client_info = getattr(websocket, "client", "Unknown Client")
-            print(f"Connection lost while sending to {client_info}: {e}")
-            self.disconnect(websocket)
+            try:
+                await websocket.send_text(message_json)
+            except Exception as e:
+                # Safely get the client info just in case
+                client_info = getattr(websocket, "client", "Unknown Client")
+                print(f"Connection lost while sending to {client_info}: {e}")
+                self.disconnect(websocket)
 
-    tasks = [_send_to_single_client(ws) for ws in list(self.active_sockets)]
+        tasks = [_send_to_single_client(ws) for ws in list(self.active_sockets)]
 
-    if tasks:
-        # Run all sends simultaneously
-        await asyncio.gather(*tasks)
+        if tasks:
+            # Run all sends simultaneously
+            await asyncio.gather(*tasks)
 
 
 ws_registry = WebSocketRegistry()

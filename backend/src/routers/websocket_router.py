@@ -7,7 +7,7 @@ from src.websocket import ws_registry, OutboundTrafficUnion, InboundTrafficUnion
 router = APIRouter()
 
 
-@router.websocket("/")
+@router.websocket("/client")
 async def websocket_endpoint(websocket: WebSocket):
     try:
         await ws_registry.connect(websocket)

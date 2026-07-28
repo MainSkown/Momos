@@ -68,7 +68,7 @@
             >X: {{ line.line }}
           </span>
           <span v-if="line.type === 'user'" class="prompt-prefix"
-            >[{{line.user}}]$ {{ line.line }}
+            >[{{ line.user }}]$ {{ line.line }}
           </span>
         </div>
       </div>
@@ -132,13 +132,19 @@ const user_command = ref<string>("");
 
 function sendCommand() {
   const message: SendCommandMessage = {
+    project_id: store.openedProject,
     type: "SendCommandMessage",
     command: user_command.value,
     user: user_picked.value,
   };
 
-  ws_client.send_message(store.openedProject, message);
-  store.pushCmdLine(store.openedProject, user_command.value, 'user', user_picked.value)
+  ws_client.send_message(message);
+  store.pushCmdLine(
+    store.openedProject,
+    user_command.value,
+    "user",
+    user_picked.value,
+  );
   user_command.value = "";
 }
 
@@ -162,8 +168,9 @@ async function createNewKaliUser() {
   );
 }
 
-const onKaliCreated: tCallback = (project_id, message) => {
+const onKaliCreated: tCallback = (message) => {
   message = message as CreatedKaliUserMessage;
+  const project_id = message.project_id;
 
   if (message.error) {
     console.error(message.error.message);
@@ -179,53 +186,33 @@ const onKaliCreated: tCallback = (project_id, message) => {
   );
 };
 
-const onConsoleOutput: tCallback = (project_id, message) => {
+const onConsoleOutput: tCallback = (message) => {
   message = message as ReceiveCommandOutputMessage;
+  const project_id = message.project_id;
 
   if (message.error && message.error.message) {
     console.error(message.error.message);
-    store.pushCmdLine(project_id, message.error.message, 'error')
+    store.pushCmdLine(project_id, message.error.message, "error");
     return;
   }
 
-  store.pushCmdLine(project_id, message.output, 'cmd')
+  store.pushCmdLine(project_id, message.output, "cmd");
 };
 
 const add_hooks = (project_id: string) => {
-  if (
-    !ws_client.hook_exists(project_id, "CreatedKaliUserMessage", onKaliCreated)
-  )
-    ws_client.add_hook(project_id, "CreatedKaliUserMessage", onKaliCreated);
+  if (!ws_client.hook_exists("CreatedKaliUserMessage", onKaliCreated))
+    ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated);
 
-  if (
-    !ws_client.hook_exists(
-      project_id,
-      "ReceiveCommandOutputMessage",
-      onConsoleOutput,
-    )
-  )
-    ws_client.add_hook(
-      project_id,
-      "ReceiveCommandOutputMessage",
-      onConsoleOutput,
-    );
+  if (!ws_client.hook_exists("ReceiveCommandOutputMessage", onConsoleOutput))
+    ws_client.add_hook("ReceiveCommandOutputMessage", onConsoleOutput);
 };
 
 function set_ws(project_id: string) {
   add_hooks(project_id);
-
-  if (
-    !ws_client.isSocketActive(project_id) &&
-    !ws_client.active_sockets[project_id]
-  ) {
-    ws_client.connect(project_id);
-  }
 }
 
 async function check_client(project_id: string) {
-  const client_id = localStorage.getItem(
-    `${LocalStoreKeys.CLIENT_ID}-${project_id}`,
-  );
+  const client_id = localStorage.getItem(`${LocalStoreKeys.CLIENT_ID}`);
 
   if (!client_id) return;
 
@@ -234,7 +221,7 @@ async function check_client(project_id: string) {
   if (result.response?.status === 404) {
     console.info("Could not find client: ", client_id);
 
-    localStorage.removeItem(`${LocalStoreKeys.CLIENT_ID}-${project_id}`);
+    localStorage.removeItem(`${LocalStoreKeys.CLIENT_ID}`);
 
     return;
   }
@@ -325,10 +312,10 @@ check_client(store.openedProject);
 }
 
 .error-message {
-  color: var(--status-critical)
+  color: var(--status-critical);
 }
 
-.terminal-line {  
+.terminal-line {
   margin-bottom: 4px;
   word-break: break-all;
 }
