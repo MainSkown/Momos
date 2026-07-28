@@ -14,6 +14,10 @@ export type CreatedKaliUserMessage = {
     type: 'CreatedKaliUserMessage';
     error?: WebSocketError | null;
     /**
+     * Project Id
+     */
+    project_id: string;
+    /**
      * Client Id
      */
     client_id: string;
@@ -82,16 +86,6 @@ export type Model = {
 };
 
 /**
- * ModelData
- */
-export type ModelData = {
-    /**
-     * Model Name
-     */
-    model_name: string;
-};
-
-/**
  * ModelDetails
  */
 export type ModelDetails = {
@@ -149,23 +143,19 @@ export type ModelPullingUpdate = {
 };
 
 /**
- * OutboundTraffic
+ * OllamaModelName
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
-
-/**
- * PostRequestOllamaModel
- */
-export type PostRequestOllamaModel = {
+export type OllamaModelName = {
     /**
      * Model Name
      */
     model_name: string;
-    /**
-     * Project Id
-     */
-    project_id: string;
 };
+
+/**
+ * OutboundTraffic
+ */
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
 
 /**
  * ProjectBase
@@ -200,6 +190,10 @@ export type ReceiveCommandOutputMessage = {
      */
     type: 'ReceiveCommandOutputMessage';
     error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
     /**
      * Output
      */
@@ -582,7 +576,7 @@ export type GetModelsListResponses = {
 export type GetModelsListResponse = GetModelsListResponses[keyof GetModelsListResponses];
 
 export type DeleteModelData = {
-    body: ModelData;
+    body: OllamaModelName;
     path?: never;
     query?: never;
     url: '/api/ollama/model';
@@ -604,23 +598,23 @@ export type DeleteModelResponses = {
     200: unknown;
 };
 
-export type PostModelData = {
-    body: PostRequestOllamaModel;
+export type DownloadOllamaModelData = {
+    body: OllamaModelName;
     path?: never;
     query?: never;
     url: '/api/ollama/model';
 };
 
-export type PostModelErrors = {
+export type DownloadOllamaModelErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type PostModelError = PostModelErrors[keyof PostModelErrors];
+export type DownloadOllamaModelError = DownloadOllamaModelErrors[keyof DownloadOllamaModelErrors];
 
-export type PostModelResponses = {
+export type DownloadOllamaModelResponses = {
     /**
      * Successful Response
      */

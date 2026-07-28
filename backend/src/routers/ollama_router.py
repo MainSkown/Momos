@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from src.services import OllamaService
 from ollama import ListResponse
-from src.schemas import PostRequestOllamaModel, ModelData
+from src.schemas import OllamaModelName
 
 router = APIRouter()
 
@@ -18,12 +18,12 @@ async def get_models_list():
 
 
 @router.post(
-    "/ollama/model", status_code=status.HTTP_202_ACCEPTED, operation_id="PostModel"
+    "/ollama/model", status_code=status.HTTP_202_ACCEPTED, operation_id="DownloadOllamaModel"
 )
-async def post_ollama_model(data: PostRequestOllamaModel, bg_tasks: BackgroundTasks):
+async def post_ollama_model(data: OllamaModelName, bg_tasks: BackgroundTasks):
     try:
         bg_tasks.add_task(
-            OllamaService.download_model, data.model_name, data.project_id
+            OllamaService.download_model, data.model_name
         )
         return {
             "status": "pending",
@@ -37,7 +37,7 @@ async def post_ollama_model(data: PostRequestOllamaModel, bg_tasks: BackgroundTa
 
 
 @router.delete("/ollama/model", operation_id="DeleteModel")
-async def delete_model(data: ModelData):
+async def delete_model(data: OllamaModelName):
     try:
         await OllamaService.delete_model(data.model_name)
     except Exception as e:

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetModelsListData, GetModelsListResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostModelData, PostModelErrors, PostModelResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetModelsListData, GetModelsListResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -99,7 +99,7 @@ export const deleteModel = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Post Ollama Model
  */
-export const postModel = <ThrowOnError extends boolean = false>(options: Options<PostModelData, ThrowOnError>): RequestResult<PostModelResponses, PostModelErrors, ThrowOnError> => (options.client ?? client).post<PostModelResponses, PostModelErrors, ThrowOnError>({
+export const downloadOllamaModel = <ThrowOnError extends boolean = false>(options: Options<DownloadOllamaModelData, ThrowOnError>): RequestResult<DownloadOllamaModelResponses, DownloadOllamaModelErrors, ThrowOnError> => (options.client ?? client).post<DownloadOllamaModelResponses, DownloadOllamaModelErrors, ThrowOnError>({
     url: '/api/ollama/model',
     ...options,
     headers: {

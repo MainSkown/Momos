@@ -1,7 +1,12 @@
 from typing import Dict, List, Callable, Awaitable, TypeVar
 from fastapi import WebSocket
 from pydantic import TypeAdapter, ValidationError
-from src.websocket import WebSocketMessage, InboundTrafficUnion, OutboundTrafficUnion, WsTypes
+from src.websocket import (
+    WebSocketMessage,
+    InboundTrafficUnion,
+    OutboundTrafficUnion,
+    WsTypes,
+)
 import asyncio
 
 TMessage = TypeVar("TMessage", bound=WebSocketMessage)
@@ -9,98 +14,96 @@ TMessage = TypeVar("TMessage", bound=WebSocketMessage)
 
 class WebSocketRegistry:
     def __init__(self):
-        self.active_sockets: Dict[str, WebSocket] = {}
+        self.active_sockets: List[WebSocket] = []
 
-        # Global hooks, mainly used for creating stuff { message_type: [callbacks(project_id, message)] } }
-        self.global_hooks: Dict[
-            WsTypes, List[Callable[[str, WebSocketMessage], Awaitable[None]]]
-        ] = {}
-
-        # Nested Dictionary: { project_id: { message_type: [callbacks(project_id, message)] } }
-        self.project_hooks: Dict[
-            str, Dict[WsTypes, List[Callable[[str, WebSocketMessage], Awaitable[None]]]]
+        # Global hooks { message_type: [callbacks(project_id, message)] } }
+        self.hooks: Dict[
+            WsTypes, List[Callable[[WebSocketMessage], Awaitable[None]]]
         ] = {}
 
         self.inbound_message_adapter = TypeAdapter(InboundTrafficUnion)
-        
+
     def add_global_hook(
         self,
         message_type: WsTypes,
-        callback: Callable[[str, TMessage], Awaitable[None]]
+        callback: Callable[[TMessage], Awaitable[None]],
     ):
         if message_type not in self.global_hooks:
-            self.global_hooks[message_type] = []
-        
-        self.global_hooks[message_type].append(callback)
+            self.hooks[message_type] = []
 
-    def add_project_hook(
-    self,
-    project_id: str,
-    message_type: WsTypes,
-    callback: Callable[[str, TMessage], Awaitable[None]],
-    ):
-        """Register an async function to trigger for a SPECIFIC project and message type."""
-        # Keep only one active callback per project and message type.
-        # This prevents duplicate handlers after reconnects or page refreshes.
-        if project_id not in self.project_hooks:
-            self.project_hooks[project_id] = {}
+        self.hooks[message_type].append(callback)
 
-        self.project_hooks[project_id][message_type] = [callback]
+    # Discontinued: changed websockets to be global
+    # def add_project_hook(
+    # self,
+    # project_id: str,
+    # message_type: WsTypes,
+    # callback: Callable[[str, TMessage], Awaitable[None]],
+    # ):
+    #     """Register an async function to trigger for a SPECIFIC project and message type."""
+    #     # Keep only one active callback per project and message type.
+    #     # This prevents duplicate handlers after reconnects or page refreshes.
+    #     if project_id not in self.project_hooks:
+    #         self.project_hooks[project_id] = {}
 
-    async def connect(self, project_id: str, websocket: WebSocket):
+    #     self.project_hooks[project_id][message_type] = [callback]
+
+    async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_sockets[project_id] = websocket
+        self.active_sockets.append(websocket)
 
         try:
             async for raw_data in websocket.iter_text():
                 try:
                     message = self.inbound_message_adapter.validate_json(raw_data)
                     print(f"Got message: {message}")
-                    
+
                     # Look up global hooks
-                    global_handlers = self.global_hooks.get(message.type, [])
-                    
-                    for handler in global_handlers:
-                        # We still want to know from which project the message came from
-                        asyncio.create_task(handler(project_id, message))
-                    
+                    handlers = self.hooks.get(message.type, [])
 
-                    # Look up hooks ONLY for this specific project
-                    project_hooks = self.project_hooks.get(project_id, {})
-                    handlers = project_hooks.get(message.type, [])
-
-                    for handler in handlers:
-                        asyncio.create_task(handler(project_id, message))
+                    for handler in handlers:                        
+                        asyncio.create_task(handler(message))
 
                 except ValidationError as e:
                     print(f"Invalid message format received: {e}")
                 except Exception as e:
-                    print(f"Error executing hook for {project_id}: {e}")
+                    print(f"Error executing hook for: {e}")
 
         finally:
-            print(f"Client {project_id} disconnected.")
-            self.disconnect(project_id)
+            print(f"Client disconnected.")
+            self.disconnect(websocket)
 
-    def disconnect(self, project_id: str):
+    def disconnect(self, websocket: WebSocket):
         """Clean up the socket and optionally the hooks."""
-        if project_id in self.active_sockets:
-            del self.active_sockets[project_id]
+        if websocket in self.active_sockets:
+            self.active_sockets.remove(websocket)
 
-    def remove_hooks(self, project_id: str):
-        """Clean up hooks if not used anymore"""
-        if project_id in self.project_hooks:
-            del self.project_hooks[project_id]
+    # def remove_hooks(self, project_id: str):
+    #     """Clean up hooks if not used anymore"""
+    #     if project_id in self.project_hooks:
+    #         del self.project_hooks[project_id]
 
-    async def send_message(self, project_id: str, message: OutboundTrafficUnion):
-        websocket = self.active_sockets.get(project_id)
+
+async def send_message(self, message: OutboundTrafficUnion):
+    message_json = message.model_dump_json()
+
+    async def _send_to_single_client(websocket):
         if not websocket:
-            print(f"Cannot send message: No active connection for {project_id}")
             return
 
         try:
-            await websocket.send_text(message.model_dump_json())
+            await websocket.send_text(message_json)
         except Exception as e:
-            print(f"Connection lost while sending to {project_id}: {e}")
-            self.disconnect(project_id)
+            # Safely get the client info just in case
+            client_info = getattr(websocket, "client", "Unknown Client")
+            print(f"Connection lost while sending to {client_info}: {e}")
+            self.disconnect(websocket)
+
+    tasks = [_send_to_single_client(ws) for ws in list(self.active_sockets)]
+
+    if tasks:
+        # Run all sends simultaneously
+        await asyncio.gather(*tasks)
+
 
 ws_registry = WebSocketRegistry()

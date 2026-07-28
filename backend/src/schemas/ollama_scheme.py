@@ -6,8 +6,6 @@ class OllamaDownloadProgress(BaseModel):
     completed: int
     total: int
     
-class ModelData(BaseModel):
+class OllamaModelName(BaseModel):
     model_name: str
     
-class PostRequestOllamaModel(ModelData):    
-    project_id: str

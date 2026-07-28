@@ -7,10 +7,10 @@ from src.websocket import ws_registry, OutboundTrafficUnion, InboundTrafficUnion
 router = APIRouter()
 
 
-@router.websocket("/{project_id}")
-async def websocket_endpoint(project_id: str, websocket: WebSocket):
+@router.websocket("/")
+async def websocket_endpoint(websocket: WebSocket):
     try:
-        await ws_registry.connect(project_id, websocket)
+        await ws_registry.connect(websocket)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

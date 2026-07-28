@@ -52,6 +52,7 @@ class OutboundMessage(WebSocketMessage):
 # --- Inbound Subclasses (Client Sends) ---
 
 class SendCommandMessage(InboundMessage):
+    project_id: str
     type: Literal[WsTypes.SendCommandMessage]
     command: str
     user: Literal["root", "momos"]
@@ -59,10 +60,12 @@ class SendCommandMessage(InboundMessage):
 # --- Outbound Subclasses (Server Sends) ---
 
 class ReceiveCommandOutputMessage(OutboundMessage):
+    project_id: str
     type: Literal[WsTypes.ReceiveCommandOutputMessage]
     output: str
     
 class CreatedKaliUserMessage(OutboundMessage):
+    project_id: str
     type: Literal[WsTypes.CreatedKaliUserMessage]
     client_id: str
     
