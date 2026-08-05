@@ -4,7 +4,7 @@
     <div class="row gap-low" v-if="store.getProjects.length > 0">
       <ToolsBar class="tool-bar" v-model="currentTool" />
       <ContextView class="context-view"> 
-        <Overview v-if="currentTool == 'overview'" />
+        <Overview v-if="currentTool == TOOLS_KEYS.OVERVIEW" />
       </ContextView>
     </div>
   </div>
@@ -16,7 +16,7 @@ import ContextView from "./MainPage/ContextView.vue";
 import ProjectBar from "./MainPage/ProjectBar.vue";
 import ToolsBar from "./MainPage/ToolsBar.vue";
 import Overview from "./OverviewPage/Overview.vue";
-import { tools } from "./tools.ts";
+import { tools, TOOLS_KEYS } from "./tools.ts";
 import { onMounted, ref } from "vue";
 
 const store = useMomosStore()

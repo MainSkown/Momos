@@ -1,13 +1,20 @@
 from pathlib import Path
 from pydantic import BaseModel
 import json
+import re
 
+def parse_parameter_size(param_str: str | None) -> float:
+    """Converts string to float - B"""
+    if not param_str:
+        return 0.0
+    match = re.search(r"([\d.]+)\s*B", param_str, re.IGNORECASE)
+    return float(match.group(1)) if match else 0.0
 
 class OllamaDownloadProgress(BaseModel):
     model: str
     status: str
-    completed: int
-    total: int
+    completed: int | None
+    total: int | None
 
 
 class OllamaModelName(BaseModel):

@@ -17,11 +17,12 @@ from src.schemas import export_json_schema, OllamaModelsList
 async def lifespan(app: FastAPI):
     # == Startup ==
     export_json_schema(Path("models.schema.json"))
-    
-    json_path = Path("models.json")
+
+    base_dir = Path(__file__).resolve().parent
+    json_path = base_dir / "models_list.json"
     if json_path.exists():
-        list = OllamaModelsList.model_validate_json(json_path.read_text())
-        app.state.ollama_models = list.models
+        models_list = OllamaModelsList.model_validate_json(json_path.read_text())
+        app.state.ollama_models = models_list.models
     else:
         app.state.ollama_models = []
     

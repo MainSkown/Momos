@@ -45,5 +45,13 @@ class OllamaManager:
                 f"Could not delete requested model: {model_name}, {str(e)}"
             )
 
+    async def show(self, model_name: str):
+        try:
+            return await self.client.show(model_name)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not show requested model: {model_name}, {str(e)}"
+            )
+
 
 ollama_manager = OllamaManager()

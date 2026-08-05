@@ -102,6 +102,13 @@ a:hover {
 .text-red {
   color: var(--red-primary);
 }
+.text-active {
+  color: var(--status-active)
+}
+.text-inactive{
+  color: var(--status-critical)
+}
+
 .text-white {
   color: var(--text-white);
 }
@@ -109,8 +116,21 @@ a:hover {
   color: var(--text-gray);
 }
 
+.text-bold {
+  font-weight: bold;
+}
+
 .text-center{
   text-align: center;
+}
+
+.settings-text{
+  font-size: 16px;      /* Increased from small default */
+  font-weight: 400;     /* Slightly bolder for UI legibility */
+  line-height: 1.2;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  margin: 0;
 }
 
 .border {
@@ -125,10 +145,16 @@ a:hover {
 }
 
 .border-bottom {
-  border-bottom: 2px solid var(--border-primary);
+  border-bottom: 2px solid var(--border-primary) !important;
 }
 .border-top {
-  border-top: 2px solid var(--border-primary);
+  border-top: 2px solid var(--border-primary) !important;
+}
+.border-right {
+  border-right: 2px solid var(--border-primary) !important;
+}
+.border-left {
+  border-left: 2px solid var(--border-primary) !important;
 }
 .shadow-red {
   box-shadow: var(--shadow-red-medium);
@@ -409,7 +435,7 @@ a:hover {
 }
 
 .button.is-active {
-    background-color: var(--active-bg);
+    background-color: var(--active-bg) !important;
     color: var(--text-white);
 }
 

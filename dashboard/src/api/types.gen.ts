@@ -53,69 +53,6 @@ export type KaliUser = {
 };
 
 /**
- * ListResponse
- */
-export type ListResponse = {
-    /**
-     * Models
-     */
-    models: Array<Model>;
-};
-
-/**
- * Model
- */
-export type Model = {
-    /**
-     * Model
-     */
-    model?: string | null;
-    /**
-     * Modified At
-     */
-    modified_at?: string | null;
-    /**
-     * Digest
-     */
-    digest?: string | null;
-    /**
-     * Size
-     */
-    size?: number | null;
-    details?: ModelDetails | null;
-};
-
-/**
- * ModelDetails
- */
-export type ModelDetails = {
-    /**
-     * Parent Model
-     */
-    parent_model?: string | null;
-    /**
-     * Format
-     */
-    format?: string | null;
-    /**
-     * Family
-     */
-    family?: string | null;
-    /**
-     * Families
-     */
-    families?: Array<string> | null;
-    /**
-     * Parameter Size
-     */
-    parameter_size?: string | null;
-    /**
-     * Quantization Level
-     */
-    quantization_level?: string | null;
-};
-
-/**
  * ModelPullingUpdate
  */
 export type ModelPullingUpdate = {
@@ -130,11 +67,11 @@ export type ModelPullingUpdate = {
     /**
      * Completed
      */
-    completed: number;
+    completed: number | null;
     /**
      * Total
      */
-    total: number;
+    total: number | null;
     /**
      * Type
      */
@@ -614,7 +551,7 @@ export type GetModelsListResponses = {
     /**
      * Successful Response
      */
-    200: ListResponse;
+    200: OllamaModelsList;
 };
 
 export type GetModelsListResponse = GetModelsListResponses[keyof GetModelsListResponses];

@@ -6,11 +6,12 @@ from src.schemas import OllamaModelName, OllamaModelData, OllamaModelsList
 router = APIRouter()
 
 
-@router.get("/ollama/models", response_model=ListResponse, operation_id="GetModelsList")
+@router.get("/ollama/models", response_model=OllamaModelsList, operation_id="GetModelsList")
 async def get_models_list():
     try:
         return await OllamaService.get_models_list()
     except Exception as e:
+        print(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not return all models",
