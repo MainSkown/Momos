@@ -1,6 +1,7 @@
 <template>
   <div class="border ai-box column">
     <button
+      v-if="!isBeingDownloaded()"
       class="button action-button"
       :class="installed ? 'action-button-delete' : 'action-button-add'"
       type="button"
@@ -9,7 +10,7 @@
       @click="
         async () => {
           if (!installed) await store.downloadModel(model.name);
-          else () => {};
+          else toDelete = true;
         }
       "
     >
@@ -49,20 +50,96 @@
           >Thinking</span
         >
       </div>
+      <div v-if="isBeingDownloaded()">
+        <progress
+          :value="store.getQueueObjectCompletion(model.name).completed"
+          :max="store.getQueueObjectCompletion(model.name).total"
+        />
+      </div>
     </div>
+
+    <Dialog
+      v-if="toDelete"
+      :visible="toDelete"
+      :title="$t('targets.to_delete')"
+      :no-close-button="true"
+    >
+      <span class="text-center flex-center" style="margin-bottom: 20px">{{
+        $t("targets.delete_info")
+      }}</span>
+      <div class="row flex-center gap-high" style="padding-inline: 10px">
+        <button
+          class="button border"
+          style="flex-grow: 1"
+          @click="
+            {
+              _deleteModel();
+              toDelete = false;
+            }
+          "
+        >
+          <span>{{ $t("universal.yes") }}</span>
+        </button>
+        <button
+          class="button border"
+          style="flex-grow: 1"
+          @click="toDelete = false"
+        >
+          <span>{{ $t("universal.no") }}</span>
+        </button>
+      </div>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { type OllamaModelData } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
+import { ref, watch } from "vue";
+import Dialog from "../reusable/Dialog.vue";
+import { deleteModel } from "@/api";
+import { toast } from "vue3-toastify";
+import { useI18n } from "vue-i18n";
 
 const store = useMomosStore();
+const { t: $t } = useI18n();
+
+const toDelete = ref<boolean>(false);
+
+const emits = defineEmits(["deleted", "download-finished"]);
 
 const props = defineProps<{
   model: OllamaModelData;
   installed: boolean;
 }>();
+
+async function _deleteModel() {
+  if (props.installed) {
+    const result = await deleteModel({
+      body: { model_name: props.model.name },
+    });
+
+    if (result.response?.status === 200) {
+      toast.success($t("Deleted"), {
+        position: toast.POSITION.TOP_CENTER,
+      });
+      emits("deleted");
+    }
+  }
+}
+
+function isBeingDownloaded() {
+  return store.download_queue.some((q) => q.model_name === props.model.name);
+}
+
+watch(
+  () => isBeingDownloaded(),
+  (newVal, oldVal) => {
+    if (newVal === false && oldVal === true) {
+      emits("download-finished");
+    }
+  },
+);
 </script>
 
 <style lang="css" scoped>

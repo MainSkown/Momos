@@ -1,9 +1,23 @@
 from src.core import ollama_manager
 from src.websocket import ws_registry, ModelPullingUpdate, WsTypes
-from src.schemas import OllamaModelsList, OllamaModelData, parse_parameter_size
+from src.schemas import (
+    OllamaModelsList,
+    OllamaModelData,
+    parse_parameter_size,
+    OllamaQueueDetails,
+)
+import asyncio
 
 
 class OllamaService:
+    # Queue for downloading models
+    _download_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    # Trackers
+    _current_download: str | None = None
+    _queued_models: list[str] = []
+    _worker_task: asyncio.Task | None = None
+
     @staticmethod
     async def get_models_list() -> OllamaModelsList:
         try:
@@ -53,13 +67,53 @@ class OllamaService:
         except Exception as e:
             raise RuntimeError(f"Could not list available models: {str(e)}")
 
-    @staticmethod
-    async def download_model(model_name: str):
-        async for progress in ollama_manager.pull_model(model_name):
-            update = ModelPullingUpdate(
-                progress=progress, type=WsTypes.ModelPullingUpdate
-            )
-            await ws_registry.send_message(update)
+    @classmethod
+    def get_download_queue(cls):
+        return OllamaQueueDetails(
+            current=cls._current_download, queue=list(cls._queued_models)
+        )
+
+    @classmethod
+    async def download_model(cls, model_name: str):
+        if model_name == cls._current_download or model_name in cls._queued_models:
+            raise ValueError(f"Model '{model_name}' is already downloading or queued.")
+        
+        # Check if already downloaded
+        downloaded = await cls.get_models_list()
+        if any(model_name == model.name for model in downloaded.models):
+            raise ValueError(f"Model {model_name} already downloaded")
+        
+        cls._queued_models.append(model_name)
+        await cls._download_queue.put(model_name)
+        
+        cls._ensure_worker_running()
+        
+    @classmethod
+    def _ensure_worker_running(cls):
+        """Starts the background worker loop if it isn't already running."""
+        if cls._worker_task is None or cls._worker_task.done():
+            cls._worker_task = asyncio.create_task(cls._download_worker())
+        
+    @classmethod
+    async def _download_worker(cls):
+        while not cls._download_queue.empty():
+            model_name = await cls._download_queue.get()
+            
+            cls._current_download = model_name
+            if model_name in cls._queued_models:
+                cls._queued_models.remove(model_name)
+            
+            try:        
+                async for progress in ollama_manager.pull_model(model_name):
+                    update = ModelPullingUpdate(
+                        progress=progress, type=WsTypes.ModelPullingUpdate
+                    )
+                    await ws_registry.send_message(update)
+            except Exception as e:
+                print(f"Error while downloading model {model_name}: {e}")
+            finally:
+                cls._current_download = None
+                cls._download_queue.task_done()
 
     @staticmethod
     async def delete_model(model_name: str):

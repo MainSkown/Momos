@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -112,6 +112,11 @@ export const downloadOllamaModel = <ThrowOnError extends boolean = false>(option
  * Get Ollama Downloadable Models
  */
 export const getDownloadableModels = <ThrowOnError extends boolean = false>(options?: Options<GetDownloadableModelsData, ThrowOnError>): RequestResult<GetDownloadableModelsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetDownloadableModelsResponses, unknown, ThrowOnError>({ url: '/api/ollama/downloadable_models', ...options });
+
+/**
+ * Get Ollama Download Queue Details
+ */
+export const getOllamaDownloadQueueDetails = <ThrowOnError extends boolean = false>(options?: Options<GetOllamaDownloadQueueDetailsData, ThrowOnError>): RequestResult<GetOllamaDownloadQueueDetailsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetOllamaDownloadQueueDetailsResponses, unknown, ThrowOnError>({ url: '/api/ollama/download_queue', ...options });
 
 /**
  * Ws Types Dummy

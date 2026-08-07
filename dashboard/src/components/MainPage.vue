@@ -24,8 +24,9 @@ const store = useMomosStore()
 onMounted(async () => {
   try{
     await store.reloadProjects();
+    await store.loadQueue();
   } catch (err){
-    console.log("Something went wrong when reloading projects:", err)
+    console.log("Something went wrong when reloading projects or queue:", err)
   }
 })
 

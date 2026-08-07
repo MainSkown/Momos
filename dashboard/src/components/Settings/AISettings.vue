@@ -15,6 +15,7 @@
             :key="model.name"
             :model="model"
             :installed="true"
+            @deleted="refreshInstalledModels"            
           />
         </div>
       </div>
@@ -35,7 +36,8 @@
               )"
               :key="model.name"
               :model="model"
-              :installed="false"
+              :installed="installed_models.find((m) => m.name === model.name) !== undefined"
+              @download-finished="refreshInstalledModels"
             />
           </div>
         </div>
@@ -46,7 +48,6 @@
 
 <script setup lang="ts">
 import {
-  downloadOllamaModel,
   getDownloadableModels,
   getModelsList,
   type OllamaModelData,
@@ -57,8 +58,8 @@ import AIBox from "./AIBox.vue";
 const downloadable_models = ref<OllamaModelData[]>([]);
 const installed_models = ref<OllamaModelData[]>([]);
 
-function installModel(name: string) {
-  const result = downloadOllamaModel({ body: { model_name: name } });
+async function refreshInstalledModels(){
+  installed_models.value = await getInstalledModels()
 }
 
 function getModelsByFamily(): Record<string, OllamaModelData[]> {
@@ -108,7 +109,7 @@ onMounted(async () => {
   downloadable_models.value = result.data.models;
 
   // Get installed models
-  installed_models.value = await getInstalledModels();
+  refreshInstalledModels()
 });
 </script>
 

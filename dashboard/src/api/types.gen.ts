@@ -137,6 +137,20 @@ export type OllamaModelsList = {
 };
 
 /**
+ * OllamaQueueDetails
+ */
+export type OllamaQueueDetails = {
+    /**
+     * Current
+     */
+    current: string;
+    /**
+     * Queue
+     */
+    queue: Array<string>;
+};
+
+/**
  * OutboundTraffic
  */
 export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
@@ -624,6 +638,22 @@ export type GetDownloadableModelsResponses = {
 };
 
 export type GetDownloadableModelsResponse = GetDownloadableModelsResponses[keyof GetDownloadableModelsResponses];
+
+export type GetOllamaDownloadQueueDetailsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/download_queue';
+};
+
+export type GetOllamaDownloadQueueDetailsResponses = {
+    /**
+     * Successful Response
+     */
+    200: OllamaQueueDetails;
+};
+
+export type GetOllamaDownloadQueueDetailsResponse = GetOllamaDownloadQueueDetailsResponses[keyof GetOllamaDownloadQueueDetailsResponses];
 
 export type WsTypesData = {
     body?: never;

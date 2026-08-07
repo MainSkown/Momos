@@ -445,6 +445,46 @@ a:hover {
 }
 
 
+progress {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 10px;
+  border: 2px solid var(--border-primary);
+  background-color: var(--black);
+  overflow: hidden;
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+progress::-webkit-progress-bar {
+  background-color: var(--black);
+  border-radius: var(--radius);
+}
+
+progress::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--red-primary), var(--red-light));
+  border-radius: var(--radius);
+}
+
+progress::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--red-primary), var(--red-light));
+  border-radius: var(--radius);
+}
+
+progress:indeterminate {
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.2);
+  }
+}
+
 /* Scrollbar Styling */
 .scrollable-panel {
   /* Core scroll functionality */

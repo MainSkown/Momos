@@ -6,6 +6,7 @@ import {
   getAllTargetsInProject,
   deleteTarget,
   updateTarget,
+  getOllamaDownloadQueueDetails,
   type OllamaDownloadProgress,
   downloadOllamaModel,
   type ModelPullingUpdate,
@@ -46,6 +47,30 @@ export const useMomosStore = defineStore("momos", {
     getProjects: (state) => state.projects,
     getProjectsTargets: (state) => (projectID: string) =>
       state.targets.filter((t) => t.project_id === projectID),
+    getQueueObjectCompletion:
+      (state) =>
+      (model_name: string): { completed: number; total: number } => {
+        const q = state.download_queue.find(
+          (item) => item.model_name === model_name,
+        );
+
+        if (
+          !q ||
+          q.last_progress?.completed == null ||
+          q.last_progress.total == null
+        ) {
+          return { completed: 0, total: 0 };
+        }
+
+        if (q.status === "done") {
+          return { completed: 1, total: 1 };
+        }
+
+        return {
+          completed: q.last_progress.completed,
+          total: q.last_progress.total,
+        };
+      },
   },
 
   actions: {
@@ -158,15 +183,20 @@ export const useMomosStore = defineStore("momos", {
     },
 
     /* --- Managing Ollama --- */
-    async downloadModel(model_name: string) {
-      const result = await downloadOllamaModel({
-        body: { model_name: model_name },
-      });
+    async loadQueue() {
+      const result = await getOllamaDownloadQueueDetails();
 
-      if (result.error || result.response?.status !== 202) {
-        throw Error("Could not download model: " + model_name);
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load queue details");
       }
+      const queue = [result.data.current, ...result.data.queue];
 
+      queue.forEach((name) => {
+        this._downloadModelHook(name);
+      });
+    },
+
+    _downloadModelHook(model_name: string) {
       const download_obj: tDownloadObject = {
         model_name: model_name,
         last_progress: null,
@@ -191,14 +221,35 @@ export const useMomosStore = defineStore("momos", {
 
         if (message.progress.model !== model_name) return;
 
-        download_obj.last_update_time = Date.now();
-        download_obj.last_progress = message.progress;
+        const queue_obj = this.download_queue.find(
+          (q) => q.model_name === model_name,
+        );
+
+        if (queue_obj) {
+          queue_obj.last_update_time = Date.now();
+          const progress = message.progress;
+          if (progress.completed && progress.total)
+            queue_obj.last_progress = message.progress;
+        }
 
         // finished downloading
         if (message.progress.status === "success") {
+          if (queue_obj) queue_obj.status = "done";
           hook?.delete();
         }
       });
+    },
+
+    async downloadModel(model_name: string) {
+      const result = await downloadOllamaModel({
+        body: { model_name: model_name },
+      });
+
+      if (result.error || result.response?.status !== 202) {
+        throw Error("Could not download model: " + model_name);
+      }
+
+      this._downloadModelHook(model_name);
     },
   },
 });

@@ -10,6 +10,10 @@ def parse_parameter_size(param_str: str | None) -> float:
     match = re.search(r"([\d.]+)\s*B", param_str, re.IGNORECASE)
     return float(match.group(1)) if match else 0.0
 
+class OllamaQueueDetails(BaseModel):
+    current: str
+    queue: list[str]
+
 class OllamaDownloadProgress(BaseModel):
     model: str # name   
     status: str # downloading / error
