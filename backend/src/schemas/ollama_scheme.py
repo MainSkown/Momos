@@ -11,9 +11,9 @@ def parse_parameter_size(param_str: str | None) -> float:
     return float(match.group(1)) if match else 0.0
 
 class OllamaDownloadProgress(BaseModel):
-    model: str
-    status: str
-    completed: int | None
+    model: str # name   
+    status: str # downloading / error
+    completed: int | None 
     total: int | None
 
 

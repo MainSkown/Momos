@@ -6,6 +6,12 @@
       type="button"
       :aria-label="installed ? 'Delete model' : 'Install model'"
       :title="installed ? 'Delete model' : 'Install model'"
+      @click="
+        async () => {
+          if (!installed) await store.downloadModel(model.name);
+          else () => {};
+        }
+      "
     >
       <span class="material-icons-outlined">
         {{ installed ? "delete_outline" : "download" }}
@@ -26,7 +32,8 @@
         <span
           v-if="model.thinking"
           class="model-meta model-meta-short material-icons-outlined"
-        >psychology</span>
+          >psychology</span
+        >
       </div>
       <div class="model-meta-expanded">
         <span class="model-meta model-meta-full"
@@ -48,6 +55,9 @@
 
 <script setup lang="ts">
 import { type OllamaModelData } from "@/api/types.gen";
+import { useMomosStore } from "@/store/momos_store";
+
+const store = useMomosStore();
 
 const props = defineProps<{
   model: OllamaModelData;

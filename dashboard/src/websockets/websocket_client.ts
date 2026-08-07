@@ -31,23 +31,26 @@ class WebSocketClient {
     return hookExists;
   }
 
-  add_hook(   
-    type: OutboundTraffic["type"],
-    callback: tCallback,
-  ) {
+  add_hook(type: OutboundTraffic["type"], callback: tCallback) {
     if (this.hooks[type] === undefined) {
       this.hooks[type] = [];
     }
 
     if (this.hook_exists(type, callback)) {
       // Log a warning or just return early silently
-      console.warn(
-        `Duplicate hook detected for type "${type}". Ignoring.`,
-      );
+      console.warn(`Duplicate hook detected for type "${type}". Ignoring.`);
       return;
     }
 
     this.hooks[type].push(callback);
+
+    return { delete: () => this.remove_hook(type, callback) };
+  }
+
+  remove_hook(type: OutboundTraffic["type"], callback: tCallback) {
+    if (!this.hooks[type]) return;
+
+    this.hooks[type] = this.hooks[type]!.filter((cb) => cb !== callback);
   }
 
   private add_listener(socket: WebSocket) {

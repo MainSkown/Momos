@@ -13,6 +13,7 @@ class WsTypes(str, Enum):
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
     ModelPullingUpdate = "ModelPullingUpdate"
+    OllamaDownloadProgress = "OllamaDownloadProgress"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -69,8 +70,9 @@ class CreatedKaliUserMessage(OutboundMessage):
     type: Literal[WsTypes.CreatedKaliUserMessage]
     client_id: str
     
-class ModelPullingUpdate(OutboundMessage, OllamaDownloadProgress):
+class ModelPullingUpdate(OutboundMessage):
     type: Literal[WsTypes.ModelPullingUpdate]
+    progress: OllamaDownloadProgress
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

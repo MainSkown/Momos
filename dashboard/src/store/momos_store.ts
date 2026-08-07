@@ -6,10 +6,22 @@ import {
   getAllTargetsInProject,
   deleteTarget,
   updateTarget,
+  type OllamaDownloadProgress,
+  downloadOllamaModel,
+  type ModelPullingUpdate,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
+import { useWebSocketClient } from "@/websockets/websocket_client";
 
-type tCmd = { line: string; type: "cmd" | "error" | "user", user?: string };
+type tCmd = { line: string; type: "cmd" | "error" | "user"; user?: string };
+
+type tDownloadObject = {
+  model_name: string;
+  download_start: number;
+  last_progress: OllamaDownloadProgress | null;
+  last_update_time: number | null;
+  status: "downloading" | "done";
+};
 
 interface State {
   openedProject: string;
@@ -18,6 +30,7 @@ interface State {
   cmd_outputs: {
     [project_id: string]: tCmd[];
   };
+  download_queue: tDownloadObject[];
 }
 
 export const useMomosStore = defineStore("momos", {
@@ -26,6 +39,7 @@ export const useMomosStore = defineStore("momos", {
     targets: [],
     openedProject: "",
     cmd_outputs: {},
+    download_queue: [],
   }),
 
   getters: {
@@ -128,13 +142,62 @@ export const useMomosStore = defineStore("momos", {
     },
 
     /* --- Commands --- */
-    pushCmdLine(project_id: string, line: string, type: tCmd["type"], user?: string) {
+    pushCmdLine(
+      project_id: string,
+      line: string,
+      type: tCmd["type"],
+      user?: string,
+    ) {
       if (!this.cmd_outputs[project_id]) this.cmd_outputs[project_id] = [];
 
       this.cmd_outputs[project_id].push({
         line,
         type,
-        user
+        user,
+      });
+    },
+
+    /* --- Managing Ollama --- */
+    async downloadModel(model_name: string) {
+      const result = await downloadOllamaModel({
+        body: { model_name: model_name },
+      });
+
+      if (result.error || result.response?.status !== 202) {
+        throw Error("Could not download model: " + model_name);
+      }
+
+      const download_obj: tDownloadObject = {
+        model_name: model_name,
+        last_progress: null,
+        download_start: Date.now(),
+        last_update_time: null,
+        status: "downloading",
+      };
+
+      // Add model to queue
+      this.download_queue.push(download_obj);
+
+      const ws_client = useWebSocketClient();
+
+      // Listen to updates
+      const hook = ws_client.add_hook("ModelPullingUpdate", (message) => {
+        if (message.error) {
+          console.error(message.error.message);
+          return;
+        }
+
+        message = message as ModelPullingUpdate; // Convert message
+
+        if (message.progress.model !== model_name) return;
+
+        download_obj.last_update_time = Date.now();
+        download_obj.last_progress = message.progress;
+
+        // finished downloading
+        if (message.progress.status === "success") {
+          hook?.delete();
+        }
       });
     },
   },

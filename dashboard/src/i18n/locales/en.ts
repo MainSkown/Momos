@@ -3,7 +3,7 @@ export const en = {
         tools: 'TOOLS',
         overview: 'Overview',
         vulnerabilities: 'Vulnerabilities',
-        project_settings: 'Project Settings'
+        project_settings: 'Project Configuration'
     },
     context_window: {
         context_window: "CONTEXT WINDOW"

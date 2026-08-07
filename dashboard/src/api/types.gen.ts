@@ -57,6 +57,18 @@ export type KaliUser = {
  */
 export type ModelPullingUpdate = {
     /**
+     * Type
+     */
+    type: 'ModelPullingUpdate';
+    error?: WebSocketError | null;
+    progress: OllamaDownloadProgress;
+};
+
+/**
+ * OllamaDownloadProgress
+ */
+export type OllamaDownloadProgress = {
+    /**
      * Model
      */
     model: string;
@@ -72,11 +84,6 @@ export type ModelPullingUpdate = {
      * Total
      */
     total: number | null;
-    /**
-     * Type
-     */
-    type: 'ModelPullingUpdate';
-    error?: WebSocketError | null;
 };
 
 /**

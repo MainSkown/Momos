@@ -22,12 +22,12 @@ class OllamaManager:
             response = await self.client.pull(model_name, stream=True)
 
             async for progress in response:
-                completed = progress.get("completed", 0)
-                total = progress.get("total", 0)
+                completed = progress.completed
+                total = progress.total
 
                 yield OllamaDownloadProgress(
                     model=model_name,
-                    status=progress.get("status", ""),
+                    status=progress.status if progress.status != None else "",
                     completed=completed,
                     total=total,
                 )
