@@ -47,4 +47,8 @@ export const en = {
         no: "No",
         add: "Add",
     },
+
+    time:{
+        "hours_minutes": "{hours}h {minutes}m"
+    }
 }

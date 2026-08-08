@@ -21,7 +21,7 @@ type tDownloadObject = {
   download_start: number;
   last_progress: OllamaDownloadProgress | null;
   last_update_time: number | null;
-  status: "downloading" | "done";
+  status: string;
 };
 
 interface State {
@@ -192,7 +192,7 @@ export const useMomosStore = defineStore("momos", {
       const queue = [result.data.current, ...result.data.queue];
 
       queue.forEach((name) => {
-        this._downloadModelHook(name);
+        if (name !== null) this._downloadModelHook(name);
       });
     },
 
@@ -202,7 +202,7 @@ export const useMomosStore = defineStore("momos", {
         last_progress: null,
         download_start: Date.now(),
         last_update_time: null,
-        status: "downloading",
+        status: "queued",
       };
 
       // Add model to queue
@@ -228,13 +228,23 @@ export const useMomosStore = defineStore("momos", {
         if (queue_obj) {
           queue_obj.last_update_time = Date.now();
           const progress = message.progress;
-          if (progress.completed && progress.total)
+
+          if (queue_obj.status === "queued") {
+            queue_obj.download_start = Date.now();
+          }
+
+          if (progress.completed && progress.total) {
             queue_obj.last_progress = message.progress;
+
+            queue_obj.status = message.progress.status;
+          }
         }
 
         // finished downloading
         if (message.progress.status === "success") {
-          if (queue_obj) queue_obj.status = "done";
+          this.download_queue = this.download_queue.filter(
+            (q) => q.model_name !== model_name,
+          );
           hook?.delete();
         }
       });

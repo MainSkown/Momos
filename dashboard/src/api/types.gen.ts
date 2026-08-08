@@ -143,7 +143,7 @@ export type OllamaQueueDetails = {
     /**
      * Current
      */
-    current: string;
+    current: string | null;
     /**
      * Queue
      */

@@ -11,7 +11,7 @@ def parse_parameter_size(param_str: str | None) -> float:
     return float(match.group(1)) if match else 0.0
 
 class OllamaQueueDetails(BaseModel):
-    current: str
+    current: str | None
     queue: list[str]
 
 class OllamaDownloadProgress(BaseModel):
