@@ -212,7 +212,7 @@ function set_ws(project_id: string) {
 }
 
 async function check_client(project_id: string) {
-  const client_id = localStorage.getItem(`${LocalStoreKeys.CLIENT_ID}`);
+  const client_id = localStorage.getItem(`${LocalStoreKeys.CLIENT_ID}-${project_id}`);
 
   if (!client_id) return;
 
@@ -221,7 +221,7 @@ async function check_client(project_id: string) {
   if (result.response?.status === 404) {
     console.info("Could not find client: ", client_id);
 
-    localStorage.removeItem(`${LocalStoreKeys.CLIENT_ID}`);
+    localStorage.removeItem(`${LocalStoreKeys.CLIENT_ID}-${project_id}`);
 
     return;
   }

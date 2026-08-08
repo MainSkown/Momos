@@ -8,18 +8,18 @@ logger = logging.getLogger("momos.kali")
 
 MOMOS_USER: Final = "momos"
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    # "kali-linux-headless",
-    # "wordlists",
+    "kali-linux-headless",
+    "wordlists",
     "curl",
-    # "wget",
-    # "nmap",
-    # "netcat-openbsd",
-    # "nftables",
-    # "gobuster",
-    # "nikto",
-    # "exploitdb",
-    # "iputils-ping",
-    # "dnsutils"
+    "wget",
+    "nmap",
+    "netcat-openbsd",
+    "nftables",
+    "gobuster",
+    "nikto",
+    "exploitdb",
+    "iputils-ping",
+    "dnsutils"
 )
 
 
@@ -47,7 +47,7 @@ class KaliManger:
         print(f"Successfully created Kali container: {self.container_name}", flush=True)
 
     def _create_container(self):
-        # Check if container with same exist
+        # Check if container with same name exist
         try:
             old_container = self.client.containers.get(self.container_name)
             print(f"Container {self.container_name} already exists. Removing.", flush=True)

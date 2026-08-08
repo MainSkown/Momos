@@ -31,6 +31,12 @@ class WebSocketRegistry:
         if message_type not in self.hooks:
             self.hooks[message_type] = []
 
+        # Check if hook already exists
+        if(callback in self.hooks[message_type]):
+            print(f"Trying to add existing callback. Skipping...")
+            return
+        
+        
         self.hooks[message_type].append(callback)
 
     # Discontinued: changed websockets to be global
