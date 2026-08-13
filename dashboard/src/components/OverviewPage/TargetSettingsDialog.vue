@@ -40,7 +40,7 @@
           />
         </div>
 
-        <div class="input-wrapper">
+        <!-- <div class="input-wrapper">
           <label class="floating-label">{{ $t("targets.domain") }}</label>
           <input
             v-model="localTarget.domain"
@@ -52,18 +52,20 @@
             :placeholder="$t('targets.no_domain')"
             spellcheck="false"
           />
-        </div>
-
+        </div> -->
+        
         <div class="input-wrapper">
-          <label class="floating-label">{{ $t("targets.ports") }}</label>
+          <label class="floating-label">
+            {{ $t("targets.scan_duration") }}
+          </label>
+
           <input
+            v-model="localTarget.task_duration"
             type="text"
-            v-model="portsInput"
-            @input="updatePorts"
+            inputmode="numeric"
+            placeholder="HH:MM"
+            pattern="^\d+:[0-5]\d$"
             class="input-field border"
-            :class="{ 'is-invalid': arePortsInvalid() }"
-            :placeholder="$t('targets.no_ports')"
-            spellcheck="false"
           />
         </div>
       </div>
@@ -85,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { domainPattern, ipv4Pattern, ipv6Pattern, type tTarget } from "@/types";
 import Dialog from "../reusable/Dialog.vue";
 import { useMomosStore } from "@/store/momos_store.ts";
@@ -111,12 +113,12 @@ const updatePorts = (event: Event) => {
 };
 
 const isFormValid = (val?: tTarget): boolean => {
-  const { name, ipv4, ipv6, domain, ports } = val || localTarget.value;
+  const { name, ipv4, ipv6, /*domain,*/ ports } = val || localTarget.value;
 
   if (name.length === 0) return false;
   if (ipv4 && !ipv4Pattern.test(ipv4)) return false;
   if (ipv6 && !ipv6Pattern.test(ipv6)) return false;
-  if (domain && !domainPattern.test(domain)) return false;
+  // if (domain && !domainPattern.test(domain)) return false;
 
   // Walidacja portów: sprawdź czy każdy port jest w zakresie 1-65535
   if (ports && ports.length > 0) {
@@ -126,6 +128,23 @@ const isFormValid = (val?: tTarget): boolean => {
 
   return true;
 };
+
+const duration = computed({
+  get() {
+    const total = localTarget.value.task_duration ?? 0;
+
+    return {
+      hours: Math.floor(total / 3600),
+      minutes: Math.floor((total % 3600) / 60),
+      seconds: total % 60,
+    };
+  },
+
+  set(value) {
+    localTarget.value.task_duration =
+      value.hours * 3600 + value.minutes * 60 + value.seconds;
+  },
+});
 
 const isInvalid = (
   value: string | null | undefined,

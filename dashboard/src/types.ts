@@ -23,7 +23,7 @@ export enum LocalStoreKeys{
 /* Those are not types, but still useful */
 
 export function getTarget(target: tTarget): string {
-  return target.ipv4 || target.ipv6 || target.domain || "";
+  return target.ipv4 || target.ipv6 || /*target.domain ||*/ "";
 }
 
 export const ipv4Pattern =

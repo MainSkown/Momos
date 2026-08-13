@@ -215,10 +215,6 @@ export type ResponseTarget = {
      */
     ipv6: string | null;
     /**
-     * Domain
-     */
-    domain: string | null;
-    /**
      * Description
      */
     description: string | null;
@@ -226,6 +222,10 @@ export type ResponseTarget = {
      * Ports
      */
     ports: Array<number> | null;
+    /**
+     * Task Duration
+     */
+    task_duration: number | null;
     /**
      * Id
      */
@@ -275,10 +275,6 @@ export type TargetBase = {
      */
     ipv6: string | null;
     /**
-     * Domain
-     */
-    domain: string | null;
-    /**
      * Description
      */
     description: string | null;
@@ -286,6 +282,10 @@ export type TargetBase = {
      * Ports
      */
     ports: Array<number> | null;
+    /**
+     * Task Duration
+     */
+    task_duration: number | null;
 };
 
 /**

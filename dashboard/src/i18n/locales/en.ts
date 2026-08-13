@@ -27,6 +27,7 @@ export const en = {
         no_ports: "Enter target's ports",
         to_delete: "Are you sure you want to delete this target?",
         delete_info: "This action cannot be undone.",      
+        scan_duration: "Enter scan duration"
     },
 
     notify: {

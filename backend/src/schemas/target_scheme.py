@@ -14,9 +14,10 @@ class TargetBase(SQLModel):
     name: str
     ipv4: str | None
     ipv6: str | None
-    domain: str | None
+    # domain: str | None
     description: str | None
     ports: List[ValidPort] | None = Field(sa_column=Column(ARRAY(Integer)))
+    task_duration: int | None
 
 
 class Target(TargetBase, table=True):
