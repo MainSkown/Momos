@@ -1,5 +1,5 @@
 import asyncio
-from typing import Annotated, AsyncGenerator, Callable, TypedDict
+from typing import Annotated, Any, AsyncGenerator, Callable, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
@@ -8,23 +8,23 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
-from src.schemas import TargetBase
+from src.schemas import AgentTargetScope
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
-    target_scope: TargetBase
+    target_scope: AgentTargetScope
 
 
 class AgentInterruptAction(TypedDict):
     accept: Callable[[bool], None]
-    tool_calls: list[any]
+    tool_calls: list[Any]
 
 
 class Agent:
     def __init__(self, model_name: str, checkpointer: AsyncPostgresSaver):
         self.changeModel(model_name=model_name)
-        
+
         self.checkpointer = checkpointer
 
         self.app = self._build_graph()
@@ -41,7 +41,9 @@ class Agent:
         workflow.add_conditional_edges("agent", self._should_continue, ["tools", END])
         workflow.add_edge("tools", "agent")
 
-        return workflow.compile(checkpointer=self.checkpointer, interrupt_before=["tools"])
+        return workflow.compile(
+            checkpointer=self.checkpointer, interrupt_before=["tools"]
+        )
 
     def _call_model(self, state: AgentState):
         """Node: LLM processes the current state"""
@@ -61,23 +63,22 @@ class Agent:
     # --- Execution and Interaction ---
     async def start_agent(
         self,
-        target: TargetBase,
+        target: AgentTargetScope,
         start_prompt: str,
         thread_id: str,
         should_interrupt: bool,
     ) -> AsyncGenerator[BaseMessage | AgentInterruptAction, None]:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
-        existing_state = self.app.get_state(config)
+        existing_state = await self.app.aget_state(config)
 
-        input_data: AgentState | None = (
-            existing_state
-            if existing_state.values
-            else {
+        if existing_state.values:
+            input_data = None
+        else:
+            input_data = {
                 "messages": [("user", start_prompt)],
                 "target_scope": target,
             }
-        )
 
         running = True
 
@@ -90,47 +91,47 @@ class Agent:
                     yield latest_message
 
             input_data = None
-            state = self.app.get_state(config)
+            state = await self.app.aget_state(config)
 
             if state.next == ("tools",):
-                last_message: ToolMessage = state.values["messages"][-1]
-                tool_calls = getattr(last_message, "tool_calls", [])
+                last_message: AIMessage = state.values["messages"][-1]
+                tool_calls = last_message.tool_calls
 
                 if not should_interrupt:
                     input_data = None
                     continue
-            else:
-                loop = asyncio.get_running_loop()
-                resume_future = asyncio.Future[bool] = loop.create_future()
-
-                def accept(approved: bool):
-                    if not resume_future.done():
-                        resume_future.set_result(approved)
-
-                interrupt_action: AgentInterruptAction = {
-                    "accept": accept,
-                    "tool_calls": tool_calls,
-                }
-
-                yield interrupt_action
-
-                is_approved: bool = await resume_future
-
-                if is_approved:
-                    input_data = None
                 else:
-                    rejection_messages = [
-                        ToolMessage(
-                            content="User Denied Execution. Do not attempt this specific command again. Re-evaluate your approach.",
-                            tool_call_id=tc["id"],
-                            name=tc["name"],
-                        )
-                        for tc in tool_calls
-                    ]
-                    self.app.update_state(
-                        config, {"messages": rejection_messages}, as_node="tools"
-                    )
-                    input_data = None
+                    loop = asyncio.get_running_loop()
+                    resume_future: asyncio.Future[bool] = loop.create_future()
 
-        else:
-            running = False
+                    def accept(approved: bool):
+                        if not resume_future.done():
+                            resume_future.set_result(approved)
+
+                    interrupt_action: AgentInterruptAction = {
+                        "accept": accept,
+                        "tool_calls": tool_calls,
+                    }
+
+                    yield interrupt_action
+
+                    is_approved: bool = await resume_future
+
+                    if is_approved:
+                        input_data = None
+                    else:
+                        rejection_messages = [
+                            ToolMessage(
+                                content="User Denied Execution. Do not attempt this specific command again. Re-evaluate your approach.",
+                                tool_call_id=tc["id"],
+                                name=tc["name"],
+                            )
+                            for tc in tool_calls
+                        ]
+                        await self.app.aupdate_state(
+                            config, {"messages": rejection_messages}, as_node="tools"
+                        )
+                        input_data = None
+
+            else:
+                running = False

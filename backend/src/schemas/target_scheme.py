@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Optional, TYPE_CHECKING, Annotated
+from typing import List, Optional, TYPE_CHECKING, Annotated, TypedDict
 from sqlmodel import SQLModel, Field, Relationship, Column
 from sqlalchemy import ARRAY, Integer
 from pydantic import Field as PydanticField
@@ -8,6 +8,14 @@ if TYPE_CHECKING:
     from .project_scheme import Project
 
 ValidPort = Annotated[int, PydanticField(ge=1, le=65535)]
+
+
+class AgentTargetScope(TypedDict):
+    name: str
+    ipv4: str | None
+    ipv6: str | None
+    description: str | None
+    ports: list[int] | None
 
 
 class TargetBase(SQLModel):
