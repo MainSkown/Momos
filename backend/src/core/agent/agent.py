@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
 from src.schemas import AgentTargetScope
+from src.core import settings
 
 
 class AgentState(TypedDict):
@@ -26,6 +27,8 @@ class Agent:
         self.changeModel(model_name=model_name)
 
         self.checkpointer = checkpointer
+
+        self.ollama_url = settings.ollama_url
 
         self.app = self._build_graph()
 
@@ -57,7 +60,7 @@ class Agent:
         return END
 
     def changeModel(self, model_name: str):
-        self.llm = ChatOllama(model=model_name)
+        self.llm = ChatOllama(model=model_name, base_url=self.ollama_url)
         self.llm_with_tools = self.llm.bind_tools(agent_tools)
 
     # --- Execution and Interaction ---
@@ -84,7 +87,7 @@ class Agent:
 
         while running:
             async for event in self.app.astream(
-                input_data, config=config, stream_mode="values"
+                input_data, config=config, stream_mode="updates"
             ):
                 if "messages" in event:
                     latest_message: BaseMessage = event["messages"][-1]

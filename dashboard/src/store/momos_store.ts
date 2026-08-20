@@ -129,9 +129,9 @@ export const useMomosStore = defineStore("momos", {
           name: name,
           ipv4: null,
           ipv6: null,
-          domain: null,
           description: null,
           ports: null,
+          task_duration: null
         },
         path: { project_id: projectID },
       });
