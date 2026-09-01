@@ -49,7 +49,7 @@ class DatabaseManager:
     def add_project(self, project: Project):
         return self.add_to_database(project)
 
-    def get_project(self, project_id: str) -> Project:
+    def get_project(self, project_id: str) -> Project | None:
         parsed_uuid = uuid.UUID(project_id)
 
         with Session(self.engine) as session:
