@@ -40,6 +40,18 @@
           />
         </div>
 
+        <div class="input-wrapper">
+          <label class="floating-label">{{ $t("targets.ports") }}</label>
+          <input
+            :value="portsInput"
+            @input="updatePorts"
+            class="input-field border"
+            :class="{ 'is-invalid': arePortsInvalid() }"
+            :placeholder="$t('targets.no_ports')"
+            spellcheck="false"
+          />
+        </div>
+
         <!-- <div class="input-wrapper">
           <label class="floating-label">{{ $t("targets.domain") }}</label>
           <input
@@ -102,9 +114,11 @@ const portsInput = ref<string>(localTarget.value.ports?.join(", ") || "");
 const updatePorts = (event: Event) => {
   const e = event.target as HTMLInputElement;
 
-  e.value = e.value.replace(/[^0-9, ]/g, "");
+  const sanitizedValue = e.value.replace(/[^0-9, ]/g, "");
+  e.value = sanitizedValue;
+  portsInput.value = sanitizedValue;
 
-  const portsArray = e.value
+  const portsArray = sanitizedValue
     .split(",")
     .map((p) => parseInt(p.trim(), 10))
     .filter((p) => !isNaN(p) && p > 0 && p <= 65535);
@@ -120,7 +134,6 @@ const isFormValid = (val?: tTarget): boolean => {
   if (ipv6 && !ipv6Pattern.test(ipv6)) return false;
   // if (domain && !domainPattern.test(domain)) return false;
 
-  // Walidacja portów: sprawdź czy każdy port jest w zakresie 1-65535
   if (ports && ports.length > 0) {
     const arePortsValid = ports.every((p) => p >= 1 && p <= 65535);
     if (!arePortsValid) return false;
@@ -155,11 +168,8 @@ const isInvalid = (
 };
 
 const arePortsInvalid = (): boolean => {
-  // Jeśli pole jest puste, nie jest "nieprawidłowe"
   if (!portsInput.value.trim()) return false;
 
-  // Sprawdź czy jakikolwiek port po sparsowaniu jest poza zakresem
-  // (lub jeśli użytkownik wpisał coś, co nie jest liczbą)
   const segments = portsInput.value.split(",");
   return segments.some((p) => {
     const val = parseInt(p.trim(), 10);
@@ -180,9 +190,8 @@ watch(
     }
 
     debounceTimeout = setTimeout(() => {
-      if (isFormValid(newData)) {
-        store.updateTarget(newData);
-      }
+      if (!isFormValid(newData)) return;
+      store.updateTarget(newData);
     }, 1000);
   },
   { deep: true },
