@@ -18,112 +18,129 @@
     </div>
 
     <!-- Table -->
-     <div class="flex flex-center">
-    <div class="column table">
-      <!-- Head-row -->
-      <div class="row table-row">
-        <!-- Name -->
-        <div class="border cell text-center">
-          <span>{{ $t("targets.name") }}</span>
-        </div>
-        <!-- Target -->
-        <div class="border cell text-center">
-          <span>{{ $t("targets.target") }}</span>
-        </div>
-        <!-- Settings -->
-        <div class="border small-cell" />
-        <div class="border small-cell" />
-      </div>
-
-      <!-- Target Rows -->
-      <div
-        class="column scrollable-panel"
-        style="max-height: 200px; width: 100%"
-      >
-        <div
-          class="row table-row"
-          v-for="t in store.getProjectsTargets(store.openedProject)"
-        >
-          <div class="border cell text-center truncate-text">
-            <span>{{ t.name }}</span>
-          </div>
+    <div class="flex flex-center">
+      <div class="column table">
+        <!-- Head-row -->
+        <div class="row table-row">
+          <!-- Name -->
           <div class="border cell text-center">
-            <span>{{ getTarget(t) || $t("targets.no_target") }} </span>
+            <span>{{ $t("targets.name") }}</span>
           </div>
-          <div
-            class="button border small-cell"
-            @click="
-              showDialogFor = t.id;
-              console.log('Huh', showDialogFor);
-            "
-          >
-            <span class="material-icons-outlined" data-fallback="✕">
-              settings
-            </span>
+          <!-- Target -->
+          <div class="border cell text-center">
+            <span>{{ $t("targets.target") }}</span>
           </div>
-          <div class="button border small-cell" @click="toDelete = t.id">
-            <span class="material-icons-outlined" data-fallback="✕">
-              delete_outline
-            </span>
-
-            <Dialog
-              v-if="toDelete === t.id"
-              :visible="toDelete === t.id"
-              :title="$t('targets.to_delete')"
-              :no-close-button="true"
-            >
-              <span
-                class="text-center flex-center"
-                style="margin-bottom: 20px"
-                >{{ $t("targets.delete_info") }}</span
-              >
-              <div
-                class="row flex-center gap-high"
-                style="padding-inline: 10px"
-              >
-                <button
-                  class="button border"
-                  style="flex-grow: 1"
-                  @click="
-                    deleteTarget(toDelete);
-                    toDelete = '';
-                  "
-                >
-                  <span>{{ $t("universal.yes") }}</span>
-                </button>
-                <button
-                  class="button border"
-                  style="flex-grow: 1"
-                  @click="toDelete = ''"
-                >
-                  <span>{{ $t('universal.no') }}</span>
-                </button>
-              </div>
-            </Dialog>
-          </div>
-
-          <!-- Settings Dialog -->
-          <TargetSettingsDialog
-            v-if="showDialogFor == t.id"
-            :visible="showDialogFor == t.id"
-            @update:visible="
-              (v) => {
-                if (!v) showDialogFor = '';
-              }
-            "
-            :target="t"
-          />
+          <!-- Settings -->
+          <div class="border small-cell" />
+          <div class="border small-cell" />
+          <div class="border small-cell" />
         </div>
 
+        <!-- Target Rows -->
         <div
-          class="border text-center"
-          v-if="store.getProjectsTargets(store.openedProject).length === 0"
+          class="column scrollable-panel"
+          style="max-height: 200px; width: 100%"
         >
-          {{ $t("targets.no_targets") }}
+          <div
+            class="row table-row"
+            v-for="t in store.getProjectsTargets(store.openedProject)"
+          >
+            <div class="border cell text-center truncate-text">
+              <span>{{ t.name }}</span>
+            </div>
+            <div class="border cell text-center">
+              <span>{{ getTarget(t) || $t("targets.no_target") }} </span>
+            </div>
+
+            <!-- Start target scan -->
+            <div class="border small-cell">
+              <button class="button no-border">
+                <span
+                  v-if="t.task_duration !== null && t.task_duration > 0"
+                  class="material-icons-outlined"
+                >
+                  play_arrow
+                </span>
+                <Tooltip
+                  v-else
+                  message="To start work first define task duration in settings"
+                >
+                  <span class="material-icons-outlined"> timer_off </span>
+                </Tooltip>
+              </button>
+            </div>
+
+            <!-- Settings button -->
+            <div class="button border small-cell" @click="showDialogFor = t.id">
+              <span class="material-icons-outlined" data-fallback="✕">
+                settings
+              </span>
+            </div>
+
+            <!-- Delete button-->
+            <div class="button border small-cell" @click="toDelete = t.id">
+              <span class="material-icons-outlined" data-fallback="✕">
+                delete_outline
+              </span>
+
+              <Dialog
+                v-if="toDelete === t.id"
+                :visible="toDelete === t.id"
+                :title="$t('targets.to_delete')"
+                :no-close-button="true"
+              >
+                <span
+                  class="text-center flex-center"
+                  style="margin-bottom: 20px"
+                  >{{ $t("targets.delete_info") }}</span
+                >
+                <div
+                  class="row flex-center gap-high"
+                  style="padding-inline: 10px"
+                >
+                  <button
+                    class="button border"
+                    style="flex-grow: 1"
+                    @click="
+                      deleteTarget(toDelete);
+                      toDelete = '';
+                    "
+                  >
+                    <span>{{ $t("universal.yes") }}</span>
+                  </button>
+                  <button
+                    class="button border"
+                    style="flex-grow: 1"
+                    @click="toDelete = ''"
+                  >
+                    <span>{{ $t("universal.no") }}</span>
+                  </button>
+                </div>
+              </Dialog>
+            </div>
+
+            <!-- Settings Dialog -->
+            <TargetSettingsDialog
+              v-if="showDialogFor == t.id"
+              :visible="showDialogFor == t.id"
+              @update:visible="
+                (v) => {
+                  if (!v) showDialogFor = '';
+                }
+              "
+              :target="t"
+            />
+          </div>
+
+          <div
+            class="border text-center"
+            v-if="store.getProjectsTargets(store.openedProject).length === 0"
+          >
+            {{ $t("targets.no_targets") }}
+          </div>
         </div>
       </div>
     </div>
-  </div>
   </div>
 </template>
 
@@ -135,6 +152,7 @@ import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
 import TargetSettingsDialog from "./TargetSettingsDialog.vue";
 import Dialog from "../reusable/Dialog.vue";
+import Tooltip from "../reusable/Tooltip.vue";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
@@ -194,7 +212,7 @@ function deleteTarget(id: string) {
 }
 
 .table {
-  width: calc(100% - 10px)
+  width: calc(100% - 10px);
 }
 
 .table-row {
