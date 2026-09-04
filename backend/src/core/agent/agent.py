@@ -8,8 +8,9 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
-from src.schemas import AgentTargetScope
+from src.schemas import AgentTargetScope, Target
 from src.core import settings
+import time
 
 
 class AgentState(TypedDict):
@@ -66,7 +67,7 @@ class Agent:
     # --- Execution and Interaction ---
     async def start_agent(
         self,
-        target: AgentTargetScope,
+        target: Target,
         start_prompt: str,
         thread_id: str,
         should_interrupt: bool,
@@ -84,8 +85,11 @@ class Agent:
             }
 
         running = True
+        time_left = target.task_duration
 
-        while running:
+        while running and time_left > 0:
+            loop_start = time.monotonic()
+            
             async for event in self.app.astream(
                 input_data, config=config, stream_mode="updates"
             ):
@@ -101,6 +105,7 @@ class Agent:
                 tool_calls = last_message.tool_calls
 
                 if not should_interrupt:
+                    time_left -= (time.monotonic() - loop_start)
                     input_data = None
                     continue
                 else:
@@ -115,6 +120,9 @@ class Agent:
                         "accept": accept,
                         "tool_calls": tool_calls,
                     }
+                    
+                    # Pause timer awaiting for user's action
+                    time_left -= (time.monotonic() - loop_start)
 
                     yield interrupt_action
 
@@ -138,3 +146,5 @@ class Agent:
 
             else:
                 running = False
+
+            time_left -= (time.monotonic() - loop_start)
