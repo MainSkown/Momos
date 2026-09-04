@@ -65,19 +65,26 @@
             spellcheck="false"
           />
         </div> -->
-        
+
         <div class="input-wrapper">
           <label class="floating-label">
             {{ $t("targets.scan_duration") }}
           </label>
 
           <input
-            v-model="localTarget.task_duration"
+            v-model="durationInput"
+            @blur="handleDurationBlur"
             type="text"
             inputmode="numeric"
             placeholder="HH:MM"
             pattern="^\d+:[0-5]\d$"
             class="input-field border"
+            :class="{
+              'is-invalid':
+                localTarget.task_duration !== null &&
+                localTarget.task_duration !== undefined &&
+                localTarget.task_duration <= 0,
+            }"
           />
         </div>
       </div>
@@ -89,7 +96,6 @@
           <textarea
             v-model="localTarget.description"
             class="input-field border description"
-            placeholder="Enter description for LLM"
             spellcheck="true"
           />
         </div>
@@ -127,7 +133,14 @@ const updatePorts = (event: Event) => {
 };
 
 const isFormValid = (val?: tTarget): boolean => {
-  const { name, ipv4, ipv6, /*domain,*/ ports } = val || localTarget.value;
+  const {
+    name,
+    ipv4,
+    ipv6,
+    /*domain,*/
+    ports,
+    task_duration,
+  } = val || localTarget.value;
 
   if (name.length === 0) return false;
   if (ipv4 && !ipv4Pattern.test(ipv4)) return false;
@@ -139,25 +152,62 @@ const isFormValid = (val?: tTarget): boolean => {
     if (!arePortsValid) return false;
   }
 
+  if (
+    task_duration !== null &&
+    task_duration !== undefined &&
+    task_duration <= 0
+  ) {
+    return false;
+  }
+
   return true;
 };
 
-const duration = computed({
-  get() {
-    const total = localTarget.value.task_duration ?? 0;
+const formatTaskDuration = (total?: number | null): string => {
+  const t = total ?? 0;
+  const hours = Math.floor(t / 3600);
+  const minutes = Math.floor((t % 3600) / 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}`;
+};
 
-    return {
-      hours: Math.floor(total / 3600),
-      minutes: Math.floor((total % 3600) / 60),
-      seconds: total % 60,
-    };
-  },
+const durationInput = ref<string>(
+  formatTaskDuration(localTarget.value.task_duration),
+);
 
-  set(value) {
-    localTarget.value.task_duration =
-      value.hours * 3600 + value.minutes * 60 + value.seconds;
-  },
+watch(durationInput, (newValue) => {
+  const trimmed = newValue.trim();
+
+  // If the user clears the input
+  if (!trimmed) {
+    localTarget.value.task_duration = null;
+    return;
+  }
+
+  const parts = trimmed.split(":");
+
+  if (parts.length !== 2) return;
+
+  const hoursText = parts[0];
+  const minutesText = parts[1];
+
+  if (hoursText === "" || minutesText === "") return;
+
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+
+  if (
+    Number.isFinite(hours) &&
+    Number.isFinite(minutes) &&
+    minutes >= 0 &&
+    minutes <= 59
+  ) {
+    localTarget.value.task_duration = hours * 3600 + minutes * 60;
+  }
 });
+
+const handleDurationBlur = () => {
+  durationInput.value = formatTaskDuration(localTarget.value.task_duration);
+};
 
 const isInvalid = (
   value: string | null | undefined,
