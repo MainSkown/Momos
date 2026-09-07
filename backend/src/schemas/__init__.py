@@ -1,4 +1,4 @@
-from .project_scheme import Project, ProjectResponse, ProjectBase
+from .project_scheme import *
 from .target_scheme import Target, TargetBase, ResponseTarget, AgentTargetScope
 from .kali_scheme import *
 from .ollama_scheme import *

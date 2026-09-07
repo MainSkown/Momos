@@ -5,7 +5,11 @@ from . import settings
 from typing import List, TypeVar, Type
 
 # SQLModels Imports #
-from src.schemas.project_scheme import Project
+from src.schemas.project_scheme import (
+    Project,
+    ProjectSettings,
+    project_settings_factory,
+)
 from src.schemas.target_scheme import Target
 
 T = TypeVar("T", bound=SQLModel)
@@ -56,6 +60,33 @@ class DatabaseManager:
             project = session.get(Project, parsed_uuid)
             return project
 
+    # -- Managing Project Settings ---
+    def get_project_settings(
+        self, project_id: str, create_new: bool = True
+    ) -> ProjectSettings | None:
+        parsed_uuid = uuid.UUID(project_id)
+
+        with Session(self.engine) as session:
+            settings = session.get(ProjectSettings, parsed_uuid)
+
+            if settings is None and create_new:
+                settings = project_settings_factory(project_id=parsed_uuid)
+
+                session.add(settings)
+                session.commit()
+                session.refresh(settings)
+
+            return settings
+
+    def update_project_settings(
+        self, project_settings: ProjectSettings
+    ) -> ProjectSettings:
+        with Session(self.engine) as session:
+            merged_settings = session.merge(project_settings)
+            session.commit()
+            session.refresh(merged_settings)
+            return merged_settings
+
     # --- Managing Targets ---
     def get_all_targets_in_project(self, project_id: str) -> List[Target]:
         parsed_uuid = uuid.UUID(project_id)
@@ -66,27 +97,30 @@ class DatabaseManager:
 
     def add_target(self, target: Target):
         return self.add_to_database(target)
-    
+
     def delete_target(self, target_id: str):
         parsed_uuid = uuid.UUID(target_id)
-        
+
         with Session(self.engine) as session:
             statement = delete(Target).where(Target.id == parsed_uuid)
             session.exec(statement)
             session.commit()
-            
+
     def update_target(self, target: Target):
         with Session(self.engine) as session:
-            session.merge(target)
+            merged_target = session.merge(target)
             session.commit()
+            session.refresh(merged_target)
             
+            return merged_target
+            
+
     def get_target(self, target_id: str) -> Target | None:
         parsed_uuid = uuid.UUID(target_id)
-        
+
         with Session(self.engine) as session:
             target = session.get(Target, parsed_uuid)
             return target
-        
 
 
 db_manager = DatabaseManager(settings.database_url)
