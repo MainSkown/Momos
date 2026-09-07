@@ -5,6 +5,7 @@
       <ToolsBar class="tool-bar" v-model="currentTool" />
       <ContextView class="context-view"> 
         <Overview v-if="currentTool == TOOLS_KEYS.OVERVIEW" />
+        <ProjectSettingsPage v-if="currentTool == TOOLS_KEYS.PROJECT_CONFIGURATION" />
       </ContextView>
     </div>
   </div>
@@ -18,6 +19,7 @@ import ToolsBar from "./MainPage/ToolsBar.vue";
 import Overview from "./OverviewPage/Overview.vue";
 import { tools, TOOLS_KEYS } from "./tools.ts";
 import { onMounted, ref } from "vue";
+import ProjectSettingsPage from "./ProjectSettingsPage/ProjectSettingsPage.vue";
 
 const store = useMomosStore()
 

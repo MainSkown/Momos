@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -28,6 +28,23 @@ export const getAllProjects = <ThrowOnError extends boolean = false>(options?: O
  */
 export const postProject = <ThrowOnError extends boolean = false>(options: Options<PostProjectData, ThrowOnError>): RequestResult<PostProjectResponses, PostProjectErrors, ThrowOnError> => (options.client ?? client).post<PostProjectResponses, PostProjectErrors, ThrowOnError>({
     url: '/api/project',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Project Settings
+ */
+export const getProjectSettings = <ThrowOnError extends boolean = false>(options: Options<GetProjectSettingsData, ThrowOnError>): RequestResult<GetProjectSettingsResponses, GetProjectSettingsErrors, ThrowOnError> => (options.client ?? client).get<GetProjectSettingsResponses, GetProjectSettingsErrors, ThrowOnError>({ url: '/api/project/{project_id}/settings', ...options });
+
+/**
+ * Update Project Settings
+ */
+export const updateProjectSettings = <ThrowOnError extends boolean = false>(options: Options<UpdateProjectSettingsData, ThrowOnError>): RequestResult<UpdateProjectSettingsResponses, UpdateProjectSettingsErrors, ThrowOnError> => (options.client ?? client).put<UpdateProjectSettingsResponses, UpdateProjectSettingsErrors, ThrowOnError>({
+    url: '/api/project/{project_id}/settings',
     ...options,
     headers: {
         'Content-Type': 'application/json',

@@ -1,0 +1,286 @@
+.md-editor {
+  --md-color: var(--text-white);
+  --md-color-grey: var(--text-gray);
+  --md-color-border: var(--red-primary);
+  --md-color-border-hover: var(--red-primary);
+  --md-bk-color: var(--black);
+  --md-bk-color-outstand: var(--card-bg);
+  --md-bk-hover-color: var(--hover-bg);
+  --md-bk-color-hover: var(--hover-bg);
+  --md-bk-color-active: var(--active-bg);
+  --md-bk-color-tooltip: var(--card-bg);
+  --md-bk-color-code: var(--dark-bg);
+  --md-scrollbar-bg-color: var(--black);
+  --md-scrollbar-thumb-color: var(--red-darker);
+  --md-scrollbar-thumb-hover-color: var(--red-dark);
+  --md-border-color: var(--red-primary);
+  --md-border-hover-color: var(--red-primary);
+  --md-primary-color: var(--red-primary);
+  --md-primary-hover-color: var(--red-light);
+  --md-primary-active-color: var(--red-dark);
+  --md-text-color: var(--text-white);
+  --md-text-hover-color: var(--red-light);
+  --md-text-active-color: var(--text-white);
+  --md-border-radius: 0;
+  background: var(--black);
+  color: var(--text-white);
+  border: 2px solid var(--border-primary) !important;
+  box-shadow: none;
+}
+
+.md-editor.md-editor-dark {
+  --md-color: var(--text-white);
+  --md-hover-color: var(--red-light);
+  --md-bk-color: var(--black);
+  --md-bk-color-outstand: var(--card-bg);
+  --md-bk-hover-color: var(--hover-bg);
+  --md-border-color: var(--border-primary);
+  --md-border-hover-color: var(--red-hover);
+  --md-border-active-color: var(--red-primary);
+  --md-modal-mask: rgba(0, 0, 0, 0.8);
+  --md-modal-shadow: 0 0 24px rgba(220, 38, 38, 0.28);
+  --md-scrollbar-bg-color: var(--black);
+  --md-scrollbar-thumb-color: var(--red-darker);
+  --md-scrollbar-thumb-hover-color: var(--red-dark);
+  --md-scrollbar-thumb-active-color: var(--red-hover);
+}
+
+.md-editor,
+.md-editor * {
+  box-sizing: border-box;
+}
+
+.md-editor .md-editor-toolbar-wrapper,
+.md-editor .md-editor-toolbar,
+.md-editor .md-editor-footer {
+  background: var(--black);
+  border-color: var(--border-primary);
+}
+
+.md-editor .md-editor-toolbar-wrapper {
+  border-bottom: 2px solid var(--border-primary);
+}
+
+.md-editor .md-editor-toolbar {
+  padding: 0.35rem 0.5rem;
+  gap: 0.15rem;
+}
+
+.md-editor .md-editor-toolbar-item,
+.md-editor .md-editor-icon,
+.md-editor .md-catalog-link {
+  color: var(--text-gray);
+  transition: color var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.md-editor .md-editor-toolbar-item:hover,
+.md-editor .md-editor-icon:hover,
+.md-editor .md-catalog-link:hover {
+  color: var(--red-light);
+  background: var(--hover-bg);
+}
+
+.md-editor .md-editor-toolbar-item-active,
+.md-editor .md-editor-toolbar-item-active:hover,
+.md-editor .md-editor-catalog-link-active {
+  color: var(--text-white);
+  background: var(--active-bg);
+}
+
+.md-editor .md-editor-content {
+  background: var(--black);
+}
+
+.md-editor .md-editor-input-wrapper,
+.md-editor .md-editor-preview-wrapper {
+  background: var(--black);
+  color: var(--text-white);
+}
+
+.md-editor .md-editor-input,
+.md-editor .md-editor-preview {
+  background: var(--black);
+  color: var(--text-white);
+  font-family: var(--font-sans);
+}
+
+.md-editor .md-editor-input {
+  caret-color: var(--red-primary);
+}
+
+.md-editor .md-editor-input::selection,
+.md-editor .md-editor-preview::selection {
+  background: rgba(220, 38, 38, 0.3);
+}
+
+.md-editor .md-editor-input::-webkit-scrollbar,
+.md-editor .md-editor-preview::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.md-editor .md-editor-input::-webkit-scrollbar-track,
+.md-editor .md-editor-preview::-webkit-scrollbar-track {
+  background: var(--black);
+}
+
+.md-editor .md-editor-input::-webkit-scrollbar-thumb,
+.md-editor .md-editor-preview::-webkit-scrollbar-thumb {
+  background: var(--red-darker);
+}
+
+.md-editor .md-editor-input::-webkit-scrollbar-thumb:hover,
+.md-editor .md-editor-preview::-webkit-scrollbar-thumb:hover {
+  background: var(--red-dark);
+}
+
+.md-editor .md-editor-custom-scrollbar__track {
+  background: var(--black);
+}
+
+.md-editor .md-editor-custom-scrollbar__thumb {
+  background: var(--red-darker);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-custom-scrollbar__thumb:hover {
+  background: var(--red-dark);
+}
+
+.md-editor .md-editor-catalog-editor {
+  border-inline-start: 1px solid var(--border-primary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--red-darker) var(--black);
+}
+
+.md-editor .md-editor-catalog-editor::-webkit-scrollbar {
+  width: 8px;
+}
+
+.md-editor .md-editor-catalog-editor::-webkit-scrollbar-track {
+  background: var(--black);
+}
+
+.md-editor .md-editor-catalog-editor::-webkit-scrollbar-thumb {
+  background: var(--red-darker);
+}
+
+.md-editor .md-editor-catalog-editor::-webkit-scrollbar-thumb:hover {
+  background: var(--red-dark);
+}
+
+.md-editor .md-editor-preview h1,
+.md-editor .md-editor-preview h2,
+.md-editor .md-editor-preview h3,
+.md-editor .md-editor-preview h4,
+.md-editor .md-editor-preview h5,
+.md-editor .md-editor-preview h6 {
+  color: var(--text-white);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.35rem;
+}
+
+.md-editor .md-editor-preview a {
+  color: var(--red-light);
+}
+
+.md-editor .md-editor-preview a:hover {
+  color: var(--red-lighter);
+}
+
+.md-editor .md-editor-preview blockquote {
+  border-left: 3px solid var(--red-primary);
+  background: var(--dark-bg);
+  color: var(--text-gray-light);
+}
+
+.md-editor .md-editor-preview code,
+.md-editor .md-editor-preview pre {
+  background: var(--dark-bg);
+  color: var(--red-lighter);
+  border: 1px solid var(--border-primary);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-preview table {
+  border-color: var(--border-primary);
+}
+
+.md-editor .md-editor-preview th,
+.md-editor .md-editor-preview td {
+  border-color: var(--border-primary);
+}
+
+.md-editor .md-editor-preview hr {
+  border-color: var(--border-primary);
+}
+
+.md-editor .md-editor-catalog {
+  background: var(--card-bg);
+  border-left: 2px solid var(--red-primary);
+}
+
+.md-editor .md-editor-catalog-link {
+  color: var(--text-gray);
+}
+
+.md-editor .md-editor-catalog-link:hover,
+.md-editor .md-editor-catalog-link-active {
+  color: var(--red-light);
+}
+
+.md-editor .md-editor-tooltip {
+  background: var(--card-bg);
+  color: var(--text-white);
+  border: 1px solid var(--red-primary);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-dialog {
+  background: var(--card-bg);
+  color: var(--text-white);
+  border: 2px solid var(--red-primary);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-dialog input,
+.md-editor .md-editor-dialog textarea,
+.md-editor .md-editor-dialog select {
+  background: var(--black);
+  color: var(--text-white);
+  border: 2px solid var(--red-primary);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-dialog input:focus,
+.md-editor .md-editor-dialog textarea:focus,
+.md-editor .md-editor-dialog select:focus {
+  border-color: var(--red-primary);
+  box-shadow: var(--shadow-red-subtle);
+  outline: none;
+}
+
+.md-editor .md-editor-dialog .md-btn,
+.md-editor .md-editor-dialog button {
+  background: var(--black);
+  color: var(--text-gray);
+  border: 2px solid var(--red-primary);
+  border-radius: 0;
+}
+
+.md-editor .md-editor-dialog .md-btn:hover,
+.md-editor .md-editor-dialog button:hover {
+  color: var(--red-light);
+  border-color: var(--red-primary);
+  background: var(--hover-bg);
+}
+
+.md-editor.md-editor-dark,
+.md-editor.md-editor-dark .md-editor-toolbar-wrapper,
+.md-editor.md-editor-dark .md-editor-content,
+.md-editor.md-editor-dark .md-editor-preview-wrapper,
+.md-editor.md-editor-dark .md-editor-input-wrapper,
+.md-editor.md-editor-dark .md-editor-footer,
+.md-editor.md-editor-dark .md-editor-catalog-editor {
+  background: var(--black);
+}

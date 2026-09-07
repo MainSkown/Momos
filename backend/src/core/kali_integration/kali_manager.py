@@ -63,6 +63,7 @@ class KaliManger:
             print(
                 f"Container {self.container_name} already exists. Removing.", flush=True
             )
+            # Removing because it can have not completed the initializing
             old_container.remove(force=True)
         except docker.errors.NotFound:
             pass

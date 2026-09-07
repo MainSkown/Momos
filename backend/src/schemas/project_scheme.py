@@ -30,6 +30,9 @@ class ProjectSettingsBase(SQLModel):
     starting_prompt: str
     base_model_name: str
     parsing_model_name: str
+    
+class ProjectSettingsBody(ProjectSettingsBase):
+    project_id: uuid.UUID
 
 
 class ProjectSettings(ProjectSettingsBase, table=True):

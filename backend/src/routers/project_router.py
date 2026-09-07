@@ -2,7 +2,12 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, status
 from src.services import ProjectService
-from src.schemas import ProjectResponse, ProjectBase, ProjectSettings
+from src.schemas import (
+    ProjectResponse,
+    ProjectBase,
+    ProjectSettings,
+    ProjectSettingsBody,
+)
 
 router = APIRouter()
 
@@ -50,8 +55,8 @@ def get_project_settings(project_id: str):
 
 
 @router.put("/project/{project_id}/settings", operation_id="UpdateProjectSettings")
-def update_project_settings(project_id: str, data: ProjectSettings):
-    if data.project_id != project_id:
+def update_project_settings(project_id: str, data: ProjectSettingsBody):
+    if str(data.project_id) != project_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"URL project_id ({project_id}) does not match body project_id ({data.project_id})",

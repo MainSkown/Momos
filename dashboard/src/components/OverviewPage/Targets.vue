@@ -54,7 +54,10 @@
 
             <!-- Start target scan -->
             <div class="border small-cell">
-              <button class="button no-border">
+              <button
+                class="button no-border"
+                :disabled="t.task_duration === null && t.task_duration === 0"
+              >
                 <span
                   v-if="t.task_duration !== null && t.task_duration > 0"
                   class="material-icons-outlined"

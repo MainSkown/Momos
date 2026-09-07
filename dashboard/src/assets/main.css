@@ -326,6 +326,49 @@ a:hover {
   color: var(--red-hover);
 }
 
+.checkbox-input {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 1rem;
+  height: 1rem;
+  min-width: 1rem;
+  min-height: 1rem;
+  margin: 0;
+  border: 2px solid var(--border-primary);
+  border-radius: 0;
+  background-color: var(--black);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.checkbox-input:hover {
+  border-color: var(--red-hover);
+  box-shadow: var(--shadow-red-weak);
+}
+
+.checkbox-input:checked {
+  background-color: var(--red-primary);
+  border-color: var(--red-primary);
+}
+
+.checkbox-input:checked::after {
+  content: '';
+  display: block;
+  width: 0.35rem;
+  height: 0.2rem;
+  margin: 0.15rem auto 0;
+  border-left: 2px solid var(--text-white);
+  border-bottom: 2px solid var(--text-white);
+  transform: rotate(-45deg);
+}
+
+.checkbox-input:focus-visible {
+  outline: 2px solid var(--red-light);
+  outline-offset: 2px;
+}
+
 .terminal-input-group {
   position: relative;
   display: flex;

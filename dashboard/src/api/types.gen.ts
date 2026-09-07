@@ -180,6 +180,58 @@ export type ProjectResponse = {
 };
 
 /**
+ * ProjectSettings
+ */
+export type ProjectSettings = {
+    /**
+     * Should Interrupt
+     */
+    should_interrupt: boolean;
+    /**
+     * Starting Prompt
+     */
+    starting_prompt: string;
+    /**
+     * Base Model Name
+     */
+    base_model_name: string;
+    /**
+     * Parsing Model Name
+     */
+    parsing_model_name: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
+ * ProjectSettingsBody
+ */
+export type ProjectSettingsBody = {
+    /**
+     * Should Interrupt
+     */
+    should_interrupt: boolean;
+    /**
+     * Starting Prompt
+     */
+    starting_prompt: string;
+    /**
+     * Base Model Name
+     */
+    base_model_name: string;
+    /**
+     * Parsing Model Name
+     */
+    parsing_model_name: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
  * ReceiveCommandOutputMessage
  */
 export type ReceiveCommandOutputMessage = {
@@ -380,6 +432,64 @@ export type PostProjectResponses = {
 };
 
 export type PostProjectResponse = PostProjectResponses[keyof PostProjectResponses];
+
+export type GetProjectSettingsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/settings';
+};
+
+export type GetProjectSettingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectSettingsError = GetProjectSettingsErrors[keyof GetProjectSettingsErrors];
+
+export type GetProjectSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProjectSettings;
+};
+
+export type GetProjectSettingsResponse = GetProjectSettingsResponses[keyof GetProjectSettingsResponses];
+
+export type UpdateProjectSettingsData = {
+    body: ProjectSettingsBody;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/settings';
+};
+
+export type UpdateProjectSettingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateProjectSettingsError = UpdateProjectSettingsErrors[keyof UpdateProjectSettingsErrors];
+
+export type UpdateProjectSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type GetAllTargetsInProjectData = {
     body?: never;

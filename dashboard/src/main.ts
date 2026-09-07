@@ -10,6 +10,8 @@ import {i18n} from '@/i18n/i18n.ts'
 
 import '@fontsource/material-icons/index.css'
 import '@fontsource/material-icons-outlined/index.css'
+import "md-editor-v3/lib/style.css";
+import "@/assets/md-editor.css";
 
 const pinia = createPinia()
 const app = createApp(App)
