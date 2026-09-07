@@ -71,8 +71,12 @@ class Agent:
         start_prompt: str,
         thread_id: str,
         should_interrupt: bool,
+        stop_event: asyncio.Event | None = None
     ) -> AsyncGenerator[BaseMessage | AgentInterruptAction, None]:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        
+        if stop_event is None:
+            stop_event = asyncio.Event()
 
         existing_state = await self.app.aget_state(config)
 
@@ -84,19 +88,57 @@ class Agent:
                 "target_scope": target,
             }
 
-        running = True
         time_left = target.task_duration
 
-        while running and time_left > 0:
+        while not stop_event.is_set() and time_left > 0:
             loop_start = time.monotonic()
             
-            async for event in self.app.astream(
-                input_data, config=config, stream_mode="updates"
-            ):
-                if "messages" in event:
-                    latest_message: BaseMessage = event["messages"][-1]
-                    yield latest_message
+            event_queue = asyncio.Queue()
+            
+            async def _stream_worker():
+                try:
+                    async for event in self.app.astream(
+                        input_data, config=config, stream_mode="updates"
+                    ):
+                        await event_queue.put(event)
+                finally:
+                    await event_queue.put(None)
+                    
+            stream_task = asyncio.get_running_loop().create_task(_stream_worker())
 
+            try:
+                while not stop_event.is_set():
+                    # Race waiting for next event vs stop_event being set
+                    get_event_task = asyncio.create_task(event_queue.get())
+                    stop_wait_task = asyncio.create_task(stop_event.wait())
+                    
+                    done, pending = await asyncio.wait(
+                        [get_event_task, stop_wait_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )    
+                    
+                    for task in pending:
+                        task.cancel()
+                        
+                    if stop_wait_task in done:
+                        # User requested pause/stop mid-generation - abort 
+                        stream_task.cancel()
+                        return
+                    
+                    event = get_event_task.result()
+                    if event is None:
+                        break
+                    
+                    if "messages" in event:
+                        last_message: BaseMessage = event["messages"][-1]
+                        yield last_message
+            finally:
+                if not stream_task.done():
+                    stream_task.cancel()
+            
+            if stop_event.is_set():
+                break                
+            
             input_data = None
             state = await self.app.aget_state(config)
 
@@ -145,6 +187,6 @@ class Agent:
                         input_data = None
 
             else:
-                running = False
+                break
 
             time_left -= (time.monotonic() - loop_start)
