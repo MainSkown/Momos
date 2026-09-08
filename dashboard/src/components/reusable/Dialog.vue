@@ -54,6 +54,7 @@ withDefaults(defineProps<{ title?: string; showTitle?: boolean, noCloseButton?: 
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 40;
 }
 .dialog-content {
   backdrop-filter: blur(4px);
@@ -62,6 +63,7 @@ withDefaults(defineProps<{ title?: string; showTitle?: boolean, noCloseButton?: 
   padding-bottom: 20px;
   border-radius: 8px;
   width: auto;
+  z-index: 45;
 }
 .fade-enter-active,
 .fade-leave-active {
