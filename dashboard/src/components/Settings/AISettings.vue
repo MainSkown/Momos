@@ -4,7 +4,7 @@
     <div>
       <input class="input-field border" />
     </div>
-    <div class="scrollable-panel" style="max-height: 75vh;">
+    <div class="scrollable-panel" style="max-height: 75vh">
       <!-- Installed -->
       <div v-if="installed_models.length > 0">
         <div class="family-name">Installed</div>
@@ -15,12 +15,59 @@
             :key="model.name"
             :model="model"
             :installed="true"
-            @deleted="refreshInstalledModels"            
+            @deleted="refreshInstalledModels"
           />
         </div>
       </div>
       <!-- Suggestions -->
       <div>
+        <!-- Recommended -->
+        <div class="separator" />
+        <div class="row full-width">
+          <!-- Agent -->
+          <div class="family-section full-width">
+            <div class="family-name border-right">Recommended agent models</div>
+            <div class="separator" />
+            <div
+              class="suggestions-list border-right"
+              style="padding-right: 10px"
+            >
+              <AIBox
+                v-for="model in getRecommendedAgentModels().sort(
+                  (a, b) => a.parameters_size_b - b.parameters_size_b,
+                )"
+                :key="model.name"
+                :model="model"
+                :installed="
+                  installed_models.find((m) => m.name === model.name) !==
+                  undefined
+                "
+                @download-finished="refreshInstalledModels"
+              />
+            </div>
+          </div>
+          <!-- Parsing -->
+          <div class="family-section full-width" style="padding-left: 10px;">
+            <div class="family-name">
+              Recommended parsing models
+            </div>
+            <div class="separator" />
+            <div class="suggestions-list">
+              <AIBox
+                v-for="model in gerRecommendedParsingModels().sort(
+                  (a, b) => a.parameters_size_b - b.parameters_size_b,
+                )"
+                :key="model.name"
+                :model="model"
+                :installed="
+                  installed_models.find((m) => m.name === model.name) !==
+                  undefined
+                "
+                @download-finished="refreshInstalledModels"
+              />
+            </div>
+          </div>
+        </div>
         <div
           v-for="(models, family) in getModelsByFamily()"
           :key="family"
@@ -36,7 +83,10 @@
               )"
               :key="model.name"
               :model="model"
-              :installed="installed_models.find((m) => m.name === model.name) !== undefined"
+              :installed="
+                installed_models.find((m) => m.name === model.name) !==
+                undefined
+              "
               @download-finished="refreshInstalledModels"
             />
           </div>
@@ -58,8 +108,16 @@ import AIBox from "./AIBox.vue";
 const downloadable_models = ref<OllamaModelData[]>([]);
 const installed_models = ref<OllamaModelData[]>([]);
 
-async function refreshInstalledModels(){
-  installed_models.value = await getInstalledModels()
+async function refreshInstalledModels() {
+  installed_models.value = await getInstalledModels();
+}
+
+function getRecommendedAgentModels(): OllamaModelData[] {
+  return downloadable_models.value.filter((m) => m.recommended === "agent");
+}
+
+function gerRecommendedParsingModels(): OllamaModelData[] {
+  return downloadable_models.value.filter((m) => m.recommended === "parsing");
 }
 
 function getModelsByFamily(): Record<string, OllamaModelData[]> {
@@ -109,7 +167,7 @@ onMounted(async () => {
   downloadable_models.value = result.data.models;
 
   // Get installed models
-  refreshInstalledModels()
+  refreshInstalledModels();
 });
 </script>
 

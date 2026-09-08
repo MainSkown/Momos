@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal, Optional
 from pydantic import BaseModel
 import json
 import re
@@ -35,6 +36,7 @@ class OllamaModelData(BaseModel):
     thinking: bool
     context_window: int  # Raw token count
     size_gb: float  # Disk footprint in GB
+    recommended: Optional[Literal["parsing", "agent"]] = None
 
 
 class OllamaModelsList(BaseModel):

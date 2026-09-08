@@ -114,6 +114,10 @@ export type OllamaModelData = {
      * Size Gb
      */
     size_gb: number;
+    /**
+     * Recommended
+     */
+    recommended?: 'parsing' | 'agent' | null;
 };
 
 /**

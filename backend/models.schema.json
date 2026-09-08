@@ -25,6 +25,22 @@
         "size_gb": {
           "title": "Size Gb",
           "type": "number"
+        },
+        "recommended": {
+          "anyOf": [
+            {
+              "enum": [
+                "parsing",
+                "agent"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommended"
         }
       },
       "required": [

@@ -1,181 +1,282 @@
 {
-  "$schema": "./models.schema.json",
   "models": [
     {
-      "family": "deepseek",
-      "name": "deepseek-r1:1.5b",
-      "parameters_size_b": 1.5,
+      "family": "qwen3",
+      "name": "qwen3:0.6b",
+      "parameters_size_b": 0.6,
       "thinking": true,
-      "context_window": 128000,
-      "size_gb": 1.1
+      "context_window": 40000,
+      "size_gb": 0.523      
     },
     {
-      "family": "deepseek",
-      "name": "deepseek-r1:8b",
-      "parameters_size_b": 8.0,
+      "family": "qwen3",
+      "name": "qwen3:1.7b",
+      "parameters_size_b": 1.7,
       "thinking": true,
-      "context_window": 128000,
-      "size_gb": 4.9
+      "context_window": 40000,
+      "size_gb": 1.4,
+      "recommended": "parsing"
     },
     {
-      "family": "deepseek",
-      "name": "deepseek-r1:14b",
-      "parameters_size_b": 14.0,
+      "family": "qwen3",
+      "name": "qwen3:4b",
+      "parameters_size_b": 4.02,
       "thinking": true,
-      "context_window": 128000,
-      "size_gb": 9.0
+      "context_window": 256000,
+      "size_gb": 2.5,
+      "recommended": "agent"
     },
     {
-      "family": "deepseek",
-      "name": "deepseek-r1:7b",
-      "parameters_size_b": 7.0,
+      "family": "qwen3",
+      "name": "qwen3:8b",
+      "parameters_size_b": 8.19,
       "thinking": true,
-      "context_window": 128000,
-      "size_gb": 4.7
+      "context_window": 40000,
+      "size_gb": 5.2      
     },
     {
-      "family": "qwen",
+      "family": "qwen3",
+      "name": "qwen3:14b",
+      "parameters_size_b": 14.8,
+      "thinking": true,
+      "context_window": 40000,
+      "size_gb": 9.3      
+    },
+    {
+      "family": "qwen3",
+      "name": "qwen3:30b",
+      "parameters_size_b": 30.5,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 19.0      
+    },
+    {
+      "family": "qwen3",
+      "name": "qwen3:32b",
+      "parameters_size_b": 32.8,
+      "thinking": true,
+      "context_window": 40000,
+      "size_gb": 20.0      
+    },
+    {
+      "family": "qwen3.5",
+      "name": "qwen3.5:0.8b",
+      "parameters_size_b": 0.8,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 1.0      
+    },
+    {
+      "family": "qwen3.5",
+      "name": "qwen3.5:2b",
+      "parameters_size_b": 2.0,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 2.7,
+      "recommended": "parsing"
+    },
+    {
+      "family": "qwen3.5",
+      "name": "qwen3.5:4b",
+      "parameters_size_b": 4.0,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 3.4,
+      "recommended": "agent"
+    },
+    {
+      "family": "qwen3.5",
+      "name": "qwen3.5:9b",
+      "parameters_size_b": 9.0,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 6.6      
+    },
+    {
+      "family": "qwen3.5",
+      "name": "qwen3.5:27b",
+      "parameters_size_b": 27.8,
+      "thinking": true,
+      "context_window": 256000,
+      "size_gb": 17.0      
+    },
+    {
+      "family": "qwen2.5-coder",
+      "name": "qwen2.5-coder:0.5b",
+      "parameters_size_b": 0.5,
+      "thinking": false,
+      "context_window": 32000,
+      "size_gb": 0.398      
+    },
+    {
+      "family": "qwen2.5-coder",
       "name": "qwen2.5-coder:1.5b",
       "parameters_size_b": 1.5,
       "thinking": false,
-      "context_window": 32768,
-      "size_gb": 1.0
+      "context_window": 32000,
+      "size_gb": 0.986      
     },
     {
-      "family": "qwen",
+      "family": "qwen2.5-coder",
+      "name": "qwen2.5-coder:3b",
+      "parameters_size_b": 3.09,
+      "thinking": false,
+      "context_window": 32000,
+      "size_gb": 1.9      
+    },
+    {
+      "family": "qwen2.5-coder",
       "name": "qwen2.5-coder:7b",
-      "parameters_size_b": 7.0,
+      "parameters_size_b": 7.62,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 4.7
+      "context_window": 32000,
+      "size_gb": 4.7,
+      "recommended": "agent"
     },
     {
-      "family": "qwen",
+      "family": "qwen2.5-coder",
       "name": "qwen2.5-coder:14b",
-      "parameters_size_b": 14.0,
+      "parameters_size_b": 14.7,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 9.0
+      "context_window": 32000,
+      "size_gb": 9.0      
     },
     {
-      "family": "qwen",
-      "name": "qwen3:0.6b",
-      "parameters_size_b": 0.6,
+      "family": "qwen2.5-coder",
+      "name": "qwen2.5-coder:32b",
+      "parameters_size_b": 32.5,
       "thinking": false,
-      "context_window": 32768,
-      "size_gb": 0.5
+      "context_window": 32000,
+      "size_gb": 20.0      
     },
     {
-      "family": "qwen",
+      "family": "qwen2.5",
       "name": "qwen2.5:0.5b",
       "parameters_size_b": 0.5,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 0.4
+      "context_window": 32000,
+      "size_gb": 0.398      
     },
     {
-      "family": "qwen",
+      "family": "qwen2.5",
       "name": "qwen2.5:1.5b",
       "parameters_size_b": 1.5,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 1.0
+      "context_window": 32000,
+      "size_gb": 0.986      
     },
     {
-      "family": "qwen",
+      "family": "qwen2.5",
       "name": "qwen2.5:3b",
-      "parameters_size_b": 3.0,
+      "parameters_size_b": 3.09,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 2.0
+      "context_window": 32000,
+      "size_gb": 1.9      
     },
     {
-      "family": "llama",
-      "name": "llama3.2:3b",
-      "parameters_size_b": 3.0,
+      "family": "qwen2.5",
+      "name": "qwen2.5:7b",
+      "parameters_size_b": 7.62,
       "thinking": false,
-      "context_window": 128000,
-      "size_gb": 2.0
+      "context_window": 32000,
+      "size_gb": 4.7      
     },
     {
-      "family": "llama",
-      "name": "llama3.1:8b",
+      "family": "qwen2.5",
+      "name": "qwen2.5:14b",
+      "parameters_size_b": 14.7,
+      "thinking": false,
+      "context_window": 32000,
+      "size_gb": 9.0      
+    },
+    {
+      "family": "qwen2.5",
+      "name": "qwen2.5:32b",
+      "parameters_size_b": 32.5,
+      "thinking": false,
+      "context_window": 32000,
+      "size_gb": 20.0      
+    },
+    {
+      "family": "qwen2.5",
+      "name": "qwen2.5:72b",
+      "parameters_size_b": 72.7,
+      "thinking": false,
+      "context_window": 32000,
+      "size_gb": 47.0      
+    },
+    {
+      "family": "granite3.3",
+      "name": "granite3.3:2b",
+      "parameters_size_b": 2.0,
+      "thinking": true,
+      "context_window": 128000,
+      "size_gb": 1.5,
+      "recommended": "parsing"
+    },
+    {
+      "family": "granite3.3",
+      "name": "granite3.3:8b",
       "parameters_size_b": 8.0,
-      "thinking": false,
+      "thinking": true,
       "context_window": 128000,
-      "size_gb": 4.9
+      "size_gb": 4.9      
     },
     {
-      "family": "llama",
+      "family": "llama3.2",
       "name": "llama3.2:1b",
       "parameters_size_b": 1.0,
       "thinking": false,
       "context_window": 128000,
-      "size_gb": 0.8
+      "size_gb": 1.3      
     },
     {
-      "family": "mistral",
-      "name": "dolphin-mistral:7b",
-      "parameters_size_b": 7.0,
-      "thinking": false,
-      "context_window": 32768,
-      "size_gb": 4.1
-    },
-    {
-      "family": "mistral",
-      "name": "mistral-nemo:12b",
-      "parameters_size_b": 12.0,
+      "family": "llama3.2",
+      "name": "llama3.2:3b",
+      "parameters_size_b": 3.21,
       "thinking": false,
       "context_window": 128000,
-      "size_gb": 7.1
+      "size_gb": 2.0      
     },
     {
-      "family": "mistral",
-      "name": "mistrallite:7b",
-      "parameters_size_b": 7.0,
+      "family": "llama3.1",
+      "name": "llama3.1:8b",
+      "parameters_size_b": 8.03,
       "thinking": false,
-      "context_window": 32768,
-      "size_gb": 4.1
+      "context_window": 128000,
+      "size_gb": 4.9      
+    },
+    {
+      "family": "llama3.1",
+      "name": "llama3.1:70b",
+      "parameters_size_b": 70.6,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 43.0      
+    },
+    {
+      "family": "llama3.1",
+      "name": "llama3.1:405b",
+      "parameters_size_b": 405.0,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 243.0      
+    },
+    {
+      "family": "phi4-mini",
+      "name": "phi4-mini:3.8b",
+      "parameters_size_b": 3.8,
+      "thinking": false,
+      "context_window": 128000,
+      "size_gb": 2.5      
     },
     {
       "family": "mistral",
       "name": "mistral:7b",
-      "parameters_size_b": 7.0,
+      "parameters_size_b": 7.25,
       "thinking": false,
-      "context_window": 32768,
-      "size_gb": 4.1
-    },
-    {
-      "family": "mistral",
-      "name": "zephyr:7b",
-      "parameters_size_b": 7.0,
-      "thinking": false,
-      "context_window": 32768,
-      "size_gb": 4.1
-    },
-    {
-      "family": "mistral",
-      "name": "openhermes:7b",
-      "parameters_size_b": 7.0,
-      "thinking": false,
-      "context_window": 32768,
-      "size_gb": 4.1
-    },
-    {
-      "family": "phi",
-      "name": "phi3:3.8b",
-      "parameters_size_b": 3.8,
-      "thinking": false,
-      "context_window": 16384,
-      "size_gb": 2.3
-    },
-    {
-      "family": "phi",
-      "name": "phi3.5:3.8b",
-      "parameters_size_b": 3.8,
-      "thinking": false,
-      "context_window": 128000,
-      "size_gb": 2.2
+      "context_window": 32000,
+      "size_gb": 4.4
     }
   ]
 }
