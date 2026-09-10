@@ -4,8 +4,11 @@ export const en = {
         overview: 'Overview',
         vulnerabilities: 'Vulnerabilities',
         project_settings: 'Project Configuration',
+        config_summary: 'Project Config Summary',
         model: 'Model',
         kali_instance: 'Kali Instance',
+        active: 'active',
+        connecting: 'connecting',
         inactive: 'inactive'
     },
     context_window: {
@@ -73,6 +76,7 @@ export const en = {
         hide_installed: "Hide installed models",
         installed: "Installed",
         select_model: "Select a model",
+        none_selected: "None selected",
         select_base_model: "Select Base Model",
         select_parsing_model: "Select Parsing Model",
         base_model: "Base Model",

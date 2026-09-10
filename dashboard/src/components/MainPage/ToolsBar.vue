@@ -77,45 +77,61 @@
           </div>
         </div>
       </div>
-
+      <!-- Project Config summary -->
       <div class="separator" />
 
-      <div class="row flex-center gap-low options">
-        <span>{{ $t("tools.model") }}:</span>
+      <span class="text-gray config-summary-label">{{
+        $t("tools.config_summary")
+      }}</span>
 
-        <select v-model="selectedModel" class="input-field full-width">
-          <option>{{ $t("tools.model_chatgpt") }}</option>
-          <option>{{ $t("tools.model_gemini") }}</option>
-          <option>{{ $t("tools.model_bigboy") }}</option>
-        </select>
+      <div class="row gap-low options">
+        <span>{{ $t("models.base_model") }}:</span>
+        <span
+          class="text-bold truncate-text model-value"
+          :title="project_settings?.base_model_name ?? undefined"
+          >{{
+            project_settings?.base_model_name || $t("models.none_selected")
+          }}</span
+        >
+      </div>
+
+      <div class="row gap-low options">
+        <span>{{ $t("models.parsing_model") }}:</span>
+        <span
+          class="text-bold truncate-text model-value"
+          :title="project_settings?.parsing_model_name ?? undefined"
+          >{{
+            project_settings?.parsing_model_name || $t("models.none_selected")
+          }}</span
+        >
       </div>
 
       <div class="row gap-low options">
         <span>{{ $t("tools.kali_instance") }}:</span>
-        <span class="text-inactive text-bold">{{ $t("tools.inactive") }}</span>
+        <span class="text-bold model-value" :class="kaliStatusClass">{{
+          kaliStatusText
+        }}</span>
       </div>
-
-      <button
-        class="no-border button full-width border-top"
-        @click="showSettings = true"
-      >
-        <span class="material-icons-outlined"> settings </span>
-      </button>
     </div>
   </div>
-
-  <SettingsDialog v-model="showSettings" />
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { tools } from "../tools";
-import SettingsDialog from "../Settings/SettingsDialog.vue";
 import { useMomosStore } from "@/store/momos_store.ts";
 import { useI18n } from "vue-i18n";
+import {
+  getProjectKaliClient,
+  getProjectSettings,
+  type CreatedKaliUserMessage,
+  type ProjectSettings,
+} from "@/api";
+import { useWebSocketClient, type tCallback } from "@/websockets/websocket_client";
 
 const store = useMomosStore();
 const { t: $t } = useI18n();
+const ws_client = useWebSocketClient();
 
 const toolKey = defineModel<string>();
 
@@ -218,12 +234,85 @@ const selectTool = (key: string) => {
   toolKey.value = key;
 };
 
-const selectedModel = ref<string>("");
-const showSettings = ref<boolean>(false);
+const project_settings = ref<ProjectSettings | null>(null);
+const kaliStatus = ref<"active" | "pending" | "inactive">("inactive");
+
+const kaliStatusText = computed(() => {
+  if (kaliStatus.value === "active") return $t("tools.active");
+  if (kaliStatus.value === "pending") return $t("tools.connecting");
+  return $t("tools.inactive");
+});
+
+const kaliStatusClass = computed(() => {
+  if (kaliStatus.value === "active") return "text-active";
+  if (kaliStatus.value === "pending") return "text-gray";
+  return "text-inactive";
+});
+
+async function loadProjectSettings(project_id: string) {
+  if (!project_id) {
+    project_settings.value = null;
+    return;
+  }
+
+  const result = await getProjectSettings({ path: { project_id } });
+  project_settings.value = result.data ?? null;
+}
+
+async function loadKaliStatus(project_id: string) {
+  if (!project_id) {
+    kaliStatus.value = "inactive";
+    return;
+  }
+
+  const result = await getProjectKaliClient({ path: { project_id } });
+
+  if (result.data) {
+    kaliStatus.value = result.data.pending ? "pending" : "active";
+  } else {
+    kaliStatus.value = "inactive";
+  }
+}
+
+const onKaliCreated: tCallback = (message) => {
+  const created = message as CreatedKaliUserMessage;
+
+  if (created.error || created.project_id !== store.openedProject) return;
+
+  kaliStatus.value = "active";
+};
+
+onMounted(() => {
+  loadProjectSettings(store.openedProject);
+  loadKaliStatus(store.openedProject);
+
+  if (!ws_client.hook_exists("CreatedKaliUserMessage", onKaliCreated))
+    ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated);
+});
+
+watch(
+  () => store.openedProject,
+  (newProject) => {
+    loadProjectSettings(newProject);
+    loadKaliStatus(newProject);
+  },
+);
 </script>
 
 <style scoped lang="css">
 .options {
   margin: 10px;
+}
+
+.model-value {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
+
+.config-summary-label {
+  margin: 10px 10px 0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
 }
 </style>

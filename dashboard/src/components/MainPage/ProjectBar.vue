@@ -27,30 +27,21 @@
         >
           <h4>{{ $t("project.create_new") }}</h4>
         </button>
-        <button
-          class="border no-border-left button settings-button"
-          @click="showSettings = true"
-        >
-          <span class="material-icons-outlined"> settings </span>
-        </button>
       </div>
     </div>
   </div>
 
   <ProjectDialog v-model="show_add_project" />
-  <SettingsDialog v-model="showSettings" />
 </template>
 
 <script setup lang="ts">
 import { ref } from "vue";
 import { useMomosStore } from "@/store/momos_store";
 import ProjectDialog from "./ProjectDialog.vue";
-import SettingsDialog from "../Settings/SettingsDialog.vue";
 
 const store = useMomosStore();
 
 const show_add_project = ref<boolean>(false);
-const showSettings = ref<boolean>(false);
 
 if (store.openedProject === "") {
   store.openedProject = store.getProjects[0]?.id ?? "";
@@ -71,13 +62,5 @@ if (store.openedProject === "") {
 .p_button {
   border-top: none;
   border-bottom: none;
-}
-
-.settings-button {
-  aspect-ratio: 1;
-}
-
-.no-border-left {
-  border-left: none !important;
 }
 </style>
