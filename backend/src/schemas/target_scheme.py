@@ -6,6 +6,7 @@ from pydantic import Field as PydanticField
 
 if TYPE_CHECKING:
     from .project_scheme import Project
+    from .vulnerability_scheme import Vulnerability
 
 ValidPort = Annotated[int, PydanticField(ge=1, le=65535)]
 
@@ -33,6 +34,7 @@ class Target(TargetBase, table=True):
     project_id: uuid.UUID = Field(foreign_key="project.id")
 
     project: Optional["Project"] = Relationship(back_populates="targets")
+    vulnerabilities: List["Vulnerability"] = Relationship(back_populates="target")
 
 
 class ResponseTarget(TargetBase):
