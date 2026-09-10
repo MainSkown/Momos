@@ -36,7 +36,7 @@ const target = ref<string>();
 
 <style scoped lang="css">
 .layout-container {
-  height: calc(100% - 40px); 
+  height: 82vh;
   
   display: flex;
   flex-direction: column;

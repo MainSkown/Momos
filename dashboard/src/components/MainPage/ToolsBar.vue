@@ -1,5 +1,5 @@
 <template>
-  <div class="border column" style="padding: 0; height: 720px; width: 15vw">
+  <div class="tools-box border column" style="padding: 0; width: 15vw">
     <div class="header-text">{{ $t("tools.tools") }}</div>
 
     <div class="separator" />
@@ -300,6 +300,7 @@ watch(
 </script>
 
 <style scoped lang="css">
+
 .options {
   margin: 10px;
 }
