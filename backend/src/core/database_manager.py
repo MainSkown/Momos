@@ -11,6 +11,7 @@ from src.schemas.project_scheme import (
     project_settings_factory,
 )
 from src.schemas.target_scheme import Target
+from src.schemas.vulnerability_scheme import Vulnerability
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -135,6 +136,48 @@ class DatabaseManager:
         with Session(self.engine) as session:
             target = session.get(Target, parsed_uuid)
             return target
+
+    # --- Managing Vulnerabilities ---
+    def get_all_vulnerabilities_in_project(
+        self, project_id: str | uuid.UUID
+    ) -> List[Vulnerability]:
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            statement = select(Vulnerability).where(
+                Vulnerability.related_to_project == parsed_uuid
+            )
+            return session.exec(statement).all()
+
+    def get_all_vulnerabilities_in_target(
+        self, target_id: str | uuid.UUID
+    ) -> List[Vulnerability]:
+        parsed_uuid = self._parse_uuid(target_id)
+
+        with Session(self.engine) as session:
+            statement = select(Vulnerability).where(
+                Vulnerability.found_in == parsed_uuid
+            )
+            return session.exec(statement).all()
+
+    def add_vulnerability(self, vulnerability: Vulnerability):
+        return self.add_to_database(vulnerability)
+
+    def update_vulnerability(self, vulnerability: Vulnerability) -> Vulnerability:
+        with Session(self.engine) as session:
+            merged_vulnerability = session.merge(vulnerability)
+            session.commit()
+            session.refresh(merged_vulnerability)
+
+            return merged_vulnerability
+
+    def delete_vulnerability(self, vulnerability_id: str | uuid.UUID):
+        parsed_uuid = self._parse_uuid(vulnerability_id)
+
+        with Session(self.engine) as session:
+            statement = delete(Vulnerability).where(Vulnerability.id == parsed_uuid)
+            session.exec(statement)
+            session.commit()
 
 
 db_manager = DatabaseManager(settings.database_url)
