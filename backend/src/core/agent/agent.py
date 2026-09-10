@@ -25,12 +25,17 @@ class AgentInterruptAction(TypedDict):
 
 class Agent:
     def __init__(
-        self, model_name: str, checkpointer: AsyncPostgresSaver, project_id: str
+        self,
+        model_name: str,
+        checkpointer: AsyncPostgresSaver,
+        project_id: str,
+        target_id: str,
     ):
         self.project_id = project_id
+        self.target_id = target_id
         self.checkpointer = checkpointer
         self.ollama_url = settings.ollama_url
-        self.tools = agent_tools.build_agent_tools(project_id)
+        self.tools = agent_tools.build_agent_tools(project_id, target_id)
 
         self.changeModel(model_name=model_name)
 
