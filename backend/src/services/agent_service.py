@@ -150,6 +150,9 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
         return str(args.get("name", ""))
 
+    if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
+        return str(args.get("summary", ""))
+
     return ", ".join(f"{k}={v}" for k, v in args.items())
 
 
@@ -401,8 +404,17 @@ class AgentService:
                         project_id, target_id, log_type, content, tool_name
                     )
 
-            # The generator exhausted normally - either the user paused it
-            # (stop_event was set) or it genuinely ran out of time/finished.
+            if agent.finish_summary:
+                await _persist_and_broadcast(
+                    project_id,
+                    target_id,
+                    "action",
+                    f"Agent finished the task: {agent.finish_summary}",
+                )
+
+            # The generator exhausted normally - either the user paused it,
+            # the agent decided it was done (finish_summary is set), or it
+            # genuinely ran out of time.
             final_status = (
                 AgentRunState.PAUSED if stop_event.is_set() else AgentRunState.FINISHED
             )

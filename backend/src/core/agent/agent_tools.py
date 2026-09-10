@@ -1,4 +1,5 @@
 import asyncio
+from typing import Callable
 from pydantic import ValidationError
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -9,6 +10,7 @@ from src.schemas import Vulnerability, VulnerabilityBase
 
 KALI_COMMAND_TOOL_NAME = "execute_kali_command"
 REPORT_VULNERABILITY_TOOL_NAME = "report_vulnerability"
+FINISH_TASK_TOOL_NAME = "finish_task"
 
 PARSER_SYSTEM_PROMPT = (
     "You are a data-extraction assistant supporting a penetration-testing agent. "
@@ -143,8 +145,32 @@ def create_vulnerability_tool(project_id: str, target_id: str):
     return report_vulnerability
 
 
-def build_agent_tools(project_id: str, target_id: str) -> list:
+def create_finish_task_tool(on_finish: Callable[[str], None]):
+    """Builds a finish_task tool that lets the agent end its own run early,
+    once it considers the assessment complete."""
+
+    @tool(FINISH_TASK_TOOL_NAME)
+    async def finish_task(summary: str) -> str:
+        """Call this once the assessment is complete - all reachable findings
+        have been reported and there is nothing productive left to
+        investigate. This ends the run immediately, even if time remains,
+        and cannot be undone.
+
+        Args:
+            summary: A short summary of what was accomplished and why the
+                task is considered complete.
+        """
+        on_finish(summary)
+        return "Task marked as finished. Ending the run now."
+
+    return finish_task
+
+
+def build_agent_tools(
+    project_id: str, target_id: str, on_finish: Callable[[str], None]
+) -> list:
     return [
         create_kali_tool(project_id),
         create_vulnerability_tool(project_id, target_id),
+        create_finish_task_tool(on_finish),
     ]

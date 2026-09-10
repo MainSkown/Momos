@@ -132,6 +132,7 @@ export const en = {
     agent_logs: {
         tool_kali_command: "Kali Command",
         tool_report_vulnerability: "Vulnerability Report",
+        tool_finish_task: "Task Finished",
         running: "Agent is running",
         no_logs: "No agent activity yet"
     },

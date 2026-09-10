@@ -77,7 +77,7 @@ const { t: $t } = useI18n();
 const store = useMomosStore();
 const ws_client = useWebSocketClient();
 
-type ToolName = "execute_kali_command" | "report_vulnerability";
+type ToolName = "execute_kali_command" | "report_vulnerability" | "finish_task";
 
 const logEntries = ref<AgentLogResponse[]>([]);
 const logScreenRef = ref<HTMLElement | null>(null);
@@ -155,11 +155,13 @@ watch(
 const TOOL_LABELS: Record<ToolName, string> = {
   execute_kali_command: $t("agent_logs.tool_kali_command"),
   report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
+  finish_task: $t("agent_logs.tool_finish_task"),
 };
 
 const TOOL_ICONS: Record<ToolName, string> = {
   execute_kali_command: "terminal",
   report_vulnerability: "bug_report",
+  finish_task: "task_alt",
 };
 
 function isKnownTool(toolName: string): toolName is ToolName {

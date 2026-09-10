@@ -1,5 +1,5 @@
 import asyncio
-from typing import Annotated, Any, AsyncGenerator, Callable, TypedDict
+from typing import Annotated, Any, AsyncGenerator, Callable, Optional, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
@@ -35,11 +35,17 @@ class Agent:
         self.target_id = target_id
         self.checkpointer = checkpointer
         self.ollama_url = settings.ollama_url
-        self.tools = agent_tools.build_agent_tools(project_id, target_id)
+        self.finish_summary: Optional[str] = None
+        self.tools = agent_tools.build_agent_tools(
+            project_id, target_id, self._mark_finished
+        )
 
         self.changeModel(model_name=model_name)
 
         self.app = self._build_graph()
+
+    def _mark_finished(self, summary: str):
+        self.finish_summary = summary
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
@@ -111,7 +117,11 @@ class Agent:
         time_left = duration_seconds
         run_state["time_left"] = time_left
 
-        while not stop_event.is_set() and time_left > 0:
+        while (
+            not stop_event.is_set()
+            and time_left > 0
+            and self.finish_summary is None
+        ):
             loop_start = time.monotonic()
             
             event_queue = asyncio.Queue()
@@ -158,6 +168,13 @@ class Agent:
                             continue
                         for message in node_update.get("messages", []):
                             yield message
+
+                    if self.finish_summary is not None:
+                        # finish_task just ran as part of this step - stop
+                        # immediately rather than letting the unconditional
+                        # tools -> agent edge run one more (wasted) LLM turn.
+                        stream_task.cancel()
+                        return
             finally:
                 if not stream_task.done():
                     stream_task.cancel()
