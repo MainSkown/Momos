@@ -1,7 +1,14 @@
 import asyncio
 from typing import Callable, Dict, List, Optional, Tuple
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from src.core import db_manager
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_ollama import ChatOllama
+from src.core import db_manager, settings
 from src.core.agent import Agent, agent_tools
 from src.core.agent.agent_checkpointer import checkpointer
 from src.core.kali_integration import kali_registry
@@ -50,6 +57,33 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
         return str(args.get("name", ""))
 
     return ", ".join(f"{k}={v}" for k, v in args.items())
+
+
+LOG_SUMMARY_SYSTEM_PROMPT = (
+    "You are summarizing a penetration-testing agent's activity for a live "
+    "status log. Rewrite the given text as a single short, clear sentence "
+    "describing what the agent is doing, thinking, or found. Keep it factual "
+    "and concise - no preamble, no commentary, just the summary."
+)
+
+
+async def _summarize_for_log(project_id: str, content: str) -> str:
+    parsing_model_name = await agent_tools.get_parsing_model_name(project_id)
+
+    if not parsing_model_name:
+        # No parsing model configured for this project - fall back to raw content
+        return content
+
+    parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
+
+    response = await parser_llm.ainvoke(
+        [
+            SystemMessage(content=LOG_SUMMARY_SYSTEM_PROMPT),
+            HumanMessage(content=content),
+        ]
+    )
+
+    return str(response.content)
 
 
 def _message_to_log_specs(
@@ -189,6 +223,9 @@ class AgentService:
                     continue
 
                 for log_type, content, tool_name in _message_to_log_specs(event):
+                    if log_type in ("thinking", "action"):
+                        content = await _summarize_for_log(project_id, content)
+
                     await _persist_and_broadcast(
                         project_id, target_id, log_type, content, tool_name
                     )

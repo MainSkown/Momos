@@ -23,7 +23,7 @@ PARSER_SYSTEM_PROMPT = (
 )
 
 
-async def _get_parsing_model_name(project_id: str) -> str | None:
+async def get_parsing_model_name(project_id: str) -> str | None:
     loop = asyncio.get_running_loop()
     project_settings = await loop.run_in_executor(
         None, db_manager.get_project_settings, project_id
@@ -33,7 +33,7 @@ async def _get_parsing_model_name(project_id: str) -> str | None:
 
 
 async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
-    parsing_model_name = await _get_parsing_model_name(project_id)
+    parsing_model_name = await get_parsing_model_name(project_id)
 
     if not parsing_model_name:
         # No parsing model configured for this project - fall back to raw output
