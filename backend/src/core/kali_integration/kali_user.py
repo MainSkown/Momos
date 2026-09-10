@@ -1,15 +1,20 @@
 import uuid
 import asyncio
+import logging
 from typing import Dict, List, Optional, Tuple
+from src.schemas import KaliCreationStage
 from src.websocket import (
     ws_registry,
     WsTypes,
     SendCommandMessage,
     ReceiveCommandOutputMessage,
     CreatedKaliUserMessage,
+    KaliCreationStageMessage,
     WebSocketError,
 )
 from .kali_registry import kali_registry
+
+logger = logging.getLogger("momos.kali")
 
 
 class KaliUserRegistry:
@@ -28,10 +33,28 @@ class KaliUserRegistry:
         return str(client_id)
 
     async def _create_user(self, project_id: str, client_id: uuid.UUID):
-        user = await KaliUser.create(project_id, client_id)
+        try:
+            user = await KaliUser.create(project_id, client_id)
+        except Exception as e:
+            # Without this, a failure here (e.g. Docker/package install error)
+            # would leave the pending entry stuck forever with no way for the
+            # frontend to find out - it would just wait on a message that never
+            # arrives.
+            logger.error(f"Failed to create Kali client for project {project_id}: {e}")
+            self.pending_users.pop(client_id, None)
+
+            await ws_registry.send_message(
+                CreatedKaliUserMessage(
+                    project_id=project_id,
+                    type=WsTypes.CreatedKaliUserMessage,
+                    client_id=str(client_id),
+                    error=WebSocketError(code="KaliCreationError", message=str(e)),
+                )
+            )
+            return
 
         self.active_users.append(user)
-        del self.pending_users[client_id]
+        self.pending_users.pop(client_id, None)
 
         message = CreatedKaliUserMessage(
             project_id=project_id,
@@ -72,8 +95,24 @@ class KaliUser:
 
     @classmethod
     async def create(cls, project_id: str, client_id: uuid.UUID):
+        loop = asyncio.get_running_loop()
+
+        def on_stage(stage: KaliCreationStage):
+            # Called from the executor thread running the (synchronous) Docker
+            # setup - hop back onto the event loop to actually send it.
+            asyncio.run_coroutine_threadsafe(
+                ws_registry.send_message(
+                    KaliCreationStageMessage(
+                        project_id=project_id,
+                        type=WsTypes.KaliCreationStage,
+                        stage=stage,
+                    )
+                ),
+                loop,
+            )
+
         # Check/Get the manager async
-        manager = await kali_registry.get_manager(project_id)
+        manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
         if not manager:
             raise RuntimeError(
                 f"Could not create Kali Manager for project: {project_id}"

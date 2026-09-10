@@ -108,10 +108,18 @@ export const en = {
         root: "Root",
         momos: "Momos",
         session_initialized: "Session initialized. Select privileges above.",
-        connecting: "Connecting to client:",
+        connecting: "Connecting to client...",
         checking_session: "Checking for active session",
         no_active_session: "No active session",
-        connect_to_kali: "Connect to Kali"
+        connect_to_kali: "Connect to Kali",
+        connect_failed: "Could not connect to Kali",
+        stage: {
+            checking_container: "Checking for existing container",
+            starting_container: "Starting Kali container",
+            updating_packages: "Updating package lists",
+            installing_packages: "Installing Kali packages",
+            creating_user: "Setting up user account"
+        }
     },
 
     overview: {

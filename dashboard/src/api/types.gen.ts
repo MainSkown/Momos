@@ -207,6 +207,32 @@ export type HttpValidationError = {
 export type InboundTraffic = SendCommandMessage | AgentInterruptResponseMessage;
 
 /**
+ * KaliCreationStage
+ *
+ * Stages the Kali worker container goes through on first creation for a
+ * project. Reported over websocket so the frontend can show real progress
+ * instead of a generic "connecting" message during the (often multi-minute)
+ * package installation.
+ */
+export type KaliCreationStage = 'checking_container' | 'starting_container' | 'updating_packages' | 'installing_packages' | 'creating_user';
+
+/**
+ * KaliCreationStageMessage
+ */
+export type KaliCreationStageMessage = {
+    /**
+     * Type
+     */
+    type: 'KaliCreationStage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    stage: KaliCreationStage;
+};
+
+/**
  * KaliUser
  */
 export type KaliUser = {
@@ -325,7 +351,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer;
 
 /**
  * ProjectRequest

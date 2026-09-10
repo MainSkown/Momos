@@ -1,5 +1,6 @@
 import asyncio
-from typing import Dict
+from typing import Callable, Dict, Optional
+from src.schemas import KaliCreationStage
 from .kali_manager import KaliManger
 
 class KaliRegistry:
@@ -7,14 +8,18 @@ class KaliRegistry:
         self._active_managers: Dict[str, KaliManger] = {}
         self._lock = asyncio.Lock()
 
-    async def get_manager(self, project_id: str) -> KaliManger:
+    async def get_manager(
+        self,
+        project_id: str,
+        on_stage: Optional[Callable[[KaliCreationStage], None]] = None,
+    ) -> KaliManger:
         async with self._lock:
             if project_id in self._active_managers.keys():
                 return self._active_managers[project_id]
 
             manager = KaliManger(container_name=f"momos-kali-worker-{project_id}")
-            await manager.start()
-            
+            await manager.start(on_stage=on_stage)
+
             self._active_managers[project_id] = manager
             return manager
 

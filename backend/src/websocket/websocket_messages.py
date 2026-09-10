@@ -1,7 +1,12 @@
 from pydantic import BaseModel
 from typing import Literal, Optional, Type, Union
 from enum import Enum
-from src.schemas import OllamaDownloadProgress, AgentLogResponse, AgentRunResponse
+from src.schemas import (
+    OllamaDownloadProgress,
+    AgentLogResponse,
+    AgentRunResponse,
+    KaliCreationStage,
+)
 
 # Separate registries for cleaner typing definitions
 REGISTERED_INBOUND_MESSAGES: list[Type[BaseModel]] = []
@@ -12,6 +17,7 @@ class WsTypes(str, Enum):
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
+    KaliCreationStage = "KaliCreationStage"
     ModelPullingUpdate = "ModelPullingUpdate"
     OllamaDownloadProgress = "OllamaDownloadProgress"
     AgentMessage = "AgentMessage"
@@ -80,7 +86,12 @@ class CreatedKaliUserMessage(OutboundMessage):
     project_id: str
     type: Literal[WsTypes.CreatedKaliUserMessage]
     client_id: str
-    
+
+class KaliCreationStageMessage(OutboundMessage):
+    project_id: str
+    type: Literal[WsTypes.KaliCreationStage]
+    stage: KaliCreationStage
+
 class ModelPullingUpdate(OutboundMessage):
     type: Literal[WsTypes.ModelPullingUpdate]
     progress: OllamaDownloadProgress

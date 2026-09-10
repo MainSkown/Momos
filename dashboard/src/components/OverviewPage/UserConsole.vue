@@ -95,7 +95,7 @@
       v-else-if="loading_dict[store.openedProject] === true"
     >
       <div class="flex flex-center connecting border text-center">
-        <span>{{ $t("console.connecting") }}</span> <span class="loader" />
+        <span>{{ connectingLabel }}</span> <span class="loader" />
       </div>
     </div>
 
@@ -127,21 +127,34 @@ import {
   useWebSocketClient,
   type tCallback,
 } from "@/websockets/websocket_client";
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { toast } from "vue3-toastify";
 import {
   createKaliUser,
   getProjectKaliClient,
   type ReceiveCommandOutputMessage,
   type CreatedKaliUserMessage,
+  type KaliCreationStageMessage,
+  type KaliCreationStage,
   type SendCommandMessage,
 } from "@/api";
 
+const { t: $t } = useI18n();
 const ws_client = useWebSocketClient();
 const store = useMomosStore();
 
 const client_dict = ref<{ [project_id: string]: string }>({});
 const loading_dict = ref<{ [project_id: string]: boolean }>({});
 const checking_dict = ref<{ [project_id: string]: boolean }>({});
+const stage_dict = ref<{ [project_id: string]: KaliCreationStage }>({});
+
+const connectingLabel = computed(() => {
+  const stage = stage_dict.value[store.openedProject];
+  return stage
+    ? $t(`console.stage.${stage}`)
+    : $t("console.connecting");
+});
 
 const user_picked = ref<"momos" | "root">("root");
 const user_command = ref<string>("");
@@ -168,6 +181,7 @@ async function createNewKaliUser() {
   const project_id = store.openedProject;
 
   loading_dict.value[project_id] = true;
+  delete stage_dict.value[project_id];
 
   const result = await createKaliUser({ path: { project_id } });
 
@@ -183,13 +197,27 @@ const onKaliCreated: tCallback = (message) => {
   message = message as CreatedKaliUserMessage;
   const project_id = message.project_id;
 
+  delete stage_dict.value[project_id];
+
   if (message.error) {
     console.error(message.error.message);
+    toast.error(message.error.message ?? $t("console.connect_failed"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
+    loading_dict.value[project_id] = false;
     return;
   }
 
   client_dict.value[project_id] = message.client_id;
   loading_dict.value[project_id] = false;
+};
+
+const onKaliCreationStage: tCallback = (message) => {
+  message = message as KaliCreationStageMessage;
+
+  if (message.error) return;
+
+  stage_dict.value[message.project_id] = message.stage;
 };
 
 const onConsoleOutput: tCallback = (message) => {
@@ -208,6 +236,9 @@ const onConsoleOutput: tCallback = (message) => {
 const add_hooks = (project_id: string) => {
   if (!ws_client.hook_exists("CreatedKaliUserMessage", onKaliCreated))
     ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated);
+
+  if (!ws_client.hook_exists("KaliCreationStage", onKaliCreationStage))
+    ws_client.add_hook("KaliCreationStage", onKaliCreationStage);
 
   if (!ws_client.hook_exists("ReceiveCommandOutputMessage", onConsoleOutput))
     ws_client.add_hook("ReceiveCommandOutputMessage", onConsoleOutput);

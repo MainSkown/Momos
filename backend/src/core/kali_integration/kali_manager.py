@@ -2,8 +2,8 @@ import docker
 import asyncio
 from docker.errors import DockerException
 import logging
-from typing import Final, Sequence
-from src.schemas import Target
+from typing import Callable, Final, Optional, Sequence
+from src.schemas import Target, KaliCreationStage
 from enum import Enum
 
 logger = logging.getLogger("momos.kali")
@@ -54,13 +54,24 @@ class KaliManger:
             logger.error(f"Could not connect to Docker: {e}")
             raise RuntimeError("Docker daemon is not available")
 
-    async def start(self):
+    async def start(
+        self, on_stage: Optional[Callable[[KaliCreationStage], None]] = None
+    ):
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._create_container)
+        await loop.run_in_executor(None, self._create_container, on_stage)
         print(f"Successfully created Kali container: {self.container_name}", flush=True)
 
-    def _create_container(self):
+    def _report(
+        self, on_stage: Optional[Callable[[KaliCreationStage], None]], stage: KaliCreationStage
+    ):
+        if on_stage is not None:
+            on_stage(stage)
+
+    def _create_container(
+        self, on_stage: Optional[Callable[[KaliCreationStage], None]] = None
+    ):
         # Check if container with same name exist
+        self._report(on_stage, KaliCreationStage.checking_container)
         try:
             old_container = self.client.containers.get(self.container_name)
             print(
@@ -72,6 +83,7 @@ class KaliManger:
             pass
 
         print("Starting container")
+        self._report(on_stage, KaliCreationStage.starting_container)
         self.container = self.client.containers.run(
             image="kalilinux/kali-rolling:latest",
             name=self.container_name,
@@ -82,16 +94,22 @@ class KaliManger:
             cap_add=["NET_ADMIN", "NET_RAW"],
         )
 
-        self._configure_container()
+        self._configure_container(on_stage)
 
-    def _configure_container(self):
+    def _configure_container(
+        self, on_stage: Optional[Callable[[KaliCreationStage], None]] = None
+    ):
         print("Updating and downloading packages")
+        self._report(on_stage, KaliCreationStage.updating_packages)
         self._exec_in_container("apt-get update")
+
+        self._report(on_stage, KaliCreationStage.installing_packages)
         self._exec_in_container(
             "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
             + " ".join(self.packages)
         )
         print("Setting up momos user")
+        self._report(on_stage, KaliCreationStage.creating_user)
 
         # Create momos user without sudo permissions
         self._exec_in_container(
@@ -153,9 +171,14 @@ class KaliManger:
         if target.ipv4 is not None:
             # Allow rule for outgoing traffic to target
             for protocol in ["tcp", "udp"]:
-                # No space - if ports are none to not break the command
+                # "tcp"/"udp" alone isn't valid nft syntax - it must be followed
+                # by a field (dport, etc). With no ports defined, match the
+                # protocol itself via meta l4proto instead.
+                protocol_match = (
+                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {protocol}"
+                )
                 await self.execute(
-                    f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} {protocol}{ports_str} accept",
+                    f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} {protocol_match} accept",
                     user=KALI_USERS.root,
                 )
 
@@ -188,9 +211,12 @@ class KaliManger:
         if target.ipv6 is not None:
             # Allow tcp and udp for ipv6
             for protocol in ["tcp", "udp"]:
-                # No space - if ports are none to not break the command
+                # Same "tcp"/"udp" alone isn't valid nft syntax fix as above.
+                protocol_match = (
+                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {protocol}"
+                )
                 await self.execute(
-                    f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} {protocol}{ports_str} accept",
+                    f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} {protocol_match} accept",
                     user=KALI_USERS.root,
                 )
 
