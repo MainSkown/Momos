@@ -14,6 +14,9 @@ class WsTypes(str, Enum):
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
     ModelPullingUpdate = "ModelPullingUpdate"
     OllamaDownloadProgress = "OllamaDownloadProgress"
+    AgentMessage = "AgentMessage"
+    AgentInterruptRequest = "AgentInterruptRequest"
+    AgentInterruptResponse = "AgentInterruptResponse"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -58,6 +61,12 @@ class SendCommandMessage(InboundMessage):
     command: str
     user: Literal["root", "momos"]
 
+class AgentInterruptResponseMessage(InboundMessage):
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AgentInterruptResponse]
+    approved: bool
+
 # --- Outbound Subclasses (Server Sends) ---
 
 class ReceiveCommandOutputMessage(OutboundMessage):
@@ -73,6 +82,19 @@ class CreatedKaliUserMessage(OutboundMessage):
 class ModelPullingUpdate(OutboundMessage):
     type: Literal[WsTypes.ModelPullingUpdate]
     progress: OllamaDownloadProgress
+
+class AgentMessage(OutboundMessage):
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AgentMessage]
+    role: Literal["assistant", "tool"]
+    content: str
+
+class AgentInterruptRequest(OutboundMessage):
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AgentInterruptRequest]
+    tool_calls: list[dict]
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

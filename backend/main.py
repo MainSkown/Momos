@@ -4,12 +4,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from src.core.kali_integration import kali_registry
+from src.core.agent.agent_checkpointer import setup_checkpointer, shutdown_checkpointer
 from src.routers import (
     project_router,
     target_router,
     websocket_router,
     kali_router,
     ollama_router,
+    agent_router,
 )
 from src.schemas import export_json_schema, OllamaModelsList
 
@@ -25,9 +27,12 @@ async def lifespan(app: FastAPI):
         app.state.ollama_models = models_list.models
     else:
         app.state.ollama_models = []
-    
+
+    await setup_checkpointer()
+
     yield
     await kali_registry.shutdown()
+    await shutdown_checkpointer()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -55,5 +60,6 @@ app.include_router(project_router, prefix="/api")
 app.include_router(target_router, prefix="/api")
 app.include_router(kali_router, prefix="/api")
 app.include_router(ollama_router, prefix="/api")
+app.include_router(agent_router, prefix="/api")
 # --- WebSockets ---
 app.include_router(websocket_router, prefix="/ws")
