@@ -45,7 +45,7 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     # "wordlists",
     # "curl",
     # "wget",
-    # "nmap",
+     "nmap",
     # "netcat-openbsd",
     "nftables",
     # "gobuster",

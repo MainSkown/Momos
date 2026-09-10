@@ -1,6 +1,6 @@
 import asyncio
 from typing import Annotated, Any, AsyncGenerator, Callable, Optional, TypedDict
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -21,6 +21,16 @@ class AgentState(TypedDict):
 class AgentInterruptAction(TypedDict):
     accept: Callable[[bool], None]
     tool_calls: list[Any]
+
+
+REASONING_SYSTEM_PROMPT = (
+    "Before every tool call, briefly state your reasoning first: what you "
+    "currently know, what you're trying to find out or accomplish next, and "
+    "why this specific action is the right next step. Write this as plain "
+    "text content alongside the tool call, not inside the tool call's "
+    "arguments. Keep it to 1-3 sentences - this is shown to the user "
+    "live as your thought process, so it must never be empty."
+)
 
 
 class Agent:
@@ -110,7 +120,10 @@ class Agent:
                 "ports": target.ports,
             }
             input_data = {
-                "messages": [("user", start_prompt)],
+                "messages": [
+                    SystemMessage(content=REASONING_SYSTEM_PROMPT),
+                    ("user", start_prompt),
+                ],
                 "target_scope": target_scope,
             }
 
@@ -132,6 +145,12 @@ class Agent:
                         input_data, config=config, stream_mode="updates"
                     ):
                         await event_queue.put(event)
+                except Exception as e:
+                    # Without this, any failure here (bad checkpointer state,
+                    # Ollama unreachable, etc.) would silently look identical
+                    # to the graph reaching END - the run would just "finish"
+                    # instantly with no explanation.
+                    await event_queue.put(e)
                 finally:
                     await event_queue.put(None)
                     
@@ -159,6 +178,9 @@ class Agent:
                     event = get_event_task.result()
                     if event is None:
                         break
+
+                    if isinstance(event, BaseException):
+                        raise event
 
                     # stream_mode="updates" yields {node_name: {"messages": [...]}} -
                     # the update is keyed by the node that produced it, not "messages"

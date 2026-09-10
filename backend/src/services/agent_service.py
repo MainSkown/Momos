@@ -30,6 +30,7 @@ from src.websocket import (
     AgentInterruptResponseMessage,
     AgentRunStatus,
     AgentRunTimer,
+    KaliCreationStageMessage,
 )
 
 # thread_id (== target_id) -> pending interrupt's accept callback
@@ -286,24 +287,71 @@ class AgentService:
         else:
             duration_seconds = target.task_duration
 
-        # Initiate kali manager for this project
-        # TODO - Message to frontend that container init
-        kali_manager = await kali_registry.get_manager(project_id)
-        await kali_manager.prepare_nftables(target)
-        # TODO - Message to frontend that container started
+            # Not resuming a paused run - clear any leftover LangGraph
+            # checkpoint for this thread (from a prior finished/errored run).
+            # The checkpointer persists state per thread_id independently of
+            # our own AgentRunState, so without this, Agent.start_agent would
+            # try to "resume" an already-completed graph: it has nothing left
+            # to do, so it does nothing and looks like an instant, silent
+            # completion instead of actually starting the task.
+            if agent_checkpointer.checkpointer is not None:
+                await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
         project_settings = db_manager.get_project_settings(project_id)
 
-        agent = Agent(
-            model_name=project_settings.base_model_name,
-            checkpointer=agent_checkpointer.checkpointer,
-            project_id=project_id,
-            target_id=target_id,
-        )
+        # Claim the target immediately, before the (possibly multi-minute)
+        # container build even starts, so a second start_agent() call can't
+        # slip in while it's still being prepared.
+        _running_targets[target_id] = project_id
 
         asyncio.create_task(
-            AgentService._run_agent(agent, target, project_settings, duration_seconds)
+            AgentService._prepare_and_run(target, project_settings, duration_seconds)
         )
+
+    @staticmethod
+    async def _prepare_and_run(
+        target: Target, project_settings: ProjectSettings, duration_seconds: int
+    ):
+        project_id = str(target.project_id)
+        target_id = str(target.id)
+        loop = asyncio.get_running_loop()
+
+        def on_stage(stage):
+            # Called from the executor thread running the container's
+            # (synchronous) Docker setup - hop back onto the event loop.
+            asyncio.run_coroutine_threadsafe(
+                ws_registry.send_message(
+                    KaliCreationStageMessage(
+                        project_id=project_id,
+                        type=WsTypes.KaliCreationStage,
+                        stage=stage,
+                    )
+                ),
+                loop,
+            )
+
+        try:
+            kali_manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
+            await kali_manager.prepare_nftables(target)
+
+            agent = Agent(
+                model_name=project_settings.base_model_name,
+                checkpointer=agent_checkpointer.checkpointer,
+                project_id=project_id,
+                target_id=target_id,
+            )
+        except Exception as e:
+            # Without this, a failure preparing the container would leave the
+            # target claimed in _running_targets forever with no feedback -
+            # the UI would just show "starting" indefinitely.
+            print(f"Could not prepare agent run for target {target_id}: {e}")
+            _running_targets.pop(target_id, None)
+            await _persist_and_broadcast(
+                project_id, target_id, "action", f"Could not start agent: {e}"
+            )
+            return
+
+        await AgentService._run_agent(agent, target, project_settings, duration_seconds)
 
     @staticmethod
     async def pause_agent(project_id: str, target_id: str):

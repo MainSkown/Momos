@@ -46,13 +46,13 @@ services:
     networks:
       - momos-net
     # If you have an NVIDIA GPU, uncomment these lines for massive speedups:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 networks:
   momos-net:
