@@ -13,6 +13,7 @@ from src.schemas.project_scheme import (
 from src.schemas.target_scheme import Target
 from src.schemas.vulnerability_scheme import Vulnerability
 from src.schemas.agent_log_scheme import AgentLog
+from src.schemas.agent_run_scheme import AgentRun
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -196,6 +197,20 @@ class DatabaseManager:
                 .order_by(AgentLog.created_at)
             )
             return session.exec(statement).all()
+
+    # --- Managing Agent Runs ---
+    def upsert_agent_run(self, agent_run: AgentRun) -> AgentRun:
+        with Session(self.engine) as session:
+            merged = session.merge(agent_run)
+            session.commit()
+            session.refresh(merged)
+            return merged
+
+    def get_agent_run(self, target_id: str | uuid.UUID) -> AgentRun | None:
+        parsed_uuid = self._parse_uuid(target_id)
+
+        with Session(self.engine) as session:
+            return session.get(AgentRun, parsed_uuid)
 
 
 db_manager = DatabaseManager(settings.database_url)

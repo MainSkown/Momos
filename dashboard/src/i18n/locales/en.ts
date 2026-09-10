@@ -34,7 +34,8 @@ export const en = {
         to_delete: "Are you sure you want to delete this target?",
         delete_info: "This action cannot be undone.",
         scan_duration: "Enter scan duration",
-        duration_required: "To start work first define task duration in settings"
+        duration_required: "To start work first define task duration in settings",
+        agent_wants_to_run: "Agent wants to run the following"
     },
 
     notify: {

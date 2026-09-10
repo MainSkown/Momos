@@ -100,6 +100,34 @@ export type AgentMessage = {
 };
 
 /**
+ * AgentRunResponse
+ */
+export type AgentRunResponse = {
+    status: AgentRunState;
+    /**
+     * Remaining Seconds
+     */
+    remaining_seconds: number;
+    /**
+     * Recorded At
+     */
+    recorded_at?: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
+ * AgentRunState
+ */
+export type AgentRunState = 'running' | 'paused' | 'interrupted' | 'finished';
+
+/**
  * AgentRunStatus
  */
 export type AgentRunStatus = {
@@ -120,6 +148,18 @@ export type AgentRunStatus = {
      * Running
      */
     running: boolean;
+};
+
+/**
+ * AgentRunTimer
+ */
+export type AgentRunTimer = {
+    /**
+     * Type
+     */
+    type: 'AgentRunTimer';
+    error?: WebSocketError | null;
+    run: AgentRunResponse;
 };
 
 /**
@@ -285,7 +325,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer;
 
 /**
  * ProjectRequest
@@ -997,6 +1037,38 @@ export type StartAgentResponses = {
     200: unknown;
 };
 
+export type PauseAgentData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/pause';
+};
+
+export type PauseAgentErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PauseAgentError = PauseAgentErrors[keyof PauseAgentErrors];
+
+export type PauseAgentResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type GetProjectAgentLogsData = {
     body?: never;
     path: {
@@ -1058,6 +1130,42 @@ export type IsProjectAgentRunningResponses = {
 };
 
 export type IsProjectAgentRunningResponse = IsProjectAgentRunningResponses[keyof IsProjectAgentRunningResponses];
+
+export type GetTargetAgentRunData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/run';
+};
+
+export type GetTargetAgentRunErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTargetAgentRunError = GetTargetAgentRunErrors[keyof GetTargetAgentRunErrors];
+
+export type GetTargetAgentRunResponses = {
+    /**
+     * Response Gettargetagentrun
+     *
+     * Successful Response
+     */
+    200: AgentRunResponse | null;
+};
+
+export type GetTargetAgentRunResponse = GetTargetAgentRunResponses[keyof GetTargetAgentRunResponses];
 
 export type WsTypesData = {
     body?: never;

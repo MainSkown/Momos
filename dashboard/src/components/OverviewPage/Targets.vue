@@ -44,6 +44,7 @@
           <div
             class="row table-row"
             v-for="t in store.getProjectsTargets(store.openedProject)"
+            :key="t.id"
           >
             <div class="border cell text-center truncate-text">
               <span>{{ t.name }}</span>
@@ -52,25 +53,9 @@
               <span>{{ getTarget(t) || $t("targets.no_target") }} </span>
             </div>
 
-            <!-- Start target scan -->
+            <!-- Start/pause target scan -->
             <div class="border small-cell">
-              <button
-                class="button no-border"
-                :disabled="t.task_duration === null && t.task_duration === 0"
-              >
-                <span
-                  v-if="t.task_duration !== null && t.task_duration > 0"
-                  class="material-icons-outlined"
-                >
-                  play_arrow
-                </span>
-                <Tooltip
-                  v-else
-                  :message="$t('targets.duration_required')"
-                >
-                  <span class="material-icons-outlined"> timer_off </span>
-                </Tooltip>
-              </button>
+              <AgentRunButton :target="t" />
             </div>
 
             <!-- Settings button -->
@@ -155,7 +140,7 @@ import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
 import TargetSettingsDialog from "./TargetSettingsDialog.vue";
 import Dialog from "../reusable/Dialog.vue";
-import Tooltip from "../reusable/Tooltip.vue";
+import AgentRunButton from "./AgentRunButton.vue";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();

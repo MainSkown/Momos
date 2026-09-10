@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -151,6 +151,11 @@ export const getOllamaDownloadQueueDetails = <ThrowOnError extends boolean = fal
 export const startAgent = <ThrowOnError extends boolean = false>(options: Options<StartAgentData, ThrowOnError>): RequestResult<StartAgentResponses, StartAgentErrors, ThrowOnError> => (options.client ?? client).post<StartAgentResponses, StartAgentErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/start', ...options });
 
 /**
+ * Pause Agent
+ */
+export const pauseAgent = <ThrowOnError extends boolean = false>(options: Options<PauseAgentData, ThrowOnError>): RequestResult<PauseAgentResponses, PauseAgentErrors, ThrowOnError> => (options.client ?? client).post<PauseAgentResponses, PauseAgentErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/pause', ...options });
+
+/**
  * Get Project Agent Logs
  */
 export const getProjectAgentLogs = <ThrowOnError extends boolean = false>(options: Options<GetProjectAgentLogsData, ThrowOnError>): RequestResult<GetProjectAgentLogsResponses, GetProjectAgentLogsErrors, ThrowOnError> => (options.client ?? client).get<GetProjectAgentLogsResponses, GetProjectAgentLogsErrors, ThrowOnError>({ url: '/api/project/{project_id}/agent_logs', ...options });
@@ -159,6 +164,11 @@ export const getProjectAgentLogs = <ThrowOnError extends boolean = false>(option
  * Is Project Agent Running
  */
 export const isProjectAgentRunning = <ThrowOnError extends boolean = false>(options: Options<IsProjectAgentRunningData, ThrowOnError>): RequestResult<IsProjectAgentRunningResponses, IsProjectAgentRunningErrors, ThrowOnError> => (options.client ?? client).get<IsProjectAgentRunningResponses, IsProjectAgentRunningErrors, ThrowOnError>({ url: '/api/project/{project_id}/agent/running', ...options });
+
+/**
+ * Get Target Agent Run
+ */
+export const getTargetAgentRun = <ThrowOnError extends boolean = false>(options: Options<GetTargetAgentRunData, ThrowOnError>): RequestResult<GetTargetAgentRunResponses, GetTargetAgentRunErrors, ThrowOnError> => (options.client ?? client).get<GetTargetAgentRunResponses, GetTargetAgentRunErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/run', ...options });
 
 /**
  * Ws Types Dummy

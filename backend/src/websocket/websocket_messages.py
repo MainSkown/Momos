@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Literal, Optional, Type, Union
 from enum import Enum
-from src.schemas import OllamaDownloadProgress, AgentLogResponse
+from src.schemas import OllamaDownloadProgress, AgentLogResponse, AgentRunResponse
 
 # Separate registries for cleaner typing definitions
 REGISTERED_INBOUND_MESSAGES: list[Type[BaseModel]] = []
@@ -18,6 +18,7 @@ class WsTypes(str, Enum):
     AgentInterruptRequest = "AgentInterruptRequest"
     AgentInterruptResponse = "AgentInterruptResponse"
     AgentRunStatus = "AgentRunStatus"
+    AgentRunTimer = "AgentRunTimer"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -99,6 +100,10 @@ class AgentRunStatus(OutboundMessage):
     target_id: str
     type: Literal[WsTypes.AgentRunStatus]
     running: bool
+
+class AgentRunTimer(OutboundMessage):
+    type: Literal[WsTypes.AgentRunTimer]
+    run: AgentRunResponse
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

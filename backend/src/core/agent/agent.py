@@ -79,12 +79,17 @@ class Agent:
         start_prompt: str,
         thread_id: str,
         should_interrupt: bool,
-        stop_event: asyncio.Event | None = None
+        duration_seconds: int,
+        stop_event: asyncio.Event | None = None,
+        run_state: dict | None = None,
     ) -> AsyncGenerator[BaseMessage | AgentInterruptAction, None]:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-        
+
         if stop_event is None:
             stop_event = asyncio.Event()
+
+        if run_state is None:
+            run_state = {}
 
         existing_state = await self.app.aget_state(config)
 
@@ -96,7 +101,8 @@ class Agent:
                 "target_scope": target,
             }
 
-        time_left = target.task_duration
+        time_left = duration_seconds
+        run_state["time_left"] = time_left
 
         while not stop_event.is_set() and time_left > 0:
             loop_start = time.monotonic()
@@ -161,6 +167,7 @@ class Agent:
 
                 if not requires_interrupt:
                     time_left -= (time.monotonic() - loop_start)
+                    run_state["time_left"] = time_left
                     input_data = None
                     continue
                 else:
@@ -175,13 +182,18 @@ class Agent:
                         "accept": accept,
                         "tool_calls": tool_calls,
                     }
-                    
+
                     # Pause timer awaiting for user's action
                     time_left -= (time.monotonic() - loop_start)
+                    run_state["time_left"] = time_left
 
                     yield interrupt_action
 
                     is_approved: bool = await resume_future
+
+                    # Resume the clock fresh - time spent waiting for the
+                    # user's decision must not count against the budget.
+                    loop_start = time.monotonic()
 
                     if is_approved:
                         input_data = None
@@ -203,3 +215,4 @@ class Agent:
                 break
 
             time_left -= (time.monotonic() - loop_start)
+            run_state["time_left"] = time_left

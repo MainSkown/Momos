@@ -15,6 +15,7 @@ from src.core.kali_integration import kali_registry
 from src.schemas.target_scheme import Target
 from src.schemas.project_scheme import ProjectSettings
 from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogType
+from src.schemas.agent_run_scheme import AgentRun, AgentRunResponse, AgentRunState
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
@@ -27,6 +28,7 @@ from src.websocket import (
     AgentInterruptRequest,
     AgentInterruptResponseMessage,
     AgentRunStatus,
+    AgentRunTimer,
 )
 
 # thread_id (== target_id) -> pending interrupt's accept callback
@@ -34,6 +36,12 @@ _pending_interrupts: Dict[str, Callable[[bool], None]] = {}
 
 # target_id -> project_id, for every target currently running an agent
 _running_targets: Dict[str, str] = {}
+
+# target_id -> the active run's stop_event, so a pause request can trigger it
+_stop_events: Dict[str, asyncio.Event] = {}
+
+# target_id -> the active run's shared time-remaining state (see Agent.start_agent)
+_run_states: Dict[str, dict] = {}
 
 
 async def _set_running(project_id: str, target_id: str, running: bool):
@@ -52,12 +60,45 @@ async def _set_running(project_id: str, target_id: str, running: bool):
     )
 
 
+async def _persist_run_state(
+    project_id: str, target_id: str, status: AgentRunState, remaining_seconds: float
+) -> AgentRun:
+    run = AgentRun(
+        status=status,
+        remaining_seconds=max(0, int(remaining_seconds)),
+        project_id=project_id,
+        target_id=target_id,
+    )
+
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(None, db_manager.upsert_agent_run, run)
+
+    await ws_registry.send_message(
+        AgentRunTimer(
+            type=WsTypes.AgentRunTimer,
+            run=AgentRunResponse.model_validate(saved),
+        )
+    )
+
+    return saved
+
+
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
     accept = _pending_interrupts.pop(message.target_id, None)
 
     if accept is None:
         print(f"No pending interrupt for target {message.target_id}. Ignoring.")
         return
+
+    # The agent is about to resume - flip the timer back to running immediately,
+    # rather than waiting for the next log message to arrive.
+    run_state = _run_states.get(message.target_id, {})
+    await _persist_run_state(
+        message.project_id,
+        message.target_id,
+        AgentRunState.RUNNING,
+        run_state.get("time_left", 0),
+    )
 
     accept(message.approved)
 
@@ -162,17 +203,15 @@ async def _persist_and_broadcast(
 
 class AgentService:
     @staticmethod
-    async def start_agent(project_id: str, target_id: str):
-        # Check if project exists
+    def _get_owned_target(project_id: str, target_id: str) -> Target:
         project = db_manager.get_project(project_id)
 
         if project is None:
             raise ProjectDoesNotExistException(
-                f"Tried accessing nonexistent project ({project_id}) when starting agent",
+                f"Tried accessing nonexistent project ({project_id})",
                 project_id,
             )
 
-        # Check for target, scoped to this project
         target = db_manager.get_target(target_id)
 
         if target is None or str(target.project_id) != str(project.id):
@@ -180,10 +219,25 @@ class AgentService:
                 f"Target {target_id} does not exist in project {project_id}", target_id
             )
 
+        return target
+
+    @staticmethod
+    async def start_agent(project_id: str, target_id: str):
+        target = AgentService._get_owned_target(project_id, target_id)
+
         if target.task_duration is None or target.task_duration == 0:
             raise DurationNotDefinedInTarget(
                 f"Target {target_id} does not have defined scan duration"
             )
+
+        # Resume from a paused run's remaining time, if one exists - otherwise
+        # start fresh with the target's full configured duration.
+        existing_run = db_manager.get_agent_run(target_id)
+
+        if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
+            duration_seconds = existing_run.remaining_seconds
+        else:
+            duration_seconds = target.task_duration
 
         # Initiate kali manager for this project
         # TODO - Message to frontend that container init
@@ -201,8 +255,26 @@ class AgentService:
         )
 
         asyncio.create_task(
-            AgentService._run_agent(agent, target, project_settings)
+            AgentService._run_agent(agent, target, project_settings, duration_seconds)
         )
+
+    @staticmethod
+    async def pause_agent(project_id: str, target_id: str):
+        AgentService._get_owned_target(project_id, target_id)
+
+        stop_event = _stop_events.get(target_id)
+
+        if stop_event is None:
+            # Not currently running - nothing to pause
+            return
+
+        stop_event.set()
+
+    @staticmethod
+    def get_run(project_id: str, target_id: str) -> Optional[AgentRun]:
+        AgentService._get_owned_target(project_id, target_id)
+
+        return db_manager.get_agent_run(target_id)
 
     @staticmethod
     def is_project_running(project_id: str) -> bool:
@@ -210,12 +282,23 @@ class AgentService:
 
     @staticmethod
     async def _run_agent(
-        agent: Agent, target: Target, project_settings: ProjectSettings
+        agent: Agent,
+        target: Target,
+        project_settings: ProjectSettings,
+        duration_seconds: int,
     ):
         project_id = str(target.project_id)
         target_id = str(target.id)
 
+        stop_event = asyncio.Event()
+        run_state: dict = {}
+        _stop_events[target_id] = stop_event
+        _run_states[target_id] = run_state
+
         await _set_running(project_id, target_id, True)
+        await _persist_run_state(
+            project_id, target_id, AgentRunState.RUNNING, duration_seconds
+        )
 
         try:
             await _persist_and_broadcast(
@@ -230,10 +313,20 @@ class AgentService:
                 start_prompt=project_settings.starting_prompt,
                 thread_id=target_id,
                 should_interrupt=project_settings.should_interrupt,
+                duration_seconds=duration_seconds,
+                stop_event=stop_event,
+                run_state=run_state,
             ):
                 if isinstance(event, dict):
                     # AgentInterruptAction - pause and wait for approval
                     _pending_interrupts[target_id] = event["accept"]
+
+                    await _persist_run_state(
+                        project_id,
+                        target_id,
+                        AgentRunState.INTERRUPTED,
+                        run_state.get("time_left", 0),
+                    )
 
                     await ws_registry.send_message(
                         AgentInterruptRequest(
@@ -255,11 +348,23 @@ class AgentService:
                     await _persist_and_broadcast(
                         project_id, target_id, log_type, content, tool_name
                     )
+
+            # The generator exhausted normally - either the user paused it
+            # (stop_event was set) or it genuinely ran out of time/finished.
+            final_status = (
+                AgentRunState.PAUSED if stop_event.is_set() else AgentRunState.FINISHED
+            )
+            await _persist_run_state(
+                project_id, target_id, final_status, run_state.get("time_left", 0)
+            )
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
             await _persist_and_broadcast(
                 project_id, target_id, "action", f"Agent run failed: {e}"
             )
+            await _persist_run_state(project_id, target_id, AgentRunState.FINISHED, 0)
         finally:
             _pending_interrupts.pop(target_id, None)
+            _stop_events.pop(target_id, None)
+            _run_states.pop(target_id, None)
             await _set_running(project_id, target_id, False)

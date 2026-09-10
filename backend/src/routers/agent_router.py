@@ -1,7 +1,8 @@
+from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from src.core import db_manager
-from src.schemas import AgentLogResponse
+from src.schemas import AgentLogResponse, AgentRunResponse
 from src.services import AgentService
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
@@ -38,6 +39,24 @@ async def start_agent(project_id: str, target_id: str):
             detail="Could not start agent",
         )
 
+@router.post(
+    "/project/{project_id}/target/{target_id}/agent/pause", operation_id="PauseAgent"
+)
+async def pause_agent(project_id: str, target_id: str):
+    try:
+        await AgentService.pause_agent(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not pause agent: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not pause agent",
+        )
+
 @router.get(
     "/project/{project_id}/agent_logs",
     response_model=list[AgentLogResponse],
@@ -60,3 +79,23 @@ def get_project_agent_logs(project_id: str):
 )
 def is_project_agent_running(project_id: str):
     return AgentRunningResponse(running=AgentService.is_project_running(project_id))
+
+@router.get(
+    "/project/{project_id}/target/{target_id}/agent/run",
+    response_model=Optional[AgentRunResponse],
+    operation_id="GetTargetAgentRun",
+)
+def get_target_agent_run(project_id: str, target_id: str):
+    try:
+        return AgentService.get_run(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not fetch agent run: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not fetch agent run",
+        )
