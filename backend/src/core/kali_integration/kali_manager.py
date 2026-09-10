@@ -79,6 +79,7 @@ class KaliManger:
             tty=True,
             network_mode="host",
             remove=True,
+            cap_add=["NET_ADMIN", "NET_RAW"],
         )
 
         self._configure_container()
