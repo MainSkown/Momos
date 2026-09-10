@@ -11,12 +11,11 @@
 
   <Dialog
     v-model:visible="showDownloadConfirm"
-    title="Model not installed"
+    :title="$t('models.not_installed_title')"
     :no-close-button="true"
   >
     <span class="text-center flex-center" style="margin-bottom: 20px">
-      "{{ pendingModel?.name }}" is not installed. Download it now and use it
-      once ready?
+      {{ $t("models.not_installed_body", { name: pendingModel?.name }) }}
     </span>
     <div class="row flex-center gap-high" style="padding-inline: 10px">
       <button
@@ -24,14 +23,14 @@
         style="flex-grow: 1"
         @click="confirmDownload"
       >
-        <span>Yes</span>
+        <span>{{ $t("universal.yes") }}</span>
       </button>
       <button
         class="button border"
         style="flex-grow: 1"
         @click="cancelDownload"
       >
-        <span>No</span>
+        <span>{{ $t("universal.no") }}</span>
       </button>
     </div>
   </Dialog>
@@ -40,6 +39,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { toast } from "vue3-toastify";
+import { useI18n } from "vue-i18n";
 import Dialog from "@/components/reusable/Dialog.vue";
 import AISettings from "@/components/Settings/AISettings.vue";
 import { type OllamaModelData } from "@/api/types.gen";
@@ -47,6 +47,7 @@ import { aiModelsManager } from "@/components/tools";
 import { useMomosStore } from "@/store/momos_store";
 
 const store = useMomosStore();
+const { t } = useI18n();
 
 defineProps<{
   title: string;
@@ -95,14 +96,14 @@ async function confirmDownload() {
       await store.downloadModel(model.name);
     } catch (error) {
       console.error("Failed to start model download:", error);
-      toast.error(`Failed to download model "${model.name}"`, {
+      toast.error(t("notify.model_download_failed", { name: model.name }), {
         position: toast.POSITION.TOP_CENTER,
       });
       return;
     }
   }
 
-  toast.info(`Downloading "${model.name}" in the background...`, {
+  toast.info(t("notify.model_downloading", { name: model.name }), {
     position: toast.POSITION.TOP_CENTER,
   });
 
@@ -113,7 +114,7 @@ async function confirmDownload() {
         stopWatch();
         aiModelsManager.refreshInstalledModels();
         emits("select", model);
-        toast.success(`"${model.name}" downloaded and selected`, {
+        toast.success(t("notify.model_downloaded", { name: model.name }), {
           position: toast.POSITION.TOP_CENTER,
         });
       }

@@ -14,7 +14,7 @@
       </div>
       <div class="separator" />
       <!-- Agent models -->
-      <span class="text-bold">Recommended agent models</span>
+      <span class="text-bold">{{ $t("models.recommended_agent") }}</span>
       <div class="separator" />
       <div class="suggestions-list">
         <div
@@ -45,8 +45,8 @@
         </span>
         <span>{{
           show_installed_agent_models
-            ? "Hide installed models"
-            : "Show installed models"
+            ? $t("models.hide_installed")
+            : $t("models.show_installed")
         }}</span>
       </button>
       <div v-if="show_installed_agent_models" class="suggestions-list">
@@ -67,7 +67,7 @@
       </div>
       <!-- Parsing models -->
       <div class="separator" />
-      <span class="text-bold">Recommended parsing models</span>
+      <span class="text-bold">{{ $t("models.recommended_parsing") }}</span>
       <div class="separator" />
       <div class="suggestions-list">
         <div
@@ -98,8 +98,8 @@
         </span>
         <span>{{
           show_installed_parsing_models
-            ? "Hide installed models"
-            : "Show installed models"
+            ? $t("models.hide_installed")
+            : $t("models.show_installed")
         }}</span>
       </button>
       <div v-if="show_installed_parsing_models" class="suggestions-list">
@@ -130,12 +130,14 @@ import Dialog from "@/components/reusable/Dialog.vue";
 import { useMomosStore } from "@/store/momos_store";
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue3-toastify";
+import { useI18n } from "vue-i18n";
 import { aiModelsManager } from "../tools";
 import AIBox from "@/components/Settings/AIBox.vue";
 
 const show_add_project = defineModel({ type: Boolean, default: false });
 
 const store = useMomosStore();
+const { t } = useI18n();
 
 const projects_name = ref<string>("");
 const selected_agent_model_name = ref<string>("");
@@ -189,27 +191,27 @@ async function refreshInstalledModels() {
 
 async function add_Project() {
   if (projects_name.value.trim().length === 0) {
-    toast.error("Name can't be empty");
+    toast.error(t("notify.name_empty"));
     return;
   }
 
   if (selected_agent_model_name.value.length === 0) {
-    toast.error("Agent model must be selected");
+    toast.error(t("notify.agent_model_required"));
     return;
   }
 
   if (selected_parsing_model_name.value.length === 0) {
-    toast.error("Parsing model must be selected");
+    toast.error(t("notify.parsing_model_required"));
     return;
   }
 
   if (!isInstalled(selected_agent_model_name.value)) {
-    toast.error("Agent model must be downloaded first");
+    toast.error(t("notify.agent_model_not_downloaded"));
     return;
   }
 
   if (!isInstalled(selected_parsing_model_name.value)) {
-    toast.error("Parsing model must be downloaded first");
+    toast.error(t("notify.parsing_model_not_downloaded"));
     return;
   }
 
@@ -221,7 +223,7 @@ async function add_Project() {
     );
   } catch (error) {
     console.error(error);
-    toast.error("Could not create project");
+    toast.error(t("notify.could_not_create_project"));
     return;
   }
 

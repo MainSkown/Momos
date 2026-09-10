@@ -81,18 +81,18 @@
       <div class="separator" />
 
       <div class="row flex-center gap-low options">
-        <span>Model:</span>
+        <span>{{ $t("tools.model") }}:</span>
 
         <select v-model="selectedModel" class="input-field full-width">
-          <option>ChatGPT</option>
-          <option>Gemini</option>
-          <option>Big Boy AI</option>
+          <option>{{ $t("tools.model_chatgpt") }}</option>
+          <option>{{ $t("tools.model_gemini") }}</option>
+          <option>{{ $t("tools.model_bigboy") }}</option>
         </select>
       </div>
 
       <div class="row gap-low options">
-        <span>Kali Instance:</span>
-        <span class="text-inactive text-bold">inactive</span>
+        <span>{{ $t("tools.kali_instance") }}:</span>
+        <span class="text-inactive text-bold">{{ $t("tools.inactive") }}</span>
       </div>
 
       <button

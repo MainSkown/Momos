@@ -7,7 +7,7 @@
     <div class="scrollable-panel" style="max-height: 75vh">
       <!-- Installed -->
       <div v-if="installed_models.length > 0">
-        <div class="family-name">Installed</div>
+        <div class="family-name">{{ $t("models.installed") }}</div>
         <div class="separator" />
         <div class="suggestions-list">
           <AIBox
@@ -28,7 +28,7 @@
         <div class="row full-width">
           <!-- Agent -->
           <div class="family-section full-width">
-            <div class="family-name border-right">Recommended agent models</div>
+            <div class="family-name border-right">{{ $t("models.recommended_agent") }}</div>
             <div class="separator" />
             <div
               class="suggestions-list border-right"
@@ -50,7 +50,7 @@
           <!-- Parsing -->
           <div class="family-section full-width" style="padding-left: 10px;">
             <div class="family-name">
-              Recommended parsing models
+              {{ $t("models.recommended_parsing") }}
             </div>
             <div class="separator" />
             <div class="suggestions-list">

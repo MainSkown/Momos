@@ -1,7 +1,7 @@
 <template>
   <div class="border field">
     <div class="row">
-      <span class="text-red" style="padding-left: 10px">User Console</span>
+      <span class="text-red" style="padding-left: 10px">{{ $t("console.user_console") }}</span>
       <!-- user radio -->
       <div
         v-if="client_dict[store.openedProject] !== undefined"
@@ -25,7 +25,7 @@
             border-bottom: none;
             width: 70px;
           "
-          >Root</label
+          >{{ $t("console.root") }}</label
         >
 
         <!-- Momos option -->
@@ -45,7 +45,7 @@
             border-bottom: none;
             width: 70px;
           "
-          >Momos</label
+          >{{ $t("console.momos") }}</label
         >
       </div>
     </div>
@@ -53,7 +53,7 @@
     <div class="column" v-if="client_dict[store.openedProject] !== undefined">
       <div class="terminal-output-screen scrollable-panel" ref="terminalRef">
         <div class="system-message">
-          Session initialized. Select privileges above.
+          {{ $t("console.session_initialized") }}
         </div>
 
         <div
@@ -93,13 +93,13 @@
       v-else-if="loading_dict[store.openedProject] === true"
     >
       <div class="flex flex-center connecting border text-center">
-        <span>Connecting to client: </span> <span class="loader" />
+        <span>{{ $t("console.connecting") }}</span> <span class="loader" />
       </div>
     </div>
 
     <div class="column full-height" v-else>
       <button class="connecting button border" @click="createNewKaliUser">
-        <h3>Connect to Kali</h3>
+        <h3>{{ $t("console.connect_to_kali") }}</h3>
       </button>
     </div>
   </div>

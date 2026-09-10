@@ -66,7 +66,7 @@
                 </span>
                 <Tooltip
                   v-else
-                  message="To start work first define task duration in settings"
+                  :message="$t('targets.duration_required')"
                 >
                   <span class="material-icons-outlined"> timer_off </span>
                 </Tooltip>

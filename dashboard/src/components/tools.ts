@@ -35,11 +35,11 @@ export enum USER_SETTINGS_KEYS {
 export const user_settings: tTool[] = [
   {
     key: USER_SETTINGS_KEYS.AI,
-    name: 'AI'
+    name: 'settings.ai'
   },
   {
     key: USER_SETTINGS_KEYS.USER_OPTIONS,
-    name: 'User Options'
+    name: 'settings.user_options'
   }
 ]
 

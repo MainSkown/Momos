@@ -6,36 +6,36 @@
     <div class="row settings-columns full-width gap-mid">
       <div class="settings-left column gap-low">
         <div class="field-group">
-          <label class="text-bold">Should Interrupt</label>
+          <label class="text-bold">{{ $t("settings.should_interrupt") }}</label>
           <div class="row gap-low flex-center">
             <input
               v-model="project_settings.should_interrupt"
               class="checkbox-input"
               type="checkbox"
             />
-            <span class="text-gray">Enable interruption handling</span>
+            <span class="text-gray">{{ $t("settings.enable_interruption") }}</span>
           </div>
         </div>
 
         <div class="field-group">
-          <label class="text-bold">Base Model</label>
+          <label class="text-bold">{{ $t("models.base_model") }}</label>
           <button
             type="button"
             class="button border full-width model-select-button"
             @click="showBaseModelDialog = true"
           >
-            {{ project_settings.base_model_name || "Select a model" }}
+            {{ project_settings.base_model_name || $t("models.select_model") }}
           </button>
         </div>
 
         <div class="field-group">
-          <label class="text-bold">Parsing Model</label>
+          <label class="text-bold">{{ $t("models.parsing_model") }}</label>
           <button
             type="button"
             class="button border full-width model-select-button"
             @click="showParsingModelDialog = true"
           >
-            {{ project_settings.parsing_model_name || "Select a model" }}
+            {{ project_settings.parsing_model_name || $t("models.select_model") }}
           </button>
         </div>
 
@@ -45,7 +45,7 @@
             class="button border delete-button full-width"
             :disabled="isDeleting"
           >
-            {{ isDeleting ? "Deleting..." : "Delete Project" }}
+            {{ isDeleting ? $t("project.deleting") : $t("project.delete") }}
           </button>
 
           <button
@@ -53,13 +53,13 @@
             class="button border save-button full-width"
             :disabled="isSaving"
           >
-            {{ isSaving ? "Saving..." : "Save Settings" }}
+            {{ isSaving ? $t("project.saving") : $t("project.save_settings") }}
           </button>
         </div>
       </div>
 
       <div class="settings-right column gap-low">
-        <label class="text-bold">Starting Prompt</label>
+        <label class="text-bold">{{ $t("settings.starting_prompt") }}</label>
 
         <MdEditor
           v-model="project_settings.starting_prompt"
@@ -69,7 +69,7 @@
         />
 
         <div class="prompt-legend">
-          <span class="text-bold">Available placeholders</span>
+          <span class="text-bold">{{ $t("settings.available_placeholders") }}</span>
           <div class="legend-list">
             <div
               v-for="item in promptPlaceholders"
@@ -89,11 +89,11 @@
 
   <Dialog
     v-model:visible="showDeleteDialog"
-    :title="'Delete Project'"
+    :title="$t('project.delete')"
     :no-close-button="true"
   >
     <span class="text-center flex-center" style="margin-bottom: 20px"
-      >Are you sure you want to delete this project?</span
+      >{{ $t("project.delete_confirm") }}</span
     >
     <div class="row flex-center gap-high" style="padding-inline: 10px">
       <button
@@ -101,14 +101,14 @@
         style="flex-grow: 1"
         @click="confirmDeleteProject"
       >
-        <span>Yes</span>
+        <span>{{ $t("universal.yes") }}</span>
       </button>
       <button
         class="button border"
         style="flex-grow: 1"
         @click="showDeleteDialog = false"
       >
-        <span>No</span>
+        <span>{{ $t("universal.no") }}</span>
       </button>
     </div>
   </Dialog>
@@ -116,7 +116,7 @@
   <ModelPickerDialog
     v-if="project_settings !== null"
     v-model:visible="showBaseModelDialog"
-    title="Select Base Model"
+    :title="$t('models.select_base_model')"
     :selected-model-name="project_settings.base_model_name"
     @select="onBaseModelSelected"
   />
@@ -124,7 +124,7 @@
   <ModelPickerDialog
     v-if="project_settings !== null"
     v-model:visible="showParsingModelDialog"
-    title="Select Parsing Model"
+    :title="$t('models.select_parsing_model')"
     :selected-model-name="project_settings.parsing_model_name"
     @select="onParsingModelSelected"
   />
@@ -135,6 +135,7 @@ import { getProjectSettings, updateProjectSettings } from "@/api";
 import { onMounted, ref, watch } from "vue";
 import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
+import { useI18n } from "vue-i18n";
 import "@/assets/md-editor.css";
 
 import { MdEditor } from "md-editor-v3";
@@ -142,6 +143,7 @@ import Dialog from "@/components/reusable/Dialog.vue";
 import ModelPickerDialog from "./ModelPickerDialog.vue";
 
 const store = useMomosStore();
+const { t } = useI18n();
 const project_settings = ref<ProjectSettings | null>(null);
 const isSaving = ref(false);
 const isDeleting = ref(false);
@@ -150,11 +152,11 @@ const showBaseModelDialog = ref(false);
 const showParsingModelDialog = ref(false);
 
 const promptPlaceholders = [
-  { placeholder: "{{name}}", description: "Target's name" },
-  { placeholder: "{{description}}", description: "Target's description" },
-  { placeholder: "{{ipv4}}", description: "Target's IPv4 address" },
-  { placeholder: "{{ipv6}}", description: "Target's IPv6 address" },
-  { placeholder: "{{ports}}", description: "Target's authorized ports" },
+  { placeholder: "{{name}}", description: t("project.placeholder_name") },
+  { placeholder: "{{description}}", description: t("project.placeholder_description") },
+  { placeholder: "{{ipv4}}", description: t("project.placeholder_ipv4") },
+  { placeholder: "{{ipv6}}", description: t("project.placeholder_ipv6") },
+  { placeholder: "{{ports}}", description: t("project.placeholder_ports") },
 ];
 
 async function load_settings(projectID: string) {

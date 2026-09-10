@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:visible="showSettings" title="Settings">
+  <Dialog v-model:visible="showSettings" :title="$t('settings.settings')">
     <div class="row gap-low settings">
       <!-- Settings Options -->
       <div class="column full border-right">

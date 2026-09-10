@@ -9,7 +9,7 @@
 
       <!-- Summary -->
       <div class="border field">
-        <span class="text-red" style="padding-left: 10px">Summary</span>
+        <span class="text-red" style="padding-left: 10px">{{ $t("overview.summary") }}</span>
         <div class="separator" />
       </div>
     </div>
@@ -20,7 +20,7 @@
        <UserConsole class="field"/>
       
       <div class="border field">
-        <span class="text-red" style="padding-left: 10px">Agent Logs</span>
+        <span class="text-red" style="padding-left: 10px">{{ $t("overview.agent_logs") }}</span>
         <div class="separator" />
       </div>
     </div>

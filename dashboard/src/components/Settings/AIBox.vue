@@ -9,8 +9,8 @@
       class="button action-button"
       :class="installed ? 'action-button-delete' : 'action-button-add'"
       type="button"
-      :aria-label="installed ? 'Delete model' : 'Install model'"
-      :title="installed ? 'Delete model' : 'Install model'"
+      :aria-label="installed ? $t('models.delete') : $t('models.install')"
+      :title="installed ? $t('models.delete') : $t('models.install')"
       @click.stop="
         async () => {
           if (!installed) await store.downloadModel(model.name);
@@ -42,16 +42,16 @@
       </div>
       <div class="model-meta-expanded">
         <span class="model-meta model-meta-full"
-          >Parameters: {{ model.parameters_size_b.toFixed(1) }}B</span
+          >{{ $t("models.parameters") }}: {{ model.parameters_size_b.toFixed(1) }}B</span
         >
         <span class="model-meta model-meta-full"
-          >Size: {{ model.size_gb.toFixed(1) }}GB</span
+          >{{ $t("models.size") }}: {{ model.size_gb.toFixed(1) }}GB</span
         >
         <span class="model-meta model-meta-full"
-          >Context window: {{ model.context_window / 1000 }}K</span
+          >{{ $t("models.context_window") }}: {{ model.context_window / 1000 }}K</span
         >
         <span v-if="model.thinking" class="model-meta model-meta-full"
-          >Thinking</span
+          >{{ $t("models.thinking") }}</span
         >
       </div>
       <div v-if="isBeingDownloaded()">
@@ -130,7 +130,7 @@ async function _deleteModel() {
     });
 
     if (result.response?.status === 200) {
-      toast.success($t("Deleted"), {
+      toast.success($t("models.deleted"), {
         position: toast.POSITION.TOP_CENTER,
       });
       emits("deleted");
