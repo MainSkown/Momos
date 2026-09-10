@@ -10,7 +10,7 @@ from langchain_core.messages import (
 from langchain_ollama import ChatOllama
 from src.core import db_manager, settings
 from src.core.agent import Agent, agent_tools
-from src.core.agent.agent_checkpointer import checkpointer
+from src.core.agent import agent_checkpointer
 from src.core.kali_integration import kali_registry
 from src.schemas.target_scheme import Target
 from src.schemas.project_scheme import ProjectSettings
@@ -20,6 +20,7 @@ from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
     DurationNotDefinedInTarget,
+    AgentAlreadyRunningException,
 )
 from src.websocket import (
     ws_registry,
@@ -169,12 +170,18 @@ async def _summarize_for_log(project_id: str, content: str) -> str:
 
     parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
 
-    response = await parser_llm.ainvoke(
-        [
-            SystemMessage(content=LOG_SUMMARY_SYSTEM_PROMPT),
-            HumanMessage(content=content),
-        ]
-    )
+    try:
+        response = await parser_llm.ainvoke(
+            [
+                SystemMessage(content=LOG_SUMMARY_SYSTEM_PROMPT),
+                HumanMessage(content=content),
+            ]
+        )
+    except Exception as e:
+        # A flaky/unreachable parsing model must not take down the whole
+        # agent run - fall back to the raw content for this one log entry.
+        print(f"Log summarization failed, using raw content: {e}")
+        return content
 
     return str(response.content)
 
@@ -257,6 +264,11 @@ class AgentService:
     async def start_agent(project_id: str, target_id: str):
         target = AgentService._get_owned_target(project_id, target_id)
 
+        if target_id in _running_targets:
+            raise AgentAlreadyRunningException(
+                f"Agent is already running for target {target_id}", target_id
+            )
+
         if target.task_duration is None or target.task_duration == 0:
             raise DurationNotDefinedInTarget(
                 f"Target {target_id} does not have defined scan duration"
@@ -281,7 +293,7 @@ class AgentService:
 
         agent = Agent(
             model_name=project_settings.base_model_name,
-            checkpointer=checkpointer,
+            checkpointer=agent_checkpointer.checkpointer,
             project_id=project_id,
             target_id=target_id,
         )

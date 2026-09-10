@@ -41,12 +41,18 @@ async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
 
     parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
 
-    response = await parser_llm.ainvoke(
-        [
-            SystemMessage(content=PARSER_SYSTEM_PROMPT),
-            HumanMessage(content=f"Command: {command}\n\nOutput:\n{raw_output}"),
-        ]
-    )
+    try:
+        response = await parser_llm.ainvoke(
+            [
+                SystemMessage(content=PARSER_SYSTEM_PROMPT),
+                HumanMessage(content=f"Command: {command}\n\nOutput:\n{raw_output}"),
+            ]
+        )
+    except Exception as e:
+        # Don't lose a real command result just because the parsing model
+        # hiccuped - give the agent the raw output instead.
+        print(f"Output parsing failed, using raw output: {e}")
+        return raw_output
 
     return str(response.content)
 

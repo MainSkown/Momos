@@ -65,6 +65,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { toast } from "vue3-toastify";
 import {
   getTargetAgentRun,
   startAgent,
@@ -135,17 +136,31 @@ async function loadRun() {
 async function handleStart() {
   if (!hasDuration.value) return;
 
-  await startAgent({
+  const result = await startAgent({
     path: { project_id: props.target.project_id, target_id: props.target.id },
   });
+
+  if (result.error) {
+    const detail = (result.error as { detail?: string }).detail;
+    toast.error(detail ?? $t("targets.agent_start_failed"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
+  }
 }
 
 async function handlePause() {
   if (run.value?.status !== "running") return;
 
-  await pauseAgent({
+  const result = await pauseAgent({
     path: { project_id: props.target.project_id, target_id: props.target.id },
   });
+
+  if (result.error) {
+    const detail = (result.error as { detail?: string }).detail;
+    toast.error(detail ?? $t("targets.agent_pause_failed"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
+  }
 }
 
 function respondToInterrupt(approved: boolean) {

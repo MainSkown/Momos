@@ -35,7 +35,9 @@ export const en = {
         delete_info: "This action cannot be undone.",
         scan_duration: "Enter scan duration",
         duration_required: "To start work first define task duration in settings",
-        agent_wants_to_run: "Agent wants to run the following"
+        agent_wants_to_run: "Agent wants to run the following",
+        agent_start_failed: "Could not start the agent",
+        agent_pause_failed: "Could not pause the agent"
     },
 
     notify: {

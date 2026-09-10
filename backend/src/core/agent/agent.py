@@ -96,9 +96,16 @@ class Agent:
         if existing_state.values:
             input_data = None
         else:
+            target_scope: AgentTargetScope = {
+                "name": target.name,
+                "ipv4": target.ipv4,
+                "ipv6": target.ipv6,
+                "description": target.description,
+                "ports": target.ports,
+            }
             input_data = {
                 "messages": [("user", start_prompt)],
-                "target_scope": target,
+                "target_scope": target_scope,
             }
 
         time_left = duration_seconds
@@ -142,10 +149,15 @@ class Agent:
                     event = get_event_task.result()
                     if event is None:
                         break
-                    
-                    if "messages" in event:
-                        last_message: BaseMessage = event["messages"][-1]
-                        yield last_message
+
+                    # stream_mode="updates" yields {node_name: {"messages": [...]}} -
+                    # the update is keyed by the node that produced it, not "messages"
+                    # directly.
+                    for node_update in event.values():
+                        if not isinstance(node_update, dict):
+                            continue
+                        for message in node_update.get("messages", []):
+                            yield message
             finally:
                 if not stream_task.done():
                     stream_task.cancel()
