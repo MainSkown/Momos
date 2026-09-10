@@ -9,9 +9,12 @@ from enum import Enum
 logger = logging.getLogger("momos.kali")
 
 
-class KALI_USERS(Enum):
+class KALI_USERS(str, Enum):
     momos = "momos"
     root = "root"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 MOMOS_USER: Final = KALI_USERS.momos
