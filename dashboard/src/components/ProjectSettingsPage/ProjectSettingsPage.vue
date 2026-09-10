@@ -19,28 +19,30 @@
 
         <div class="field-group">
           <label class="text-bold">Base Model</label>
-          <select
-            v-model="project_settings.base_model_name"
-            class="input-field border full-width"
+          <button
+            type="button"
+            class="button border full-width model-select-button"
+            @click="showBaseModelDialog = true"
           >
-            <option value="TODO">TODO</option>
-          </select>
+            {{ project_settings.base_model_name || "Select a model" }}
+          </button>
         </div>
 
         <div class="field-group">
           <label class="text-bold">Parsing Model</label>
-          <select
-            v-model="project_settings.parsing_model_name"
-            class="input-field border full-width"
+          <button
+            type="button"
+            class="button border full-width model-select-button"
+            @click="showParsingModelDialog = true"
           >
-            <option value="TODO">TODO</option>
-          </select>
+            {{ project_settings.parsing_model_name || "Select a model" }}
+          </button>
         </div>
 
-        <div class="row gap-low action-row">
+        <div class="column gap-low full-width">
           <button
             @click="showDeleteDialog = true"
-            class="button border delete-button"
+            class="button border delete-button full-width"
             :disabled="isDeleting"
           >
             {{ isDeleting ? "Deleting..." : "Delete Project" }}
@@ -48,7 +50,7 @@
 
           <button
             @click="update_settings"
-            class="button border save-button"
+            class="button border save-button full-width"
             :disabled="isSaving"
           >
             {{ isSaving ? "Saving..." : "Save Settings" }}
@@ -65,6 +67,20 @@
           :toolbars-exclude="['github']"
           theme="dark"
         />
+
+        <div class="prompt-legend">
+          <span class="text-bold">Available placeholders</span>
+          <div class="legend-list">
+            <div
+              v-for="item in promptPlaceholders"
+              :key="item.placeholder"
+              class="legend-item"
+            >
+              <code class="legend-placeholder">{{ item.placeholder }}</code>
+              <span class="text-gray">{{ item.description }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -96,23 +112,50 @@
       </button>
     </div>
   </Dialog>
+
+  <ModelPickerDialog
+    v-if="project_settings !== null"
+    v-model:visible="showBaseModelDialog"
+    title="Select Base Model"
+    :selected-model-name="project_settings.base_model_name"
+    @select="onBaseModelSelected"
+  />
+
+  <ModelPickerDialog
+    v-if="project_settings !== null"
+    v-model:visible="showParsingModelDialog"
+    title="Select Parsing Model"
+    :selected-model-name="project_settings.parsing_model_name"
+    @select="onParsingModelSelected"
+  />
 </template>
 
 <script setup lang="ts">
 import { getProjectSettings, updateProjectSettings } from "@/api";
 import { onMounted, ref, watch } from "vue";
-import { type ProjectSettings } from "@/api/types.gen";
+import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
 import "@/assets/md-editor.css";
 
 import { MdEditor } from "md-editor-v3";
 import Dialog from "@/components/reusable/Dialog.vue";
+import ModelPickerDialog from "./ModelPickerDialog.vue";
 
 const store = useMomosStore();
 const project_settings = ref<ProjectSettings | null>(null);
 const isSaving = ref(false);
 const isDeleting = ref(false);
 const showDeleteDialog = ref(false);
+const showBaseModelDialog = ref(false);
+const showParsingModelDialog = ref(false);
+
+const promptPlaceholders = [
+  { placeholder: "{{name}}", description: "Target's name" },
+  { placeholder: "{{description}}", description: "Target's description" },
+  { placeholder: "{{ipv4}}", description: "Target's IPv4 address" },
+  { placeholder: "{{ipv6}}", description: "Target's IPv6 address" },
+  { placeholder: "{{ports}}", description: "Target's authorized ports" },
+];
 
 async function load_settings(projectID: string) {
   if (projectID.length === 0) {
@@ -131,14 +174,6 @@ async function load_settings(projectID: string) {
   }
 
   project_settings.value = result.data;
-
-  if (project_settings.value.base_model_name.length === 0) {
-    project_settings.value.base_model_name = "TODO";
-  }
-
-  if (project_settings.value.parsing_model_name.length === 0) {
-    project_settings.value.parsing_model_name = "TODO";
-  }
 }
 
 async function update_settings() {
@@ -160,6 +195,18 @@ async function update_settings() {
     } finally {
       isSaving.value = false;
     }
+  }
+}
+
+function onBaseModelSelected(model: OllamaModelData) {
+  if (project_settings.value !== null) {
+    project_settings.value.base_model_name = model.name;
+  }
+}
+
+function onParsingModelSelected(model: OllamaModelData) {
+  if (project_settings.value !== null) {
+    project_settings.value.parsing_model_name = model.name;
   }
 }
 
@@ -222,10 +269,6 @@ watch(
   justify-content: flex-end;
 }
 
-.action-row {
-  flex-wrap: wrap;
-}
-
 .save-button {
   padding: 0.6rem 1.2rem;
   min-width: 180px;
@@ -244,5 +287,39 @@ watch(
 .delete-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.model-select-button {
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.legend-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.legend-placeholder {
+  padding: 2px 6px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 </style>

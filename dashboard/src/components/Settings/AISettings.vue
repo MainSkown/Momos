@@ -15,7 +15,9 @@
             :key="model.name"
             :model="model"
             :installed="true"
+            :selected="isSelected(model.name)"
             @deleted="refreshInstalledModels"
+            @select="onSelect(model)"
           />
         </div>
       </div>
@@ -39,7 +41,9 @@
                 :key="model.name"
                 :model="model"
                 :installed="isInstalled(model.name)"
+                :selected="isSelected(model.name)"
                 @download-finished="refreshInstalledModels"
+                @select="onSelect(model)"
               />
             </div>
           </div>
@@ -57,7 +61,9 @@
                 :key="model.name"
                 :model="model"
                 :installed="isInstalled(model.name)"
+                :selected="isSelected(model.name)"
                 @download-finished="refreshInstalledModels"
+                @select="onSelect(model)"
               />
             </div>
           </div>
@@ -78,7 +84,9 @@
               :key="model.name"
               :model="model"
               :installed="isInstalled(model.name)"
+              :selected="isSelected(model.name)"
               @download-finished="refreshInstalledModels"
+              @select="onSelect(model)"
             />
           </div>
         </div>
@@ -91,8 +99,34 @@
 import { onMounted } from "vue";
 import { aiModelsManager } from "../tools";
 import AIBox from "./AIBox.vue";
+import { type OllamaModelData } from "@/api/types.gen";
+
+const props = withDefaults(
+  defineProps<{
+    selectable?: boolean;
+    selectedModelName?: string | null;
+  }>(),
+  {
+    selectable: false,
+    selectedModelName: null,
+  },
+);
+
+const emits = defineEmits<{
+  select: [model: OllamaModelData];
+}>();
 
 const installed_models = aiModelsManager.installed_models;
+
+function onSelect(model: OllamaModelData) {
+  if (props.selectable) {
+    emits("select", model);
+  }
+}
+
+function isSelected(modelName: string): boolean {
+  return props.selectable && props.selectedModelName === modelName;
+}
 
 async function refreshInstalledModels() {
   await aiModelsManager.refreshInstalledModels();
