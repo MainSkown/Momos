@@ -33,7 +33,7 @@ const selectedSettings = ref<string>(user_settings[0]?.key ?? '')
 
 <style scoped lang="css">
 .settings{
-  width: 80vw;
+  width: 85vw;
   height: 80vh;
 }
 
