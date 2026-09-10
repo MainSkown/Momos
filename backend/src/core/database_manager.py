@@ -53,8 +53,13 @@ class DatabaseManager:
     def add_project(self, project: Project):
         return self.add_to_database(project)
 
-    def get_project(self, project_id: str) -> Project | None:
-        parsed_uuid = uuid.UUID(project_id)
+    def _parse_uuid(self, value: str | uuid.UUID) -> uuid.UUID:
+        if isinstance(value, uuid.UUID):
+            return value
+        return uuid.UUID(value)
+
+    def get_project(self, project_id: str | uuid.UUID) -> Project | None:
+        parsed_uuid = self._parse_uuid(project_id)
 
         with Session(self.engine) as session:
             project = session.get(Project, parsed_uuid)
@@ -62,9 +67,9 @@ class DatabaseManager:
 
     # -- Managing Project Settings ---
     def get_project_settings(
-        self, project_id: str, create_new: bool = True
+        self, project_id: str | uuid.UUID, create_new: bool = True
     ) -> ProjectSettings | None:
-        parsed_uuid = uuid.UUID(project_id)
+        parsed_uuid = self._parse_uuid(project_id)
 
         with Session(self.engine) as session:
             settings = session.get(ProjectSettings, parsed_uuid)
@@ -87,9 +92,18 @@ class DatabaseManager:
             session.refresh(merged_settings)
             return merged_settings
 
+    def delete_project(self, project_id: str | uuid.UUID):
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            session.exec(delete(Target).where(Target.project_id == parsed_uuid))
+            session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
+            session.exec(delete(Project).where(Project.id == parsed_uuid))
+            session.commit()
+
     # --- Managing Targets ---
-    def get_all_targets_in_project(self, project_id: str) -> List[Target]:
-        parsed_uuid = uuid.UUID(project_id)
+    def get_all_targets_in_project(self, project_id: str | uuid.UUID) -> List[Target]:
+        parsed_uuid = self._parse_uuid(project_id)
 
         with Session(self.engine) as session:
             statement = select(Target).where(Target.project_id == parsed_uuid)
@@ -98,8 +112,8 @@ class DatabaseManager:
     def add_target(self, target: Target):
         return self.add_to_database(target)
 
-    def delete_target(self, target_id: str):
-        parsed_uuid = uuid.UUID(target_id)
+    def delete_target(self, target_id: str | uuid.UUID):
+        parsed_uuid = self._parse_uuid(target_id)
 
         with Session(self.engine) as session:
             statement = delete(Target).where(Target.id == parsed_uuid)
@@ -115,8 +129,8 @@ class DatabaseManager:
             return merged_target
             
 
-    def get_target(self, target_id: str) -> Target | None:
-        parsed_uuid = uuid.UUID(target_id)
+    def get_target(self, target_id: str | uuid.UUID) -> Target | None:
+        parsed_uuid = self._parse_uuid(target_id)
 
         with Session(self.engine) as session:
             target = session.get(Target, parsed_uuid)

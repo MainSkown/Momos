@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import {
   getAllProjects,
   postProject,
+  deleteProject,
   postTarget,
   getAllTargetsInProject,
   deleteTarget,
@@ -89,9 +90,19 @@ export const useMomosStore = defineStore("momos", {
       }
     },
 
-    async addProject(name: string) {
+    async addProject(
+      name: string,
+      base_model_name: string,
+      parsing_model_name: string,
+    ) {
       // Try adding project
-      const result = await postProject({ body: { name: name } });
+      const result = await postProject({
+        body: {
+          name: name,
+          base_model_name: base_model_name,
+          parsing_model_name: parsing_model_name,
+        },
+      });
 
       if (result.response?.status !== 200 || result.data === undefined) {
         throw Error("Could not add new project");
@@ -100,6 +111,22 @@ export const useMomosStore = defineStore("momos", {
       this.projects.push(result.data);
 
       if (this.openedProject === "") {
+        this.openedProject = this.projects.at(0)?.id || "";
+      }
+    },
+
+    async deleteProject(projectID: string) {
+      const result = await deleteProject({ path: { project_id: projectID } });
+
+      if (result.response?.status !== 204) {
+        throw Error("Could not delete project: " + projectID);
+      }
+
+      this.projects = this.projects.filter((project) => project.id !== projectID);
+      this.targets = this.targets.filter((target) => target.project_id !== projectID);
+      delete this.cmd_outputs[projectID];
+
+      if (this.openedProject === projectID) {
         this.openedProject = this.projects.at(0)?.id || "";
       }
     },

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 from src.services import ProjectService
 from src.schemas import (
     ProjectResponse,
-    ProjectBase,
+    ProjectRequest,
     ProjectSettings,
     ProjectSettingsBody,
 )
@@ -18,7 +18,7 @@ router = APIRouter()
 def all_projects():
     try:
         return ProjectService.get_projects()
-    except Exception as e:
+    except Exception as e:        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not return all projects",
@@ -26,10 +26,11 @@ def all_projects():
 
 
 @router.post("/project", response_model=ProjectResponse, operation_id="PostProject")
-def create_project(data: ProjectBase):
+def create_project(data: ProjectRequest):
     try:
-        return ProjectService.add_project(data.name)
+        return ProjectService.add_project(data.name, data.base_model_name, data.parsing_model_name)
     except Exception as e:
+        print(f"Exception happened when creating new project", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not create new project",
@@ -71,4 +72,21 @@ def update_project_settings(project_id: str, data: ProjectSettingsBody):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not update project settings",
+        )
+
+
+@router.delete(
+    "/project/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="DeleteProject",
+)
+def delete_project(project_id: str):
+    try:
+        ProjectService.delete_project(project_id)
+        return
+    except Exception as e:
+        print(f"Exception happened when deleting project {project_id}: ", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not delete project",
         )

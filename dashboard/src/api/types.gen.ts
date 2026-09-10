@@ -160,13 +160,21 @@ export type OllamaQueueDetails = {
 export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
 
 /**
- * ProjectBase
+ * ProjectRequest
  */
-export type ProjectBase = {
+export type ProjectRequest = {
     /**
      * Name
      */
     name: string;
+    /**
+     * Base Model Name
+     */
+    base_model_name: string;
+    /**
+     * Parsing Model Name
+     */
+    parsing_model_name: string;
 };
 
 /**
@@ -413,7 +421,7 @@ export type GetAllProjectsResponses = {
 export type GetAllProjectsResponse = GetAllProjectsResponses[keyof GetAllProjectsResponses];
 
 export type PostProjectData = {
-    body: ProjectBase;
+    body: ProjectRequest;
     path?: never;
     query?: never;
     url: '/api/project';
@@ -494,6 +502,36 @@ export type UpdateProjectSettingsResponses = {
      */
     200: unknown;
 };
+
+export type DeleteProjectData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}';
+};
+
+export type DeleteProjectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteProjectError = DeleteProjectErrors[keyof DeleteProjectErrors];
+
+export type DeleteProjectResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteProjectResponse = DeleteProjectResponses[keyof DeleteProjectResponses];
 
 export type GetAllTargetsInProjectData = {
     body?: never;
