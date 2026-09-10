@@ -26,10 +26,30 @@ from src.websocket import (
     AgentMessage,
     AgentInterruptRequest,
     AgentInterruptResponseMessage,
+    AgentRunStatus,
 )
 
 # thread_id (== target_id) -> pending interrupt's accept callback
 _pending_interrupts: Dict[str, Callable[[bool], None]] = {}
+
+# target_id -> project_id, for every target currently running an agent
+_running_targets: Dict[str, str] = {}
+
+
+async def _set_running(project_id: str, target_id: str, running: bool):
+    if running:
+        _running_targets[target_id] = project_id
+    else:
+        _running_targets.pop(target_id, None)
+
+    await ws_registry.send_message(
+        AgentRunStatus(
+            type=WsTypes.AgentRunStatus,
+            project_id=project_id,
+            target_id=target_id,
+            running=running,
+        )
+    )
 
 
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
@@ -185,11 +205,17 @@ class AgentService:
         )
 
     @staticmethod
+    def is_project_running(project_id: str) -> bool:
+        return project_id in _running_targets.values()
+
+    @staticmethod
     async def _run_agent(
         agent: Agent, target: Target, project_settings: ProjectSettings
     ):
         project_id = str(target.project_id)
         target_id = str(target.id)
+
+        await _set_running(project_id, target_id, True)
 
         try:
             await _persist_and_broadcast(
@@ -236,3 +262,4 @@ class AgentService:
             )
         finally:
             _pending_interrupts.pop(target_id, None)
+            await _set_running(project_id, target_id, False)

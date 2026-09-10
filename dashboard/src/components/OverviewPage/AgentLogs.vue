@@ -6,7 +6,7 @@
     <div class="separator" />
 
     <div class="column log-panel-body">
-      <div class="agent-log-screen scrollable-panel">
+      <div class="agent-log-screen scrollable-panel" ref="logScreenRef">
         <div
           v-for="entry in logEntries"
           :key="entry.id"
@@ -17,7 +17,7 @@
             <span class="material-icons-outlined log-icon log-icon--thinking"
               >psychology</span
             >
-            <span class="log-timestamp">{{ entry.timestamp }}</span>
+            <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
             <span class="log-text log-text--thinking">{{ entry.content }}</span>
           </div>
 
@@ -26,7 +26,7 @@
             <span class="material-icons-outlined log-icon log-icon--action"
               >bolt</span
             >
-            <span class="log-timestamp">{{ entry.timestamp }}</span>
+            <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
             <span class="log-text">{{ entry.content }}</span>
           </div>
 
@@ -34,11 +34,11 @@
           <div v-else class="tool-card border">
             <div class="row tool-card-header">
               <span class="material-icons-outlined log-icon log-icon--tool">{{
-                toolIcon(entry.toolName)
+                toolIcon(entry.tool_name)
               }}</span>
-              <span class="tool-name">{{ toolLabel(entry.toolName) }}</span>
+              <span class="tool-name">{{ toolLabel(entry.tool_name) }}</span>
               <span class="log-timestamp tool-timestamp">{{
-                entry.timestamp
+                formatTimestamp(entry.created_at)
               }}</span>
             </div>
             <div class="tool-content">{{ entry.content }}</div>
@@ -49,7 +49,7 @@
           {{ $t("agent_logs.no_logs") }}
         </div>
 
-        <div class="row flex-center running-indicator">
+        <div v-if="isRunning" class="row flex-center running-indicator">
           <span>{{ $t("agent_logs.running") }}</span> <span class="loader" />
         </div>
       </div>
@@ -58,79 +58,99 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useMomosStore } from "@/store/momos_store";
+import {
+  useWebSocketClient,
+  type tCallback,
+} from "@/websockets/websocket_client";
+import {
+  getProjectAgentLogs,
+  isProjectAgentRunning,
+  type AgentLogResponse,
+  type AgentMessage as AgentLogMessage,
+  type AgentRunStatus,
+} from "@/api";
 
 const { t: $t } = useI18n();
+const store = useMomosStore();
+const ws_client = useWebSocketClient();
 
-type LogEntryType = "thinking" | "action" | "tool";
 type ToolName = "execute_kali_command" | "report_vulnerability";
 
-interface AgentLogEntry {
-  id: string;
-  type: LogEntryType;
-  timestamp: string;
-  content: string;
-  toolName?: ToolName;
+const logEntries = ref<AgentLogResponse[]>([]);
+const logScreenRef = ref<HTMLElement | null>(null);
+const isRunning = ref(false);
+
+async function loadLogs(project_id: string) {
+  if (!project_id) {
+    logEntries.value = [];
+    return;
+  }
+
+  const result = await getProjectAgentLogs({ path: { project_id } });
+  logEntries.value = result.data ?? [];
 }
 
-// Example entries for UI review - static mockup data, not wired to the backend yet.
-const logEntries: AgentLogEntry[] = [
-  {
-    id: "1",
-    type: "thinking",
-    timestamp: "14:32:01",
-    content:
-      "The target appears to be a web server. I should enumerate open ports before probing further.",
+async function loadRunningStatus(project_id: string) {
+  if (!project_id) {
+    isRunning.value = false;
+    return;
+  }
+
+  const result = await isProjectAgentRunning({ path: { project_id } });
+  isRunning.value = result.data?.running ?? false;
+}
+
+const onAgentMessage: tCallback = (message) => {
+  const agentMessage = message as AgentLogMessage;
+
+  if (agentMessage.error) return;
+  if (agentMessage.log.project_id !== store.openedProject) return;
+
+  logEntries.value.push(agentMessage.log);
+};
+
+const onAgentRunStatus: tCallback = (message) => {
+  const statusMessage = message as AgentRunStatus;
+
+  if (statusMessage.error) return;
+  if (statusMessage.project_id !== store.openedProject) return;
+
+  isRunning.value = statusMessage.running;
+};
+
+onMounted(() => {
+  loadLogs(store.openedProject);
+  loadRunningStatus(store.openedProject);
+
+  if (!ws_client.hook_exists("AgentMessage", onAgentMessage))
+    ws_client.add_hook("AgentMessage", onAgentMessage);
+
+  if (!ws_client.hook_exists("AgentRunStatus", onAgentRunStatus))
+    ws_client.add_hook("AgentRunStatus", onAgentRunStatus);
+});
+
+watch(
+  () => store.openedProject,
+  (newProject) => {
+    loadLogs(newProject);
+    loadRunningStatus(newProject);
   },
-  {
-    id: "2",
-    type: "tool",
-    toolName: "execute_kali_command",
-    timestamp: "14:32:04",
-    content: "nmap -sV -p- 10.0.0.5",
+);
+
+// Auto-scroll to the newest entry as new logs come in
+watch(
+  logEntries,
+  async () => {
+    await nextTick();
+    if (logScreenRef.value) {
+      logScreenRef.value.scrollTop = logScreenRef.value.scrollHeight;
+    }
   },
-  {
-    id: "3",
-    type: "action",
-    timestamp: "14:33:52",
-    content:
-      "Found 3 open ports: 22 (SSH), 80 (HTTP), 443 (HTTPS). Apache 2.4.52 detected on port 80.",
-  },
-  {
-    id: "4",
-    type: "thinking",
-    timestamp: "14:33:58",
-    content:
-      "Apache 2.4.52 is an outdated version with known CVEs. Worth checking for common web vulnerabilities.",
-  },
-  {
-    id: "5",
-    type: "tool",
-    toolName: "execute_kali_command",
-    timestamp: "14:34:02",
-    content: "nikto -h http://10.0.0.5",
-  },
-  {
-    id: "6",
-    type: "action",
-    timestamp: "14:35:41",
-    content:
-      "Nikto flagged an outdated Apache version and a missing X-Frame-Options header.",
-  },
-  {
-    id: "7",
-    type: "tool",
-    toolName: "report_vulnerability",
-    timestamp: "14:35:47",
-    content: "Outdated Apache 2.4.52 exposes known CVEs (CVSS v4.0: 7.5)",
-  },
-  {
-    id: "8",
-    type: "action",
-    timestamp: "14:35:49",
-    content: "Recorded finding. Continuing enumeration on port 443...",
-  },
-];
+  { deep: true },
+);
 
 const TOOL_LABELS: Record<ToolName, string> = {
   execute_kali_command: $t("agent_logs.tool_kali_command"),
@@ -142,12 +162,27 @@ const TOOL_ICONS: Record<ToolName, string> = {
   report_vulnerability: "bug_report",
 };
 
-function toolLabel(toolName?: ToolName): string {
-  return toolName ? TOOL_LABELS[toolName] : "";
+function isKnownTool(toolName: string): toolName is ToolName {
+  return toolName in TOOL_LABELS;
 }
 
-function toolIcon(toolName?: ToolName): string {
-  return toolName ? TOOL_ICONS[toolName] : "build";
+function toolLabel(toolName?: string | null): string {
+  if (!toolName) return "";
+  return isKnownTool(toolName) ? TOOL_LABELS[toolName] : toolName;
+}
+
+function toolIcon(toolName?: string | null): string {
+  if (!toolName || !isKnownTool(toolName)) return "build";
+  return TOOL_ICONS[toolName];
+}
+
+function formatTimestamp(createdAt: string): string {
+  return new Date(createdAt).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 </script>
 

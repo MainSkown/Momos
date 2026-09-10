@@ -17,6 +17,7 @@ class WsTypes(str, Enum):
     AgentMessage = "AgentMessage"
     AgentInterruptRequest = "AgentInterruptRequest"
     AgentInterruptResponse = "AgentInterruptResponse"
+    AgentRunStatus = "AgentRunStatus"
     
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -92,6 +93,12 @@ class AgentInterruptRequest(OutboundMessage):
     target_id: str
     type: Literal[WsTypes.AgentInterruptRequest]
     tool_calls: list[dict]
+
+class AgentRunStatus(OutboundMessage):
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AgentRunStatus]
+    running: bool
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

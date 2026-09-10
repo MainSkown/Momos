@@ -5,6 +5,134 @@ export type ClientOptions = {
 };
 
 /**
+ * AgentInterruptRequest
+ */
+export type AgentInterruptRequest = {
+    /**
+     * Type
+     */
+    type: 'AgentInterruptRequest';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Tool Calls
+     */
+    tool_calls: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
+ * AgentInterruptResponseMessage
+ */
+export type AgentInterruptResponseMessage = {
+    /**
+     * Type
+     */
+    type: 'AgentInterruptResponse';
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Approved
+     */
+    approved: boolean;
+};
+
+/**
+ * AgentLogResponse
+ */
+export type AgentLogResponse = {
+    type: AgentLogType;
+    /**
+     * Content
+     */
+    content: string;
+    /**
+     * Tool Name
+     */
+    tool_name?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+};
+
+/**
+ * AgentLogType
+ */
+export type AgentLogType = 'thinking' | 'action' | 'tool';
+
+/**
+ * AgentMessage
+ */
+export type AgentMessage = {
+    /**
+     * Type
+     */
+    type: 'AgentMessage';
+    error?: WebSocketError | null;
+    log: AgentLogResponse;
+};
+
+/**
+ * AgentRunStatus
+ */
+export type AgentRunStatus = {
+    /**
+     * Type
+     */
+    type: 'AgentRunStatus';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Running
+     */
+    running: boolean;
+};
+
+/**
+ * AgentRunningResponse
+ */
+export type AgentRunningResponse = {
+    /**
+     * Running
+     */
+    running: boolean;
+};
+
+/**
  * CreatedKaliUserMessage
  */
 export type CreatedKaliUserMessage = {
@@ -36,7 +164,7 @@ export type HttpValidationError = {
 /**
  * InboundTraffic
  */
-export type InboundTraffic = SendCommandMessage;
+export type InboundTraffic = SendCommandMessage | AgentInterruptResponseMessage;
 
 /**
  * KaliUser
@@ -157,7 +285,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus;
 
 /**
  * ProjectRequest
@@ -836,6 +964,100 @@ export type GetOllamaDownloadQueueDetailsResponses = {
 };
 
 export type GetOllamaDownloadQueueDetailsResponse = GetOllamaDownloadQueueDetailsResponses[keyof GetOllamaDownloadQueueDetailsResponses];
+
+export type StartAgentData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/start';
+};
+
+export type StartAgentErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type StartAgentError = StartAgentErrors[keyof StartAgentErrors];
+
+export type StartAgentResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetProjectAgentLogsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/agent_logs';
+};
+
+export type GetProjectAgentLogsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectAgentLogsError = GetProjectAgentLogsErrors[keyof GetProjectAgentLogsErrors];
+
+export type GetProjectAgentLogsResponses = {
+    /**
+     * Response Getprojectagentlogs
+     *
+     * Successful Response
+     */
+    200: Array<AgentLogResponse>;
+};
+
+export type GetProjectAgentLogsResponse = GetProjectAgentLogsResponses[keyof GetProjectAgentLogsResponses];
+
+export type IsProjectAgentRunningData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/agent/running';
+};
+
+export type IsProjectAgentRunningErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type IsProjectAgentRunningError = IsProjectAgentRunningErrors[keyof IsProjectAgentRunningErrors];
+
+export type IsProjectAgentRunningResponses = {
+    /**
+     * Successful Response
+     */
+    200: AgentRunningResponse;
+};
+
+export type IsProjectAgentRunningResponse = IsProjectAgentRunningResponses[keyof IsProjectAgentRunningResponses];
 
 export type WsTypesData = {
     body?: never;

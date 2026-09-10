@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from src.core import db_manager
 from src.schemas import AgentLogResponse
 from src.services import AgentService
@@ -9,6 +10,10 @@ from src.utils.exceptions import (
 )
 
 router = APIRouter()
+
+
+class AgentRunningResponse(BaseModel):
+    running: bool
 
 @router.post(
     "/project/{project_id}/target/{target_id}/agent/start", operation_id="StartAgent"
@@ -47,3 +52,11 @@ def get_project_agent_logs(project_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not fetch agent logs",
         )
+
+@router.get(
+    "/project/{project_id}/agent/running",
+    response_model=AgentRunningResponse,
+    operation_id="IsProjectAgentRunning",
+)
+def is_project_agent_running(project_id: str):
+    return AgentRunningResponse(running=AgentService.is_project_running(project_id))
