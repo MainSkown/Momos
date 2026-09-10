@@ -146,7 +146,12 @@ class Agent:
                 last_message: AIMessage = state.values["messages"][-1]
                 tool_calls = last_message.tool_calls
 
-                if not should_interrupt:
+                requires_interrupt = should_interrupt and any(
+                    tc["name"] == agent_tools.execute_kali_command.name
+                    for tc in tool_calls
+                )
+
+                if not requires_interrupt:
                     time_left -= (time.monotonic() - loop_start)
                     input_data = None
                     continue
