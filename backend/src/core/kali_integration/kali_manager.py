@@ -20,19 +20,29 @@ class KALI_USERS(str, Enum):
 MOMOS_USER: Final = KALI_USERS.momos
 
 
+# IANA protocol numbers, used with "meta l4proto" instead of protocol names -
+# name resolution depends on the container's /etc/protocols contents (e.g. it
+# lists "ipv6-icmp", not "icmpv6"), so numbers are the portable choice. nft's
+# own docs also recommend "meta l4proto" over "ip6 nexthdr" for IPv6, since
+# nexthdr only reflects the immediate next header and misses extension headers.
+L4PROTO_TCP: Final = 6
+L4PROTO_UDP: Final = 17
+L4PROTO_ICMP: Final = 1
+L4PROTO_ICMPV6: Final = 58
+
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    "kali-linux-headless",
-    "wordlists",
-    "curl",
-    "wget",
-    "nmap",
-    "netcat-openbsd",
+    # "kali-linux-headless",
+    # "wordlists",
+    # "curl",
+    # "wget",
+    # "nmap",
+    # "netcat-openbsd",
     "nftables",
-    "gobuster",
-    "nikto",
-    "exploitdb",
+    # "gobuster",
+    # "nikto",
+    # "exploitdb",
     "iputils-ping",
-    "dnsutils",
+    # "dnsutils",
 )
 
 
@@ -145,8 +155,14 @@ class KaliManger:
         return output
 
     async def prepare_nftables(self, target: Target):
-        # Flush ruleset
-        await self.execute("nft flush ruleset", user=KALI_USERS.root)
+        # Reset only our own tables - NOT "nft flush ruleset". This container
+        # runs with network_mode="host" and (as of the NET_ADMIN/NET_RAW fix)
+        # can actually execute nft commands, so a full ruleset flush wipes out
+        # every other table in the host's real network namespace, including
+        # the chains Docker's own daemon depends on for its bridge networks.
+        # "destroy" doesn't fail if the table doesn't exist yet.
+        await self.execute("nft destroy table ip MOMOS_IPv4", user=KALI_USERS.root)
+        await self.execute("nft destroy table ip6 MOMOS_IPv6", user=KALI_USERS.root)
 
         # Create IPv4 table
         await self.execute("nft add table ip MOMOS_IPv4", user=KALI_USERS.root)
@@ -170,12 +186,12 @@ class KaliManger:
 
         if target.ipv4 is not None:
             # Allow rule for outgoing traffic to target
-            for protocol in ["tcp", "udp"]:
+            for protocol, l4proto in [("tcp", L4PROTO_TCP), ("udp", L4PROTO_UDP)]:
                 # "tcp"/"udp" alone isn't valid nft syntax - it must be followed
                 # by a field (dport, etc). With no ports defined, match the
-                # protocol itself via meta l4proto instead.
+                # protocol itself via its numeric "meta l4proto" instead.
                 protocol_match = (
-                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {protocol}"
+                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {l4proto}"
                 )
                 await self.execute(
                     f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} {protocol_match} accept",
@@ -183,7 +199,7 @@ class KaliManger:
                 )
 
             await self.execute(
-                f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} icmp accept",
+                f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} meta l4proto {L4PROTO_ICMP} accept",
                 user=KALI_USERS.root,
             )
 
@@ -210,10 +226,14 @@ class KaliManger:
 
         if target.ipv6 is not None:
             # Allow tcp and udp for ipv6
-            for protocol in ["tcp", "udp"]:
+            for protocol, l4proto in [("tcp", L4PROTO_TCP), ("udp", L4PROTO_UDP)]:
                 # Same "tcp"/"udp" alone isn't valid nft syntax fix as above.
+                # "meta l4proto" (not "ip6 nexthdr") is used deliberately here -
+                # nft's own docs warn that nexthdr only reflects the immediate
+                # next header and misses the real upper-layer protocol when
+                # extension headers are present.
                 protocol_match = (
-                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {protocol}"
+                    f"{protocol}{ports_str}" if ports_str else f"meta l4proto {l4proto}"
                 )
                 await self.execute(
                     f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} {protocol_match} accept",
@@ -222,7 +242,7 @@ class KaliManger:
 
             # Allow icmpv6
             await self.execute(
-                f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} icmpv6 accept",
+                f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} meta l4proto {L4PROTO_ICMPV6} accept",
                 user=KALI_USERS.root,
             )
 
