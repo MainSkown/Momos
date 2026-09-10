@@ -1,12 +1,13 @@
 import asyncio
-from typing import Callable, Dict
+from typing import Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from src.core import db_manager
-from src.core.agent import Agent
+from src.core.agent import Agent, agent_tools
 from src.core.agent.agent_checkpointer import checkpointer
 from src.core.kali_integration import kali_registry
 from src.schemas.target_scheme import Target
 from src.schemas.project_scheme import ProjectSettings
+from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogType
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
@@ -37,16 +38,72 @@ async def _on_interrupt_response(message: AgentInterruptResponseMessage):
 ws_registry.add_hook(WsTypes.AgentInterruptResponse, _on_interrupt_response)
 
 
-def _message_to_role_and_content(message: BaseMessage) -> tuple[str, str] | None:
-    content = message.content if isinstance(message.content, str) else str(message.content)
+def _stringify_content(content) -> str:
+    return content if isinstance(content, str) else str(content)
 
-    if isinstance(message, ToolMessage):
-        return "tool", content
+
+def _render_tool_call_content(tool_name: str, args: dict) -> str:
+    if tool_name == agent_tools.KALI_COMMAND_TOOL_NAME:
+        return str(args.get("command", ""))
+
+    if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
+        return str(args.get("name", ""))
+
+    return ", ".join(f"{k}={v}" for k, v in args.items())
+
+
+def _message_to_log_specs(
+    message: BaseMessage,
+) -> List[Tuple[AgentLogType, str, Optional[str]]]:
+    """Turns one agent message into zero or more (type, content, tool_name) specs."""
+    specs: List[Tuple[AgentLogType, str, Optional[str]]] = []
 
     if isinstance(message, AIMessage):
-        return "assistant", content
+        content = _stringify_content(message.content)
 
-    return None
+        if content.strip():
+            specs.append(("thinking", content, None))
+
+        for tc in message.tool_calls:
+            specs.append(
+                ("tool", _render_tool_call_content(tc["name"], tc["args"]), tc["name"])
+            )
+
+    elif isinstance(message, ToolMessage):
+        content = _stringify_content(message.content)
+
+        if content.strip():
+            specs.append(("action", content, None))
+
+    return specs
+
+
+async def _persist_and_broadcast(
+    project_id: str,
+    target_id: str,
+    log_type: AgentLogType,
+    content: str,
+    tool_name: Optional[str] = None,
+) -> AgentLog:
+    log = AgentLog(
+        type=log_type,
+        content=content,
+        tool_name=tool_name,
+        project_id=project_id,
+        target_id=target_id,
+    )
+
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(None, db_manager.add_agent_log, log)
+
+    await ws_registry.send_message(
+        AgentMessage(
+            type=WsTypes.AgentMessage,
+            log=AgentLogResponse.model_validate(saved),
+        )
+    )
+
+    return saved
 
 
 class AgentService:
@@ -101,6 +158,13 @@ class AgentService:
         target_id = str(target.id)
 
         try:
+            await _persist_and_broadcast(
+                project_id,
+                target_id,
+                "action",
+                f"Starting analysis on target: {target.name}",
+            )
+
             async for event in agent.start_agent(
                 target=target,
                 start_prompt=project_settings.starting_prompt,
@@ -124,35 +188,14 @@ class AgentService:
                     )
                     continue
 
-                role_and_content = _message_to_role_and_content(event)
-
-                if role_and_content is None:
-                    continue
-
-                role, content = role_and_content
-
-                if not content:
-                    continue
-
-                await ws_registry.send_message(
-                    AgentMessage(
-                        type=WsTypes.AgentMessage,
-                        project_id=project_id,
-                        target_id=target_id,
-                        role=role,
-                        content=content,
+                for log_type, content, tool_name in _message_to_log_specs(event):
+                    await _persist_and_broadcast(
+                        project_id, target_id, log_type, content, tool_name
                     )
-                )
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
-            await ws_registry.send_message(
-                AgentMessage(
-                    type=WsTypes.AgentMessage,
-                    project_id=project_id,
-                    target_id=target_id,
-                    role="assistant",
-                    content=f"Agent run failed: {e}",
-                )
+            await _persist_and_broadcast(
+                project_id, target_id, "action", f"Agent run failed: {e}"
             )
         finally:
             _pending_interrupts.pop(target_id, None)

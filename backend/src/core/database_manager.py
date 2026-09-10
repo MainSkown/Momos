@@ -12,6 +12,7 @@ from src.schemas.project_scheme import (
 )
 from src.schemas.target_scheme import Target
 from src.schemas.vulnerability_scheme import Vulnerability
+from src.schemas.agent_log_scheme import AgentLog
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -178,6 +179,23 @@ class DatabaseManager:
             statement = delete(Vulnerability).where(Vulnerability.id == parsed_uuid)
             session.exec(statement)
             session.commit()
+
+    # --- Managing Agent Logs ---
+    def add_agent_log(self, agent_log: AgentLog):
+        return self.add_to_database(agent_log)
+
+    def get_all_agent_logs_in_project(
+        self, project_id: str | uuid.UUID
+    ) -> List[AgentLog]:
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            statement = (
+                select(AgentLog)
+                .where(AgentLog.project_id == parsed_uuid)
+                .order_by(AgentLog.created_at)
+            )
+            return session.exec(statement).all()
 
 
 db_manager = DatabaseManager(settings.database_url)

@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Literal, Optional, Type, Union
 from enum import Enum
-from src.schemas import OllamaDownloadProgress
+from src.schemas import OllamaDownloadProgress, AgentLogResponse
 
 # Separate registries for cleaner typing definitions
 REGISTERED_INBOUND_MESSAGES: list[Type[BaseModel]] = []
@@ -84,11 +84,8 @@ class ModelPullingUpdate(OutboundMessage):
     progress: OllamaDownloadProgress
 
 class AgentMessage(OutboundMessage):
-    project_id: str
-    target_id: str
     type: Literal[WsTypes.AgentMessage]
-    role: Literal["assistant", "tool"]
-    content: str
+    log: AgentLogResponse
 
 class AgentInterruptRequest(OutboundMessage):
     project_id: str
