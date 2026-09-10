@@ -1,5 +1,9 @@
 <template>
-  <div class="border ai-box column">
+  <div
+    class="border ai-box column"
+    :class="{ 'is-selected': selected }"
+    @click="emits('select')"
+  >
     <button
       v-if="!isBeingDownloaded()"
       class="button action-button"
@@ -7,7 +11,7 @@
       type="button"
       :aria-label="installed ? 'Delete model' : 'Install model'"
       :title="installed ? 'Delete model' : 'Install model'"
-      @click="
+      @click.stop="
         async () => {
           if (!installed) await store.downloadModel(model.name);
           else toDelete = true;
@@ -106,12 +110,18 @@ const { t: $t } = useI18n();
 
 const toDelete = ref<boolean>(false);
 
-const emits = defineEmits(["deleted", "download-finished"]);
+const emits = defineEmits(["deleted", "download-finished", "select"]);
 
-const props = defineProps<{
-  model: OllamaModelData;
-  installed: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    model: OllamaModelData;
+    installed: boolean;
+    selected?: boolean;
+  }>(),
+  {
+    selected: false,
+  },
+);
 
 async function _deleteModel() {
   if (props.installed) {
@@ -162,6 +172,13 @@ watch(
   overflow: hidden;
   transform-origin: center;
   padding-bottom: 10px;
+  cursor: pointer;
+}
+
+.ai-box.is-selected {
+  border-color: var(--active-bg);
+  background-color: var(--hover-bg);
+  box-shadow: var(--shadow-red-medium);
 }
 
 .ai-box:hover {

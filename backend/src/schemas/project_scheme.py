@@ -23,6 +23,10 @@ class ProjectResponse(ProjectBase):
     id: uuid.UUID
 
     model_config = {"from_attributes": True, "json_schema_extra": {"title": "Project"}}
+    
+class ProjectRequest(ProjectBase):
+    base_model_name: str
+    parsing_model_name: str
 
 
 class ProjectSettingsBase(SQLModel):

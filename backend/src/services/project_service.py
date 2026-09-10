@@ -5,9 +5,17 @@ from src.core.database_manager import db_manager
 
 class ProjectService:
     @staticmethod
-    def add_project(name: str) -> Project:
+    def add_project(name: str, base_model_name: str, parsing_model_name: str) -> Project:
+        # Creating project
         project = Project(name=name)
         project = db_manager.add_project(project)
+        
+        # Creating project settings
+        settings = db_manager.get_project_settings(project.id)
+        settings.base_model_name = base_model_name
+        settings.parsing_model_name = parsing_model_name
+        db_manager.update_project_settings(settings)
+        
         return project
     
     @staticmethod
@@ -25,3 +33,7 @@ class ProjectService:
         project_settings = ProjectSettings(**settings.model_dump())
         updated_settings = db_manager.update_project_settings(project_settings)
         return updated_settings
+
+    @staticmethod
+    def delete_project(project_id: str):
+        db_manager.delete_project(project_id)
