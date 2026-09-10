@@ -38,10 +38,7 @@
                 )"
                 :key="model.name"
                 :model="model"
-                :installed="
-                  installed_models.find((m) => m.name === model.name) !==
-                  undefined
-                "
+                :installed="isInstalled(model.name)"
                 @download-finished="refreshInstalledModels"
               />
             </div>
@@ -54,15 +51,12 @@
             <div class="separator" />
             <div class="suggestions-list">
               <AIBox
-                v-for="model in gerRecommendedParsingModels().sort(
+                v-for="model in getRecommendedParsingModels().sort(
                   (a, b) => a.parameters_size_b - b.parameters_size_b,
                 )"
                 :key="model.name"
                 :model="model"
-                :installed="
-                  installed_models.find((m) => m.name === model.name) !==
-                  undefined
-                "
+                :installed="isInstalled(model.name)"
                 @download-finished="refreshInstalledModels"
               />
             </div>
@@ -83,10 +77,7 @@
               )"
               :key="model.name"
               :model="model"
-              :installed="
-                installed_models.find((m) => m.name === model.name) !==
-                undefined
-              "
+              :installed="isInstalled(model.name)"
               @download-finished="refreshInstalledModels"
             />
           </div>
@@ -97,77 +88,34 @@
 </template>
 
 <script setup lang="ts">
-import {
-  getDownloadableModels,
-  getModelsList,
-  type OllamaModelData,
-} from "@/api";
-import { onMounted, ref } from "vue";
+import { onMounted } from "vue";
+import { aiModelsManager } from "../tools";
 import AIBox from "./AIBox.vue";
 
-const downloadable_models = ref<OllamaModelData[]>([]);
-const installed_models = ref<OllamaModelData[]>([]);
+const installed_models = aiModelsManager.installed_models;
 
 async function refreshInstalledModels() {
-  installed_models.value = await getInstalledModels();
+  await aiModelsManager.refreshInstalledModels();
 }
 
-function getRecommendedAgentModels(): OllamaModelData[] {
-  return downloadable_models.value.filter((m) => m.recommended === "agent");
+function getRecommendedAgentModels() {
+  return aiModelsManager.getRecommendedAgentModels();
 }
 
-function gerRecommendedParsingModels(): OllamaModelData[] {
-  return downloadable_models.value.filter((m) => m.recommended === "parsing");
+function getRecommendedParsingModels() {
+  return aiModelsManager.getRecommendedParsingModels();
 }
 
-function getModelsByFamily(): Record<string, OllamaModelData[]> {
-  const result: Record<string, OllamaModelData[]> = {};
-  downloadable_models.value.forEach((m) => {
-    if (result[m.family] === undefined) {
-      result[m.family] = [];
-    }
-
-    result[m.family]?.push(m);
-  });
-
-  return result;
+function getModelsByFamily() {
+  return aiModelsManager.getModelsByFamily();
 }
 
-async function getInstalledModels(): Promise<OllamaModelData[]> {
-  const result = await getModelsList();
-
-  if (result.error) {
-    console.error(result.error);
-    return [];
-  }
-
-  if (result.data === undefined) {
-    console.error("Function getModelsList returned empty without server error");
-    return [];
-  }
-
-  return result.data.models;
+function isInstalled(modelName: string): boolean {
+  return aiModelsManager.isInstalled(modelName);
 }
 
 onMounted(async () => {
-  // Get downloadable models
-  const result = await getDownloadableModels();
-  if (result.error) {
-    console.error(result.error);
-    return;
-  }
-
-  if (result.data === undefined) {
-    console.error(
-      "Function getDownloadableModels returned empty without server error",
-    );
-    return;
-  }
-
-  downloadable_models.value = result.data.models;
-
-  // Get installed models
-  refreshInstalledModels();
+  await aiModelsManager.initialize();
 });
 </script>
 
