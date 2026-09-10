@@ -30,6 +30,16 @@ L4PROTO_UDP: Final = 17
 L4PROTO_ICMP: Final = 1
 L4PROTO_ICMPV6: Final = 58
 
+# Published up front so a future "start listening" (reverse-shell) tool has
+# somewhere reachable from the LAN to bind to - Docker's own port publishing
+# is a scoped, host-managed NAT rule (the same mechanism docker-compose.yml
+# already uses for the backend/dashboard's own ports), not custom code
+# touching the host firewall directly.
+# NOTE: this range is currently shared globally across every project's Kali
+# container - only one project's container can bind it at a time. Fine while
+# no listening tool exists yet; revisit (e.g. per-project ranges) once one does.
+REVERSE_SHELL_PORT_RANGE: Final[range] = range(4444, 4449)
+
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     # "kali-linux-headless",
     # "wordlists",
@@ -57,6 +67,12 @@ class KaliManger:
         self.packages = (
             tuple(packages) if packages is not None else DEFAULT_KALI_PACKAGES
         )
+        # LangGraph's ToolNode runs every tool call from one LLM turn
+        # concurrently (asyncio.gather) - without this, an agent requesting
+        # several kali commands in one turn would fire that many simultaneous
+        # docker exec calls (each potentially a heavy tool like nmap) plus
+        # that many simultaneous local-LLM parsing calls, all at once.
+        self.command_lock = asyncio.Lock()
 
         try:
             self.client = docker.from_env()
@@ -98,10 +114,10 @@ class KaliManger:
             image="kalilinux/kali-rolling:latest",
             name=self.container_name,
             detach=True,
-            tty=True,
-            network_mode="host",
+            tty=True,            
             remove=True,
             cap_add=["NET_ADMIN", "NET_RAW"],
+            ports={f"{port}/tcp": port for port in REVERSE_SHELL_PORT_RANGE},
         )
 
         self._configure_container(on_stage)
@@ -120,10 +136,9 @@ class KaliManger:
         )
         print("Setting up momos user")
         self._report(on_stage, KaliCreationStage.creating_user)
-
-        # Create momos user without sudo permissions
+        
         self._exec_in_container(
-            f"id -u {MOMOS_USER} >/dev/null 2>&1 || useradd -s /bin/bash {MOMOS_USER}"
+            f"id -u {MOMOS_USER} >/dev/null 2>&1 || useradd --system -s /bin/bash {MOMOS_USER}"
         )
 
         # Make sure the home directory exists and belongs to momos
@@ -156,10 +171,10 @@ class KaliManger:
 
     async def prepare_nftables(self, target: Target):
         # Reset only our own tables - NOT "nft flush ruleset". This container
-        # runs with network_mode="host" and (as of the NET_ADMIN/NET_RAW fix)
-        # can actually execute nft commands, so a full ruleset flush wipes out
-        # every other table in the host's real network namespace, including
-        # the chains Docker's own daemon depends on for its bridge networks.
+        # has its own network namespace (not host-networked), so these nft
+        # commands can only ever affect its own isolated firewall state - but
+        # scoping to just our tables instead of a blanket flush is still the
+        # right habit, in case that ever changes.
         # "destroy" doesn't fail if the table doesn't exist yet.
         await self.execute("nft destroy table ip MOMOS_IPv4", user=KALI_USERS.root)
         await self.execute("nft destroy table ip6 MOMOS_IPv6", user=KALI_USERS.root)

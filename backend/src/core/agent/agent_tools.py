@@ -60,15 +60,19 @@ async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
 async def _run_kali_command(project_id: str, command: str) -> str:
     manager = await kali_registry.get_manager(project_id)
 
-    try:
-        raw_output = await manager.execute(command)
-    except RuntimeError as e:
-        raw_output = str(e)
+    # Serialize the whole command (docker exec + its parsing call) so that
+    # several kali-command tool calls issued in the same LLM turn don't all
+    # hit Docker and the local parsing model at once.
+    async with manager.command_lock:
+        try:
+            raw_output = await manager.execute(command)
+        except RuntimeError as e:
+            raw_output = str(e)
 
-    if not raw_output.strip():
-        return "(command produced no output)"
+        if not raw_output.strip():
+            return "(command produced no output)"
 
-    return await _parse_output(project_id, command, raw_output)
+        return await _parse_output(project_id, command, raw_output)
 
 
 def create_kali_tool(project_id: str):
