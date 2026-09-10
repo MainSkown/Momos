@@ -18,11 +18,8 @@
     <div class="row">
       <!-- User Console-->
        <UserConsole class="field"/>
-      
-      <div class="border field">
-        <span class="text-red" style="padding-left: 10px">{{ $t("overview.agent_logs") }}</span>
-        <div class="separator" />
-      </div>
+      <!-- Agent Logs -->
+      <AgentLogs class="field" />
     </div>
 
   </div>
@@ -32,6 +29,7 @@
 import { ref } from "vue";
 import Targets from "./Targets.vue";
 import UserConsole from "./UserConsole.vue";
+import AgentLogs from "./AgentLogs.vue";
 
 const target = ref<string>();
 </script>

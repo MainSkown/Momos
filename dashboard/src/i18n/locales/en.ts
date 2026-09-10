@@ -118,6 +118,13 @@ export const en = {
         agent_logs: "Agent Logs"
     },
 
+    agent_logs: {
+        tool_kali_command: "Kali Command",
+        tool_report_vulnerability: "Vulnerability Report",
+        running: "Agent is running",
+        no_logs: "No agent activity yet"
+    },
+
     universal:{
         yes: "Yes",
         no: "No",
