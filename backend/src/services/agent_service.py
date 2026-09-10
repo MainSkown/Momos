@@ -388,8 +388,14 @@ class AgentService:
                     continue
 
                 for log_type, content, tool_name in _message_to_log_specs(event):
-                    if log_type in ("thinking", "action"):
+                    if log_type == "thinking":
                         content = await _summarize_for_log(project_id, content)
+                    # "action" (ToolMessage) content is never summarized here -
+                    # kali command output already went through the parsing
+                    # model inside the tool itself (see agent_tools.py), and
+                    # other action content (vulnerability confirmations, tool
+                    # errors) is already short. Summarizing it again would
+                    # double the local-LLM load for every single tool call.
 
                     await _persist_and_broadcast(
                         project_id, target_id, log_type, content, tool_name
