@@ -110,6 +110,38 @@ def _stringify_content(content) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+NOT_DEFINED = "Not defined"
+
+
+def _format_prompt_value(value) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value) if value else NOT_DEFINED
+
+    if value is None or value == "":
+        return NOT_DEFINED
+
+    return str(value)
+
+
+def _render_start_prompt(template: str, target: Target) -> str:
+    """Replaces every {{placeholder}} in the starting prompt with the target's
+    actual values - matching the placeholders documented in ProjectSettingsPage.vue."""
+    replacements = {
+        "{{name}}": _format_prompt_value(target.name),
+        "{{description}}": _format_prompt_value(target.description),
+        "{{ipv4}}": _format_prompt_value(target.ipv4),
+        "{{ipv6}}": _format_prompt_value(target.ipv6),
+        "{{ports}}": _format_prompt_value(target.ports),
+    }
+
+    rendered = template
+
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+
+    return rendered
+
+
 def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.KALI_COMMAND_TOOL_NAME:
         return str(args.get("command", ""))
@@ -310,7 +342,9 @@ class AgentService:
 
             async for event in agent.start_agent(
                 target=target,
-                start_prompt=project_settings.starting_prompt,
+                start_prompt=_render_start_prompt(
+                    project_settings.starting_prompt, target
+                ),
                 thread_id=target_id,
                 should_interrupt=project_settings.should_interrupt,
                 duration_seconds=duration_seconds,
