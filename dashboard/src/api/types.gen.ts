@@ -683,6 +683,36 @@ export type KaliClientExistsResponses = {
 
 export type KaliClientExistsResponse = KaliClientExistsResponses[keyof KaliClientExistsResponses];
 
+export type GetProjectKaliClientData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/kali_client';
+};
+
+export type GetProjectKaliClientErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectKaliClientError = GetProjectKaliClientErrors[keyof GetProjectKaliClientErrors];
+
+export type GetProjectKaliClientResponses = {
+    /**
+     * Successful Response
+     */
+    200: KaliUser;
+};
+
+export type GetProjectKaliClientResponse = GetProjectKaliClientResponses[keyof GetProjectKaliClientResponses];
+
 export type CreateKaliUserData = {
     body?: never;
     path: {

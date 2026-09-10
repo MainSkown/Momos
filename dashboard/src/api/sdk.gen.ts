@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -95,6 +95,11 @@ export const updateTarget = <ThrowOnError extends boolean = false>(options: Opti
  * Get Kali Client
  */
 export const kaliClientExists = <ThrowOnError extends boolean = false>(options: Options<KaliClientExistsData, ThrowOnError>): RequestResult<KaliClientExistsResponses, KaliClientExistsErrors, ThrowOnError> => (options.client ?? client).get<KaliClientExistsResponses, KaliClientExistsErrors, ThrowOnError>({ url: '/api/kali_client/{client_id}', ...options });
+
+/**
+ * Get Project Kali Client
+ */
+export const getProjectKaliClient = <ThrowOnError extends boolean = false>(options: Options<GetProjectKaliClientData, ThrowOnError>): RequestResult<GetProjectKaliClientResponses, GetProjectKaliClientErrors, ThrowOnError> => (options.client ?? client).get<GetProjectKaliClientResponses, GetProjectKaliClientErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client', ...options });
 
 /**
  * Post Kali User

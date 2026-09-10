@@ -104,6 +104,8 @@ export const en = {
         momos: "Momos",
         session_initialized: "Session initialized. Select privileges above.",
         connecting: "Connecting to client:",
+        checking_session: "Checking for active session",
+        no_active_session: "No active session",
         connect_to_kali: "Connect to Kali"
     },
 

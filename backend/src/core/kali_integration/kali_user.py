@@ -1,6 +1,6 @@
 import uuid
 import asyncio
-from typing import List
+from typing import Dict, List, Optional, Tuple
 from src.websocket import (
     ws_registry,
     WsTypes,
@@ -15,13 +15,13 @@ from .kali_registry import kali_registry
 class KaliUserRegistry:
     def __init__(self):
         self.active_users: List[KaliUser] = []
-        self.pending_users: List[uuid.UUID] = (
-            []
-        )  # List of pending users - in process of creation
+        self.pending_users: Dict[uuid.UUID, str] = (
+            {}
+        )  # client_id -> project_id, in process of creation
 
     async def create_user(self, project_id: str) -> str:
         client_id = uuid.uuid4()
-        self.pending_users.append(client_id)
+        self.pending_users[client_id] = project_id
 
         asyncio.create_task(self._create_user(project_id, client_id))
 
@@ -31,7 +31,7 @@ class KaliUserRegistry:
         user = await KaliUser.create(project_id, client_id)
 
         self.active_users.append(user)
-        self.pending_users.remove(client_id)
+        del self.pending_users[client_id]
 
         message = CreatedKaliUserMessage(
             project_id=project_id,
@@ -40,6 +40,26 @@ class KaliUserRegistry:
         )
 
         await ws_registry.send_message(message)
+
+    def get_client_for_project(
+        self, project_id: str
+    ) -> Optional[Tuple[uuid.UUID, bool]]:
+        """Returns (client_id, pending) for the active or pending client
+        belonging to project_id, or None if it has no Kali instance."""
+        active = next(
+            (u for u in self.active_users if u.project_id == project_id), None
+        )
+        if active is not None:
+            return active.client_id, False
+
+        pending_client_id = next(
+            (cid for cid, pid in self.pending_users.items() if pid == project_id),
+            None,
+        )
+        if pending_client_id is not None:
+            return pending_client_id, True
+
+        return None
 
 
 kali_user_registry = KaliUserRegistry()

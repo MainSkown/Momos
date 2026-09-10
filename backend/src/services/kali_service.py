@@ -24,7 +24,16 @@ class KaliService:
             return KaliUser(client_id=str(pending), pending=True)
 
         return None
-        
+
+    @staticmethod
+    def get_client_for_project(project_id: str) -> KaliUser | None:
+        result = kali_user_registry.get_client_for_project(project_id)
+        if result is None:
+            return None
+
+        client_id, pending = result
+        return KaliUser(client_id=str(client_id), pending=pending)
+
     @staticmethod
     async def create_client(project_id: str) -> KaliUser:
         client_id = await kali_user_registry.create_user(project_id)

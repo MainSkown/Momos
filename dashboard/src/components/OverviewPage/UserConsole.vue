@@ -1,7 +1,9 @@
 <template>
   <div class="border field">
     <div class="row">
-      <span class="text-red" style="padding-left: 10px">{{ $t("console.user_console") }}</span>
+      <span class="text-red" style="padding-left: 10px">{{
+        $t("console.user_console")
+      }}</span>
       <!-- user radio -->
       <div
         v-if="client_dict[store.openedProject] !== undefined"
@@ -97,10 +99,24 @@
       </div>
     </div>
 
-    <div class="column full-height" v-else>
-      <button class="connecting button border" @click="createNewKaliUser">
-        <h3>{{ $t("console.connect_to_kali") }}</h3>
-      </button>
+    <div
+      class="column full-height"
+      v-else-if="checking_dict[store.openedProject] !== false"
+    >
+      <div class="flex flex-center connecting border text-center">
+        <span>{{ $t("console.checking_session") }}</span>
+        <span class="loader" />
+      </div>
+    </div>
+
+    <div class="column full-height flex-center" v-else>
+      <div class="empty-console">
+        <span class="material-icons-outlined empty-console-icon">terminal</span>
+        <p class="empty-console-text">{{ $t("console.no_active_session") }}</p>
+        <button class="button border connect-button" @click="createNewKaliUser">
+          {{ $t("console.connect_to_kali") }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -112,10 +128,9 @@ import {
   type tCallback,
 } from "@/websockets/websocket_client";
 import { nextTick, ref, watch } from "vue";
-import { LocalStoreKeys } from "@/types";
 import {
   createKaliUser,
-  kaliClientExists,
+  getProjectKaliClient,
   type ReceiveCommandOutputMessage,
   type CreatedKaliUserMessage,
   type SendCommandMessage,
@@ -126,6 +141,7 @@ const store = useMomosStore();
 
 const client_dict = ref<{ [project_id: string]: string }>({});
 const loading_dict = ref<{ [project_id: string]: boolean }>({});
+const checking_dict = ref<{ [project_id: string]: boolean }>({});
 
 const user_picked = ref<"momos" | "root">("root");
 const user_command = ref<string>("");
@@ -161,11 +177,6 @@ async function createNewKaliUser() {
   }
 
   // it only returns client_id, client is being initiated - socket will tell when it's done
-
-  localStorage.setItem(
-    `${LocalStoreKeys.CLIENT_ID}-${project_id}`,
-    result.data.client_id,
-  );
 }
 
 const onKaliCreated: tCallback = (message) => {
@@ -179,11 +190,6 @@ const onKaliCreated: tCallback = (message) => {
 
   client_dict.value[project_id] = message.client_id;
   loading_dict.value[project_id] = false;
-
-  localStorage.setItem(
-    `${LocalStoreKeys.CLIENT_ID}-${project_id}`,
-    message.client_id,
-  );
 };
 
 const onConsoleOutput: tCallback = (message) => {
@@ -212,27 +218,25 @@ function set_ws(project_id: string) {
 }
 
 async function check_client(project_id: string) {
-  const client_id = localStorage.getItem(`${LocalStoreKeys.CLIENT_ID}-${project_id}`);
+  checking_dict.value[project_id] = true;
 
-  if (!client_id) return;
+  try {
+    const result = await getProjectKaliClient({ path: { project_id } });
 
-  const result = await kaliClientExists({ path: { client_id: client_id } });
-
-  if (result.response?.status === 404) {
-    console.info("Could not find client: ", client_id);
-
-    localStorage.removeItem(`${LocalStoreKeys.CLIENT_ID}-${project_id}`);
-
-    return;
-  }
-
-  if (result.data) {
-    if (result.data.pending) {
-      loading_dict.value[project_id] = true;
+    if (result.response?.status === 404) {
       return;
     }
 
-    client_dict.value[project_id] = result.data.client_id;
+    if (result.data) {
+      if (result.data.pending) {
+        loading_dict.value[project_id] = true;
+        return;
+      }
+
+      client_dict.value[project_id] = result.data.client_id;
+    }
+  } finally {
+    checking_dict.value[project_id] = false;
   }
 }
 
@@ -279,6 +283,28 @@ check_client(store.openedProject);
   width: 90%;
 
   align-self: center;
+}
+
+.empty-console {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.empty-console-icon {
+  font-size: 40px;
+  color: var(--text-gray-darker);
+}
+
+.empty-console-text {
+  margin: 0;
+  color: var(--text-gray-dark);
+}
+
+.connect-button {
+  padding: var(--spacing-sm) var(--spacing-xl);
+  font-size: 1rem;
 }
 
 .radio-label {
