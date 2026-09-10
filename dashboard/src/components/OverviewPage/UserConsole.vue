@@ -63,13 +63,13 @@
           :key="idx"
           class="terminal-line"
         >
-          <span v-if="line.type === 'cmd'" class="prompt-prefix"
+          <span v-if="line.type === 'cmd'" class="prompt-prefix output-line"
             >> {{ line.line }}
           </span>
           <span v-if="line.type === 'error'" class="prompt-prefix error-message"
             >X: {{ line.line }}
           </span>
-          <span v-if="line.type === 'user'" class="prompt-prefix"
+          <span v-if="line.type === 'user'" class="prompt-prefix command-line"
             >[{{ line.user }}]$ {{ line.line }}
           </span>
         </div>
@@ -341,9 +341,19 @@ check_client(store.openedProject);
   color: var(--status-critical);
 }
 
+.command-line {
+  color: var(--red-light);
+  font-weight: bold;
+}
+
+.output-line {
+  color: var(--text-gray-light);
+}
+
 .terminal-line {
   margin-bottom: 4px;
-  word-break: break-all;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 .send-button {
