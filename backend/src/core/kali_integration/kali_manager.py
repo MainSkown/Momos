@@ -83,7 +83,17 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     "traceroute",
     "ftp",
     "openssh-client",
+    # Provides setcap/getcap - needed to grant nmap raw-socket capabilities
+    # for the unprivileged momos user, see _configure_container.
+    "libcap2-bin",
 )
+
+# Granted to this binary (via setcap, in _configure_container) so nmap's
+# default SYN/raw-socket scans work for the unprivileged `momos` user.
+# Deliberately NOT solved by running agent commands as root instead - the
+# target-scope nftables rules in prepare_nftables() are all keyed to
+# `meta skuid momos`, so root traffic would bypass that firewall entirely.
+NMAP_BINARY_PATH: Final = "/usr/bin/nmap"
 
 # Anything else the agent needs on top of this baseline is installed on
 # demand via the install_kali_package tool (agent_tools.py) - kept this list
@@ -227,6 +237,14 @@ class KaliManger:
             f"install -d -o {MOMOS_USER} -g {MOMOS_USER} /home/{MOMOS_USER}"
         )
 
+        # nmap's own postinst normally sets these capabilities itself, but
+        # that step silently no-ops if libcap2-bin wasn't present yet when
+        # it ran - set them explicitly and unconditionally so nmap's
+        # raw-socket scans (SYN scan, OS detection, ...) work for the
+        # unprivileged momos user rather than failing with "Couldn't open a
+        # raw socket. Operation not permitted".
+        self._exec_in_container(f"setcap cap_net_raw,cap_net_admin+eip {NMAP_BINARY_PATH}")
+
     def _is_configured_correctly(self) -> bool:
         """Checks that the container has every required package installed,
         a working nftables setup, and the momos user - used both to decide
@@ -248,6 +266,7 @@ class KaliManger:
             self._exec_in_container(f"dpkg -s {' '.join(self.packages)}")
             self._exec_in_container(f"id -u {MOMOS_USER}")
             self._exec_in_container("nft list ruleset")
+            self._exec_in_container(f"getcap {NMAP_BINARY_PATH} | grep -q cap_net_raw")
         except RuntimeError as e:
             print(f"Kali container configuration check failed: {e}", flush=True)
             return False

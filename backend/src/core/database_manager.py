@@ -99,6 +99,11 @@ class DatabaseManager:
         parsed_uuid = self._parse_uuid(project_id)
 
         with Session(self.engine) as session:
+            # Children referencing target/project via a FK must go before
+            # their parents, or Postgres rejects the parent delete.
+            session.exec(delete(Vulnerability).where(Vulnerability.related_to_project == parsed_uuid))
+            session.exec(delete(AgentLog).where(AgentLog.project_id == parsed_uuid))
+            session.exec(delete(AgentRun).where(AgentRun.project_id == parsed_uuid))
             session.exec(delete(Target).where(Target.project_id == parsed_uuid))
             session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
             session.exec(delete(Project).where(Project.id == parsed_uuid))
@@ -119,8 +124,12 @@ class DatabaseManager:
         parsed_uuid = self._parse_uuid(target_id)
 
         with Session(self.engine) as session:
-            statement = delete(Target).where(Target.id == parsed_uuid)
-            session.exec(statement)
+            # Same ordering requirement as delete_project - clear rows that
+            # reference this target before deleting the target itself.
+            session.exec(delete(Vulnerability).where(Vulnerability.found_in == parsed_uuid))
+            session.exec(delete(AgentLog).where(AgentLog.target_id == parsed_uuid))
+            session.exec(delete(AgentRun).where(AgentRun.target_id == parsed_uuid))
+            session.exec(delete(Target).where(Target.id == parsed_uuid))
             session.commit()
 
     def update_target(self, target: Target):
