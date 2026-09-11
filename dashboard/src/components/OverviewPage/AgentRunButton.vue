@@ -1,6 +1,12 @@
 <template>
+  <Tooltip v-if="buildingLabel" :message="buildingLabel">
+    <button class="button no-border" disabled>
+      <span class="loader building-loader" />
+    </button>
+  </Tooltip>
+
   <button
-    v-if="!showTimer"
+    v-else-if="!showTimer"
     class="button no-border"
     :disabled="!hasDuration"
     @click="handleStart"
@@ -73,6 +79,7 @@ import {
   type AgentRunResponse,
   type AgentRunTimer as AgentRunTimerMessage,
   type AgentInterruptRequest as AgentInterruptRequestMessage,
+  type KaliCreationStageMessage,
 } from "@/api";
 import {
   useWebSocketClient,
@@ -90,6 +97,15 @@ const props = defineProps<{ target: tTarget }>();
 const run = ref<AgentRunResponse | null>(null);
 const isHovering = ref(false);
 const displayNow = ref(Date.now());
+const isBuilding = ref(false);
+const buildingStage = ref<string | null>(null);
+
+const buildingLabel = computed(() => {
+  if (!isBuilding.value) return null;
+  return buildingStage.value
+    ? $t(`console.stage.${buildingStage.value}`)
+    : $t("console.connecting");
+});
 const pendingInterrupt = ref<AgentInterruptRequestMessage | null>(null);
 
 const hasDuration = computed(
@@ -116,7 +132,8 @@ const formattedRemaining = computed(() => {
   const total = Math.max(0, Math.round(remainingSeconds.value));
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  const seconds = total % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 });
 
 function toolCallCommand(args: unknown): string {
@@ -136,16 +153,24 @@ async function loadRun() {
 async function handleStart() {
   if (!hasDuration.value) return;
 
+  isBuilding.value = true;
+  buildingStage.value = null;
+
   const result = await startAgent({
     path: { project_id: props.target.project_id, target_id: props.target.id },
   });
 
   if (result.error) {
+    isBuilding.value = false;
     const detail = (result.error as { detail?: string }).detail;
     toast.error(detail ?? $t("targets.agent_start_failed"), {
       position: toast.POSITION.TOP_CENTER,
     });
   }
+  // On success, start_agent() returns almost immediately - the container
+  // build (if any) and the run itself happen in the background. isBuilding
+  // stays true until an AgentRunStatus/AgentRunTimer message confirms the
+  // run has actually started, or an error log arrives.
 }
 
 async function handlePause() {
@@ -182,6 +207,7 @@ const onRunTimer: tCallback = (message) => {
   if (timerMessage.error) return;
   if (timerMessage.run.target_id !== props.target.id) return;
 
+  isBuilding.value = false;
   run.value = timerMessage.run;
   displayNow.value = Date.now();
 
@@ -199,6 +225,28 @@ const onInterruptRequest: tCallback = (message) => {
   pendingInterrupt.value = interruptMessage;
 };
 
+const onKaliStage: tCallback = (message) => {
+  const stageMessage = message as KaliCreationStageMessage;
+
+  if (stageMessage.error) return;
+  if (stageMessage.project_id !== props.target.project_id) return;
+  if (!isBuilding.value) return;
+
+  buildingStage.value = stageMessage.stage;
+};
+
+const onAgentMessage: tCallback = (message) => {
+  // Any log entry for this target (success or failure) means we're past
+  // the "building the container" phase - this is the safety net for a
+  // prep failure, which never sends an AgentRunTimer to clear isBuilding.
+  const m = message as { error?: unknown; log?: { target_id?: string } };
+
+  if (m.error) return;
+  if (m.log?.target_id !== props.target.id) return;
+
+  isBuilding.value = false;
+};
+
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
@@ -209,6 +257,12 @@ onMounted(() => {
 
   if (!ws_client.hook_exists("AgentInterruptRequest", onInterruptRequest))
     ws_client.add_hook("AgentInterruptRequest", onInterruptRequest);
+
+  if (!ws_client.hook_exists("KaliCreationStage", onKaliStage))
+    ws_client.add_hook("KaliCreationStage", onKaliStage);
+
+  if (!ws_client.hook_exists("AgentMessage", onAgentMessage))
+    ws_client.add_hook("AgentMessage", onAgentMessage);
 
   tickInterval = setInterval(() => {
     displayNow.value = Date.now();
@@ -223,7 +277,11 @@ onUnmounted(() => {
 <style scoped lang="css">
 .timer-button {
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+}
+
+.building-loader {
+  --size: 0.35px;
 }
 
 .timer-button--interrupted {

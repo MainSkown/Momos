@@ -41,18 +41,18 @@ L4PROTO_ICMPV6: Final = 58
 REVERSE_SHELL_PORT_RANGE: Final[range] = range(4444, 4449)
 
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    # "kali-linux-headless",
-    # "wordlists",
-    # "curl",
-    # "wget",
-     "nmap",
-    # "netcat-openbsd",
+    "kali-linux-headless",
+    "wordlists",
+    "curl",
+    "wget",
+    "nmap",
+    "netcat-openbsd",
     "nftables",
-    # "gobuster",
-    # "nikto",
-    # "exploitdb",
+    "gobuster",
+    "nikto",
+    "exploitdb",
     "iputils-ping",
-    # "dnsutils",
+    "dnsutils",
 )
 
 

@@ -31,7 +31,7 @@
             <span>{{ $t("targets.target") }}</span>
           </div>
           <!-- Settings -->
-          <div class="border small-cell" />
+          <div class="border run-cell" />
           <div class="border small-cell" />
           <div class="border small-cell" />
         </div>
@@ -54,7 +54,7 @@
             </div>
 
             <!-- Start/pause target scan -->
-            <div class="border small-cell">
+            <div class="border run-cell">
               <AgentRunButton :target="t" />
             </div>
 
@@ -224,6 +224,13 @@ function deleteTarget(id: string) {
 
 .small-cell {
   flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-cell {
+  flex: 0 0 92px;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, Column, DateTime
 from . import Target
 
 
@@ -15,7 +15,15 @@ class AgentRunState(str, Enum):
 class AgentRunBase(SQLModel):
     status: AgentRunState
     remaining_seconds: int
-    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # timezone=True is required - without it, SQLAlchemy/Postgres round-trips
+    # this as a timezone-naive value, silently dropping the UTC marker. The
+    # frontend then parses the resulting "no Z suffix" timestamp as local
+    # time (per the JS Date spec), which threw its elapsed-time countdown
+    # off by the local UTC offset.
+    recorded_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True)),
+    )
 
 
 class AgentRun(AgentRunBase, table=True):
