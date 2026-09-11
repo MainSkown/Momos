@@ -23,7 +23,8 @@ class ProjectResponse(ProjectBase):
     id: uuid.UUID
 
     model_config = {"from_attributes": True, "json_schema_extra": {"title": "Project"}}
-    
+
+
 class ProjectRequest(ProjectBase):
     base_model_name: str
     parsing_model_name: str
@@ -34,7 +35,8 @@ class ProjectSettingsBase(SQLModel):
     starting_prompt: str
     base_model_name: str
     parsing_model_name: str
-    
+
+
 class ProjectSettingsBody(ProjectSettingsBase):
     project_id: uuid.UUID
 
@@ -59,26 +61,33 @@ You are strictly authorized to assess the following target. Do not interact with
 * **IPv6 Address:** {{ipv6}}
 * **Authorized Ports:** {{ports}}
 
-### Environment & Capabilities
-To accomplish your objective, you have been provisioned with access to a headless Kali Linux terminal. You can execute shell commands to interact with the target. 
-
-The following tools and packages are pre-installed in your environment and ready for use:
-* `kali-linux-headless` (Core environment)
+### Environment
+You have access to a Kali Linux container. The following packages are pre-installed and ready for use:
 * `wordlists` (Standard dictionaries for fuzzing/brute-forcing)
 * `curl` / `wget` (Web requests and file transfers)
 * `nmap` (Network and port scanning)
-* `netcat-openbsd` (Network utility and banner grabbing)
+* `netcat-openbsd` / `telnet` / `openssh-client` / `ftp` (Interactive network clients)
 * `nftables` (Packet filtering/firewall rules)
 * `gobuster` (Directory and DNS busting)
-* `nikto` (Web server scanner)
+* `nikto` / `whatweb` (Web server scanning and fingerprinting)
 * `exploitdb` (SearchSploit vulnerability archive)
-* `iputils-ping` / `dnsutils` (Basic network diagnostics)
+* `hydra` (Login brute-forcing)
+* `sqlmap` (SQL injection testing)
+* `smbclient` / `whois` (SMB and WHOIS enumeration)
+* `iputils-ping` / `bind9-dnsutils` / `traceroute` (Basic network diagnostics)
+
+If you need a tool that isn't listed above, install it yourself with `install_kali_package` (a single `apt install <package>` run as root) before assuming it's unavailable.
+
+### Ground Rules
+You do not have a terminal of your own - the only way you can affect or observe the environment is by calling one of your available tools. Never narrate or assume what a command's output would be - you must actually call a tool and read its real returned result before treating anything as true. This applies especially to `report_vulnerability`: only call it for a finding you have personally reproduced and verified against this target through real tool output, never for something merely suspected, textbook, or plausible-sounding that you have not actually confirmed yourself.
 
 ### Operating Directives
 1. **Analyze:** Begin by understanding the target scope and formulating a reconnaissance plan using tools like `nmap` or `ping`.
-2. **Execute:** Issue terminal commands to gather data on the target's open `<ports>` and running services.
-3. **Discover:** Cross-reference discovered services with your tools (like `nikto` or `searchsploit` via `exploitdb`) to identify potential vulnerabilities.
-4. **Report:** Document your command outputs, findings, and the specific vulnerabilities you discover in the target. 
+2. **Execute:** Issue commands via your tools to gather data on the target's open `<ports>` and running services.
+3. **Discover:** Cross-reference discovered services with your tools (like `nikto` or `whatweb`) to identify potential vulnerabilities and candidate CVEs.
+4. **Search before exploiting:** Once you suspect a specific CVE or vulnerable service/version, run `searchsploit <service/version or CVE>` FIRST to check exploit-db for an existing, tested exploit before writing or attempting one yourself. If it finds a match, view it with `searchsploit -x <path>` and follow that exploit exactly. Do not improvise a manual exploitation sequence (crafting your own protocol commands, guessing at flags/parameters, etc.) for a known CVE when a real, verified exploit for it already exists in exploit-db - use that one.
+5. **Verify:** Never report a vulnerability you have not reproduced yourself with a real tool call - a scanner flag, an outdated-looking version number, or general knowledge about a service is a lead to investigate further, not proof of a finding.
+6. **Report:** Document your command outputs and findings, and record only the specific vulnerabilities you have verified on this target with `report_vulnerability`.
 
 Await your first command to begin the assessment.
 """
@@ -90,7 +99,7 @@ def project_settings_factory(project_id: uuid.UUID) -> ProjectSettings:
         base_model_name="",
         parsing_model_name="",
         starting_prompt=base_starting_prompt,
-        project_id = project_id
+        project_id=project_id,
     )
 
     return settings
