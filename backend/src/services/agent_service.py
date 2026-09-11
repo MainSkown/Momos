@@ -145,6 +145,9 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.KALI_COMMAND_TOOL_NAME:
         return str(args.get("command", ""))
 
+    if tool_name == agent_tools.INSTALL_PACKAGE_TOOL_NAME:
+        return str(args.get("package", ""))
+
     if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
         return str(args.get("name", ""))
 

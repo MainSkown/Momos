@@ -62,7 +62,7 @@ REVERSE_SHELL_PORT_RANGE: Final[range] = range(4444, 4449)
 DEFAULT_COMMAND_TIMEOUT_SECONDS: Final = 120
 
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    #"kali-linux-headless",
+    #"kali-linux-headless", # downloads too long
     "wordlists",
     "curl",
     "wget",
@@ -74,7 +74,21 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     "exploitdb",
     "iputils-ping",
     "bind9-dnsutils",
+    "whois",
+    "smbclient",
+    "whatweb",
+    "hydra",
+    "sqlmap",
+    "telnet",
+    "traceroute",
+    "ftp",
+    "openssh-client",
 )
+
+# Anything else the agent needs on top of this baseline is installed on
+# demand via the install_kali_package tool (agent_tools.py) - kept this list
+# short and curated rather than reaching back for kali-linux-headless, since
+# dropping that metapackage is what made container startup fast again.
 
 
 class KaliManger:

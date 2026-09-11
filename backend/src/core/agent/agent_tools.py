@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Callable
 from pydantic import ValidationError
 from langchain_core.tools import tool
@@ -6,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from src.core import db_manager, settings
 from src.core.kali_integration import kali_registry
+from src.core.kali_integration.kali_manager import KALI_USERS
 from src.core.kali_integration.kali_session import KaliSessionError
 from src.schemas import Vulnerability, VulnerabilityBase
 
@@ -17,6 +19,17 @@ SEND_TO_SESSION_TOOL_NAME = "send_to_session"
 READ_SESSION_TOOL_NAME = "read_session"
 CLOSE_SESSION_TOOL_NAME = "close_session"
 LIST_SESSIONS_TOOL_NAME = "list_sessions"
+INSTALL_PACKAGE_TOOL_NAME = "install_kali_package"
+
+# Debian package-name policy: lowercase letters, digits, '+', '-', '.', must
+# start with an alphanumeric. Enforced strictly here (not just relying on
+# apt's own error) because this string is interpolated straight into a root
+# shell command - anything looser would open command injection.
+PACKAGE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+
+# Package installs can be slow (large tools, dependency resolution) - longer
+# than the default one-shot command timeout.
+PACKAGE_INSTALL_TIMEOUT_SECONDS = 300
 
 # How long open_session waits for the command's initial output (a banner,
 # a prompt) before returning - kept short since most either respond
@@ -86,6 +99,55 @@ async def _run_kali_command(project_id: str, command: str) -> str:
             return "(command produced no output)"
 
         return await _parse_output(project_id, command, raw_output)
+
+
+async def _install_kali_package(project_id: str, package: str) -> str:
+    if not PACKAGE_NAME_PATTERN.match(package):
+        return (
+            f"Invalid package name '{package}'. Only a single, bare apt "
+            "package name is allowed - lowercase letters, digits, '+', '-', "
+            "'.', starting with a letter or digit. No flags, paths, spaces, "
+            "or shell operators."
+        )
+
+    manager = await kali_registry.get_manager(project_id)
+
+    # Shares command_lock with execute_kali_command - an apt-get invocation
+    # holds dpkg's lock for its whole run, so a concurrent one-shot command
+    # (or another install) would fail against it anyway.
+    async with manager.command_lock:
+        try:
+            output = await manager.execute(
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                f"--no-install-recommends {package}",
+                user=KALI_USERS.root,
+                timeout_seconds=PACKAGE_INSTALL_TIMEOUT_SECONDS,
+            )
+        except RuntimeError as e:
+            return f"Failed to install package '{package}': {e}"
+
+    return f"Package '{package}' installed successfully.\n\n{output.strip()}"
+
+
+def create_install_package_tool(project_id: str):
+    """Builds an install_kali_package tool bound to a specific project's Kali container."""
+
+    @tool(INSTALL_PACKAGE_TOOL_NAME)
+    async def install_kali_package(package: str) -> str:
+        """Installs a single apt package inside the Kali container (runs as
+        root, equivalent to `apt install <package>`). Use this when a tool
+        you need isn't already installed. Only a bare package name is
+        accepted - no flags, paths, spaces, or shell operators (e.g.
+        "hydra", not "hydra; rm -rf /" or "-y hydra"). Installing can take a
+        while for larger packages.
+
+        Args:
+            package: The exact apt package name to install, e.g. "hydra" or
+                "metasploit-framework".
+        """
+        return await _install_kali_package(project_id, package)
+
+    return install_kali_package
 
 
 def create_kali_tool(project_id: str):
@@ -307,6 +369,7 @@ def build_agent_tools(
 ) -> list:
     return [
         create_kali_tool(project_id),
+        create_install_package_tool(project_id),
         *create_session_tools(project_id, target_id),
         create_vulnerability_tool(project_id, target_id),
         create_finish_task_tool(on_finish),

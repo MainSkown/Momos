@@ -79,6 +79,7 @@ const ws_client = useWebSocketClient();
 
 type ToolName =
   | "execute_kali_command"
+  | "install_kali_package"
   | "open_session"
   | "send_to_session"
   | "read_session"
@@ -162,6 +163,7 @@ watch(
 
 const TOOL_LABELS: Record<ToolName, string> = {
   execute_kali_command: $t("agent_logs.tool_kali_command"),
+  install_kali_package: $t("agent_logs.tool_install_package"),
   open_session: $t("agent_logs.tool_open_session"),
   send_to_session: $t("agent_logs.tool_send_to_session"),
   read_session: $t("agent_logs.tool_read_session"),
@@ -173,6 +175,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
 
 const TOOL_ICONS: Record<ToolName, string> = {
   execute_kali_command: "terminal",
+  install_kali_package: "download",
   open_session: "power_settings_new",
   send_to_session: "keyboard",
   read_session: "visibility",

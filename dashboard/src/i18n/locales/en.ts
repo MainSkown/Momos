@@ -132,6 +132,7 @@ export const en = {
 
     agent_logs: {
         tool_kali_command: "Kali Command",
+        tool_install_package: "Package Installed",
         tool_open_session: "Session Opened",
         tool_send_to_session: "Sent to Session",
         tool_read_session: "Session Read",
