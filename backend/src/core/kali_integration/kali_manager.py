@@ -218,6 +218,20 @@ class KaliManger:
                 user=KALI_USERS.root,
             )
 
+        # Allow DNS resolution to any resolver - without this, any tool that
+        # does a lookup (nmap's reverse-DNS, curl/wget by hostname, etc.)
+        # gets its query silently dropped (not rejected) since the resolver
+        # isn't the target IP, and hangs until the tool's own DNS timeout
+        # expires instead of failing fast.
+        await self.execute(
+            "nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos udp dport 53 accept",
+            user=KALI_USERS.root,
+        )
+        await self.execute(
+            "nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos tcp dport 53 accept",
+            user=KALI_USERS.root,
+        )
+
         # Drop all traffic that's not going to target
         await self.execute(
             "nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos drop",
@@ -260,6 +274,17 @@ class KaliManger:
                 f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} meta l4proto {L4PROTO_ICMPV6} accept",
                 user=KALI_USERS.root,
             )
+
+        # Allow DNS resolution to any resolver - same reasoning as the ipv4
+        # table above.
+        await self.execute(
+            "nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos udp dport 53 accept",
+            user=KALI_USERS.root,
+        )
+        await self.execute(
+            "nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos tcp dport 53 accept",
+            user=KALI_USERS.root,
+        )
 
         # Drop all traffic that's not going to target
         await self.execute(

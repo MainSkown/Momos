@@ -32,6 +32,12 @@ REASONING_SYSTEM_PROMPT = (
     "live as your thought process, so it must never be empty."
 )
 
+REASONING_REMINDER = (
+    "Reminder: include your reasoning as plain text content alongside any "
+    "tool call you make this turn - 1-3 sentences on what you're trying to "
+    "find out and why. Never call a tool with empty text content."
+)
+
 
 class Agent:
     def __init__(
@@ -75,7 +81,14 @@ class Agent:
 
     def _call_model(self, state: AgentState):
         """Node: LLM processes the current state"""
-        response = self.llm_with_tools.invoke(state["messages"])
+        # Re-injected on every turn (not persisted to state/checkpoint) since
+        # a one-time system message at the start of a long conversation loses
+        # influence over later turns - putting it last, right before the
+        # model's turn, keeps it fresh regardless of how long the history is.
+        messages = list(state["messages"]) + [
+            SystemMessage(content=REASONING_REMINDER)
+        ]
+        response = self.llm_with_tools.invoke(messages)
         return {"messages": [response]}
 
     def _should_continue(self, state: AgentState):
