@@ -86,6 +86,7 @@ type ToolName =
   | "close_session"
   | "list_sessions"
   | "report_vulnerability"
+  | "log_attack_attempt"
   | "finish_task";
 
 const logEntries = ref<AgentLogResponse[]>([]);
@@ -170,6 +171,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
   close_session: $t("agent_logs.tool_close_session"),
   list_sessions: $t("agent_logs.tool_list_sessions"),
   report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
+  log_attack_attempt: $t("agent_logs.tool_log_attack_attempt"),
   finish_task: $t("agent_logs.tool_finish_task"),
 };
 
@@ -182,6 +184,7 @@ const TOOL_ICONS: Record<ToolName, string> = {
   close_session: "link_off",
   list_sessions: "list",
   report_vulnerability: "bug_report",
+  log_attack_attempt: "history_edu",
   finish_task: "task_alt",
 };
 

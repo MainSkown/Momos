@@ -148,6 +148,9 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.INSTALL_PACKAGE_TOOL_NAME:
         return str(args.get("package", ""))
 
+    if tool_name == agent_tools.ATTACK_LOG_TOOL_NAME:
+        return f"[{args.get('outcome', '')}] {args.get('target', '')}: {args.get('vector', '')}"
+
     if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
         return str(args.get("name", ""))
 

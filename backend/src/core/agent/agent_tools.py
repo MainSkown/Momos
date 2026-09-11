@@ -1,7 +1,7 @@
 import asyncio
 import re
-from typing import Callable
-from pydantic import ValidationError
+from typing import Callable, Dict, List
+from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
@@ -20,6 +20,9 @@ READ_SESSION_TOOL_NAME = "read_session"
 CLOSE_SESSION_TOOL_NAME = "close_session"
 LIST_SESSIONS_TOOL_NAME = "list_sessions"
 INSTALL_PACKAGE_TOOL_NAME = "install_kali_package"
+ATTACK_LOG_TOOL_NAME = "log_attack_attempt"
+
+ATTACK_OUTCOMES = {"vulnerable", "not_vulnerable", "inconclusive"}
 
 # Debian package-name policy: lowercase letters, digits, '+', '-', '.', must
 # start with an alphanumeric. Enforced strictly here (not just relying on
@@ -39,14 +42,39 @@ SESSION_OPEN_READ_SECONDS = 3
 PARSER_SYSTEM_PROMPT = (
     "You are a data-extraction assistant supporting a penetration-testing agent. "
     "You are given the exact shell command that was run inside a Kali Linux "
-    "container and its raw output. Extract and condense only the information "
-    "relevant to a security assessment: open ports, service names/versions, "
-    "discovered hosts, vulnerabilities, file paths, credentials, and other "
-    "actionable findings. Remove repetitive noise, banners, and formatting "
-    "clutter. If the command failed or produced an error, clearly state the "
-    "failure and its cause. Respond with plain, concise text only - no "
-    "commentary or suggestions."
+    "container and its raw output.\n\n"
+    "In 'summary', condense the output to only the information relevant to a "
+    "security assessment: open ports, service names/versions, discovered "
+    "hosts, vulnerabilities, file paths, credentials, and other actionable "
+    "findings. Remove repetitive noise, banners, and formatting clutter. If "
+    "the command failed or produced an error, clearly state the failure and "
+    "its cause. Plain, concise text only - no commentary or suggestions.\n\n"
+    "In 'facts', list any specific network ports this output identifies a "
+    "service name and/or version for, one entry per port in the exact "
+    "'<number>/tcp' or '<number>/udp' form. Leave it empty if none were "
+    "found - never invent one."
 )
+
+
+class _PortFact(BaseModel):
+    port: str = Field(description="e.g. '80/tcp' or '53/udp'")
+    service: str = ""
+    version: str = ""
+    notes: str = ""
+
+
+class _ParsedCommandOutput(BaseModel):
+    """Structured result of condensing one Kali command's raw output.
+
+    Used as the schema for parser_llm.with_structured_output() - Ollama
+    constrains decoding to this JSON shape directly, which is far more
+    reliable than asking a (often small, local) model to self-format an
+    extra marker line inside free text and then regex it back out; that
+    approach was tried and broke in practice (wrong casing, non-array
+    formatting, trailing prose after the marker)."""
+
+    summary: str
+    facts: List[_PortFact] = Field(default_factory=list)
 
 
 async def get_parsing_model_name(project_id: str) -> str | None:
@@ -58,7 +86,12 @@ async def get_parsing_model_name(project_id: str) -> str | None:
     return project_settings.parsing_model_name if project_settings else None
 
 
-async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
+async def _parse_output(
+    project_id: str,
+    command: str,
+    raw_output: str,
+    on_enumeration: Callable[[dict], None],
+) -> str:
     parsing_model_name = await get_parsing_model_name(project_id)
 
     if not parsing_model_name:
@@ -66,9 +99,10 @@ async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
         return raw_output
 
     parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
+    structured_llm = parser_llm.with_structured_output(_ParsedCommandOutput)
 
     try:
-        response = await parser_llm.ainvoke(
+        result = await structured_llm.ainvoke(
             [
                 SystemMessage(content=PARSER_SYSTEM_PROMPT),
                 HumanMessage(content=f"Command: {command}\n\nOutput:\n{raw_output}"),
@@ -76,14 +110,30 @@ async def _parse_output(project_id: str, command: str, raw_output: str) -> str:
         )
     except Exception as e:
         # Don't lose a real command result just because the parsing model
-        # hiccuped - give the agent the raw output instead.
+        # hiccuped (or doesn't support structured output) - give the agent
+        # the raw output instead.
         print(f"Output parsing failed, using raw output: {e}")
         return raw_output
 
-    return str(response.content)
+    entries: Dict[str, dict] = {}
+    for fact in result.facts:
+        port = fact.port.strip()
+        if not port:
+            continue
+        entries[port] = {
+            "service": fact.service,
+            "version": fact.version,
+            "notes": fact.notes,
+        }
+    if entries:
+        on_enumeration(entries)
+
+    return result.summary or raw_output
 
 
-async def _run_kali_command(project_id: str, command: str) -> str:
+async def _run_kali_command(
+    project_id: str, command: str, on_enumeration: Callable[[dict], None]
+) -> str:
     manager = await kali_registry.get_manager(project_id)
 
     # Serialize the whole command (docker exec + its parsing call) so that
@@ -98,7 +148,7 @@ async def _run_kali_command(project_id: str, command: str) -> str:
         if not raw_output.strip():
             return "(command produced no output)"
 
-        return await _parse_output(project_id, command, raw_output)
+        return await _parse_output(project_id, command, raw_output, on_enumeration)
 
 
 async def _install_kali_package(project_id: str, package: str) -> str:
@@ -150,7 +200,7 @@ def create_install_package_tool(project_id: str):
     return install_kali_package
 
 
-def create_kali_tool(project_id: str):
+def create_kali_tool(project_id: str, on_enumeration: Callable[[dict], None]):
     """Builds an execute_kali_command tool bound to a specific project's Kali container."""
 
     @tool(KALI_COMMAND_TOOL_NAME)
@@ -162,7 +212,7 @@ def create_kali_tool(project_id: str):
         calls. For anything interactive or stateful that needs to stay open
         and be driven turn by turn - nc/telnet holding a connection open, or
         listening for an incoming connection - use open_session instead."""
-        return await _run_kali_command(project_id, command)
+        return await _run_kali_command(project_id, command, on_enumeration)
 
     return execute_kali_command
 
@@ -243,6 +293,57 @@ def create_finish_task_tool(on_finish: Callable[[str], None]):
     return finish_task
 
 
+def create_attack_log_tool(on_attempt: Callable[[dict], None]):
+    """Builds a log_attack_attempt tool - the agent's own working-memory
+    audit trail of what it has tried against the target and whether it
+    worked. Deliberately separate from report_vulnerability: this is a
+    lightweight note (including failed/inconclusive attempts, so the agent
+    doesn't re-try or re-imagine the same thing later), not the formal,
+    CVSS-scored record of a confirmed finding."""
+
+    @tool(ATTACK_LOG_TOOL_NAME)
+    async def log_attack_attempt(
+        target: str, vector: str, outcome: str, notes: str = ""
+    ) -> str:
+        """Records one attempted attack/exploitation vector against a
+        specific port or service, and its outcome. Call this ONLY right
+        after the actual attempt - a real execute_kali_command or
+        send_to_session call whose result you have actually seen. Never
+        call this for something you only planned or described in your
+        reasoning without a matching tool call actually running it first -
+        "inconclusive" must mean "I tried it and the result was unclear",
+        not "I thought about trying it". If you have not actually run the
+        command yet, run it now instead of logging anything. A logged
+        failure keeps you (and future turns) from repeating or
+        hallucinating the same attempt again. This is separate from
+        report_vulnerability: a genuinely confirmed vulnerability still
+        needs its own report_vulnerability call with a CVSS vector for the
+        formal record.
+
+        Args:
+            target: The port/service or host the attempt was against, e.g.
+                "21/tcp (vsftpd 2.3.4)".
+            vector: What was tried, e.g. "exploit-db 49757 (vsftpd 2.3.4
+                backdoor)" or a short description of the manual technique.
+            outcome: One of "vulnerable", "not_vulnerable", or "inconclusive".
+            notes: Any short additional context - error messages, why it
+                failed, what would be needed to confirm it, etc.
+        """
+        normalized = outcome.strip().lower()
+        if normalized not in ATTACK_OUTCOMES:
+            return (
+                f"Invalid outcome '{outcome}'. Use one of: "
+                f"{', '.join(sorted(ATTACK_OUTCOMES))}."
+            )
+
+        on_attempt(
+            {"target": target, "vector": vector, "outcome": normalized, "notes": notes}
+        )
+        return f"Logged attack attempt against '{target}' ({normalized})."
+
+    return log_attack_attempt
+
+
 def create_session_tools(project_id: str, target_id: str) -> list:
     """Builds the interactive-session tool set (open/send/read/close/list),
     bound to a project's Kali container and the target whose run opened
@@ -268,8 +369,12 @@ def create_session_tools(project_id: str, target_id: str) -> list:
         would hang - or lose their state - under the normal one-shot
         execute_kali_command, whose every call runs in a fresh, independent
         process: e.g. `nc <host> <port>` or `telnet <host> <port>` to hold a
-        connection open and exchange data turn by turn, or `nc -lvnp <port>`
-        to listen for an incoming connection such as a reverse shell. For
+        connection open and exchange data turn by turn, `nc -lvnp <port>` to
+        listen for an incoming connection such as a reverse shell, or `ftp
+        <host>` to log in and browse a remote filesystem (e.g. testing an
+        anonymous FTP login: open_session("ftp <host>"), then
+        send_to_session with "anonymous" as the username when prompted, then
+        send_to_session again with an empty string as the password). For
         anything that runs to completion on its own (nmap, gobuster, curl,
         cat, ls, ...), use execute_kali_command instead - it is simpler and
         its output is automatically condensed for you.
@@ -280,7 +385,7 @@ def create_session_tools(project_id: str, target_id: str) -> list:
 
         Args:
             command: The shell command to run persistently, e.g.
-                "nc 10.0.0.5 4444" or "nc -lvnp 4444".
+                "nc 10.0.0.5 4444", "nc -lvnp 4444", or "ftp 10.0.0.5".
         """
         manager = await kali_registry.get_manager(project_id)
         try:
@@ -365,12 +470,17 @@ def create_session_tools(project_id: str, target_id: str) -> list:
 
 
 def build_agent_tools(
-    project_id: str, target_id: str, on_finish: Callable[[str], None]
+    project_id: str,
+    target_id: str,
+    on_finish: Callable[[str], None],
+    on_enumeration: Callable[[dict], None],
+    on_attempt: Callable[[dict], None],
 ) -> list:
     return [
-        create_kali_tool(project_id),
+        create_kali_tool(project_id, on_enumeration),
         create_install_package_tool(project_id),
         *create_session_tools(project_id, target_id),
         create_vulnerability_tool(project_id, target_id),
+        create_attack_log_tool(on_attempt),
         create_finish_task_tool(on_finish),
     ]

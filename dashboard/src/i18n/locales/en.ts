@@ -139,6 +139,7 @@ export const en = {
         tool_close_session: "Session Closed",
         tool_list_sessions: "Listed Sessions",
         tool_report_vulnerability: "Vulnerability Report",
+        tool_log_attack_attempt: "Attack Attempt Logged",
         tool_finish_task: "Task Finished",
         running: "Agent is running",
         no_logs: "No agent activity yet"
