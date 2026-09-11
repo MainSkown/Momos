@@ -358,7 +358,7 @@ check_client(store.openedProject);
 
   padding: 10px var(--spacing-md) var(--spacing-md) var(--spacing-md);
 
-  height: 240px;
+  height: 30vh;
 }
 
 .system-message {
