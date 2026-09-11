@@ -1,10 +1,24 @@
 import docker
 import asyncio
+import socket as socket_module
+import time
+import uuid
 from docker.errors import DockerException
 import logging
-from typing import Callable, Final, Optional, Sequence
+from typing import Callable, Dict, Final, List, Optional, Sequence
 from src.schemas import Target, KaliCreationStage
 from enum import Enum
+from .kali_session import (
+    KaliSession,
+    KaliSessionError,
+    DEFAULT_READ_WINDOW_SECONDS,
+    MAX_READ_WINDOW_SECONDS,
+    MAX_SESSIONS_PER_PROJECT,
+    SESSION_IDLE_TIMEOUT_SECONDS,
+    SESSION_SWEEP_INTERVAL_SECONDS,
+    SOCKET_RECV_CHUNK_BYTES,
+    SOCKET_WRITE_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger("momos.kali")
 
@@ -48,7 +62,7 @@ REVERSE_SHELL_PORT_RANGE: Final[range] = range(4444, 4449)
 DEFAULT_COMMAND_TIMEOUT_SECONDS: Final = 120
 
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
-    "kali-linux-headless",
+    #"kali-linux-headless",
     "wordlists",
     "curl",
     "wget",
@@ -59,7 +73,7 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     "nikto",
     "exploitdb",
     "iputils-ping",
-    "dnsutils",
+    "bind9-dnsutils",
 )
 
 
@@ -80,6 +94,16 @@ class KaliManger:
         # docker exec calls (each potentially a heavy tool like nmap) plus
         # that many simultaneous local-LLM parsing calls, all at once.
         self.command_lock = asyncio.Lock()
+
+        # Persistent interactive sessions (nc/telnet, eventually a
+        # reverse-shell listener) - deliberately independent of
+        # command_lock above, since a long-lived session must never block
+        # one-shot execute() calls or vice versa. This lock only guards
+        # dict membership; each KaliSession has its own io_lock for its
+        # actual socket I/O.
+        self.sessions: Dict[str, KaliSession] = {}
+        self.sessions_lock = asyncio.Lock()
+        self._session_sweep_task: Optional[asyncio.Task] = None
 
         try:
             self.client = docker.from_env()
@@ -203,9 +227,13 @@ class KaliManger:
         whether the container was just reused or freshly built. So stale or
         wrong target rules can't persist regardless of what this finds."""
         try:
-            self._exec_in_container(f"dpkg -s {' '.join(self.packages)} >/dev/null 2>&1")
-            self._exec_in_container(f"id -u {MOMOS_USER} >/dev/null 2>&1")
-            self._exec_in_container("nft list ruleset >/dev/null 2>&1")
+            # Deliberately NOT redirected to /dev/null - dpkg/id/nft's own
+            # output on failure (e.g. "package 'X' is not installed") is
+            # exactly what makes a failure here diagnosable, and
+            # _exec_in_container already captures it into the RuntimeError.
+            self._exec_in_container(f"dpkg -s {' '.join(self.packages)}")
+            self._exec_in_container(f"id -u {MOMOS_USER}")
+            self._exec_in_container("nft list ruleset")
         except RuntimeError as e:
             print(f"Kali container configuration check failed: {e}", flush=True)
             return False
@@ -252,6 +280,232 @@ class KaliManger:
             )
 
         return output
+
+    # --- Persistent interactive sessions ---
+    # For commands that need to stay open and be driven turn by turn
+    # (nc/telnet holding a connection, eventually a reverse-shell listener)
+    # rather than run once to completion. See kali_session.py for the
+    # KaliSession dataclass and tunables.
+
+    def _open_session_sync(
+        self, command: str, user: KALI_USERS
+    ) -> tuple[str, socket_module.socket]:
+        if self.container is None:
+            raise RuntimeError("Container is not running")
+
+        exec_id = self.client.api.exec_create(
+            self.container.id,
+            ["/bin/bash", "-c", command],
+            stdin=True,
+            tty=True,
+            stdout=True,
+            stderr=True,
+            user=str(user),
+            workdir="/home/momos" if user == KALI_USERS.momos else "/",
+        )["Id"]
+
+        # exec_start(socket=True) returns a socket.SocketIO wrapper, not a
+        # raw socket - its .write() is a single non-retrying send() and it
+        # has no .recv()/.settimeout(). The actually-usable raw socket is
+        # the wrapper's private ._sock. This is a docker-py internal, not a
+        # stable public API - confirmed against the version pinned in
+        # poetry.lock; re-verify if that pin is ever bumped.
+        wrapper = self.client.api.exec_start(exec_id, socket=True, tty=True)
+        return exec_id, wrapper._sock
+
+    async def open_session(
+        self, command: str, target_id: str, user: KALI_USERS = KALI_USERS.momos
+    ) -> KaliSession:
+        async with self.sessions_lock:
+            if len(self.sessions) >= MAX_SESSIONS_PER_PROJECT:
+                raise KaliSessionError(
+                    f"Too many open sessions ({MAX_SESSIONS_PER_PROJECT} max) - "
+                    "close an existing one with close_session before opening another."
+                )
+
+        loop = asyncio.get_running_loop()
+        exec_id, raw_sock = await loop.run_in_executor(
+            None, self._open_session_sync, command, user
+        )
+
+        session = KaliSession(
+            session_id=str(uuid.uuid4()),
+            command=command,
+            target_id=target_id,
+            exec_id=exec_id,
+            sock=raw_sock,
+            user=str(user),
+        )
+
+        async with self.sessions_lock:
+            self.sessions[session.session_id] = session
+
+        self._ensure_session_sweep_running()
+        return session
+
+    def _session_io_sync(
+        self,
+        sock: socket_module.socket,
+        data: Optional[bytes],
+        read_window: float,
+    ) -> str:
+        """Runs in the executor thread. Optionally writes `data`, then
+        drains whatever arrives until `read_window` seconds pass with no
+        new data, or the peer closes (the session's process exited)."""
+        if data is not None:
+            sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
+            sock.sendall(data)
+
+        sock.settimeout(read_window)
+        chunks = bytearray()
+        try:
+            while True:
+                chunk = sock.recv(SOCKET_RECV_CHUNK_BYTES)
+                if not chunk:
+                    raise EOFError("session process exited")
+                chunks.extend(chunk)
+        except socket_module.timeout:
+            pass  # Expected: no more output within the window.
+
+        return chunks.decode(errors="replace")
+
+    async def write_to_session(
+        self,
+        session_id: str,
+        data: str,
+        read_window: float = DEFAULT_READ_WINDOW_SECONDS,
+    ) -> str:
+        # tty=True means the program on the other end expects a line
+        # terminator to treat this as "Enter was pressed".
+        return await self._session_io(session_id, (data + "\n").encode(), read_window)
+
+    async def read_session(
+        self, session_id: str, read_window: float = DEFAULT_READ_WINDOW_SECONDS
+    ) -> str:
+        return await self._session_io(session_id, None, read_window)
+
+    async def _session_io(
+        self, session_id: str, data: Optional[bytes], read_window: float
+    ) -> str:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KaliSessionError(
+                f"No such session '{session_id}' - it may have already been "
+                "closed (explicitly, by an idle timeout, or because its "
+                "process exited)."
+            )
+        if session.closed:
+            raise KaliSessionError(
+                f"Session '{session_id}' is closed: {session.close_reason}"
+            )
+
+        read_window = max(0.5, min(read_window, MAX_READ_WINDOW_SECONDS))
+        loop = asyncio.get_running_loop()
+
+        async with session.io_lock:
+            try:
+                output = await loop.run_in_executor(
+                    None, self._session_io_sync, session.sock, data, read_window
+                )
+            except EOFError:
+                exit_info = await loop.run_in_executor(
+                    None, self.client.api.exec_inspect, session.exec_id
+                )
+                # NOT _close_session() - it re-acquires session.io_lock,
+                # which we're already holding here, which would deadlock.
+                await self._remove_from_registry(session)
+                await self._close_session_locked(
+                    session,
+                    reason=f"process exited (exit code {exit_info.get('ExitCode')})",
+                )
+                raise KaliSessionError(
+                    f"Session '{session_id}' process exited "
+                    f"(exit code {exit_info.get('ExitCode')}). The session is now closed."
+                )
+            except OSError as e:
+                await self._remove_from_registry(session)
+                await self._close_session_locked(session, reason=f"socket error: {e}")
+                raise KaliSessionError(
+                    f"Session '{session_id}' hit a socket error and was closed: {e}"
+                )
+
+        session.last_activity = time.monotonic()
+        return output if output else "(no output within the read window)"
+
+    async def close_session(self, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session is not None:
+            await self._close_session(session, reason="closed by agent")
+
+    async def _remove_from_registry(self, session: KaliSession) -> None:
+        async with self.sessions_lock:
+            self.sessions.pop(session.session_id, None)
+
+    async def _close_session_locked(self, session: KaliSession, reason: str) -> None:
+        """Actually closes the socket. Caller must already hold
+        session.io_lock - use _close_session() instead unless you're already
+        inside a block that holds it (e.g. _session_io's except handlers)."""
+        if session.closed:
+            return
+        session.closed = True
+        session.close_reason = reason
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, session.sock.close)
+
+    async def _close_session(self, session: KaliSession, reason: str) -> None:
+        await self._remove_from_registry(session)
+        # Wait out any in-flight read/write on this session rather than
+        # closing the socket out from under it.
+        async with session.io_lock:
+            await self._close_session_locked(session, reason)
+
+    async def close_sessions_for_target(self, target_id: str) -> None:
+        async with self.sessions_lock:
+            to_close = [
+                s for s in self.sessions.values() if s.target_id == target_id
+            ]
+        for session in to_close:
+            await self._close_session(session, reason="agent run ended")
+
+    async def close_all_sessions(self) -> None:
+        async with self.sessions_lock:
+            to_close = list(self.sessions.values())
+        for session in to_close:
+            await self._close_session(session, reason="container stopped")
+
+    async def list_sessions(self, target_id: str) -> List[KaliSession]:
+        async with self.sessions_lock:
+            return [s for s in self.sessions.values() if s.target_id == target_id]
+
+    def _ensure_session_sweep_running(self):
+        if self._session_sweep_task is None or self._session_sweep_task.done():
+            self._session_sweep_task = asyncio.get_running_loop().create_task(
+                self._sweep_idle_sessions()
+            )
+
+    async def _sweep_idle_sessions(self):
+        try:
+            while True:
+                await asyncio.sleep(SESSION_SWEEP_INTERVAL_SECONDS)
+                async with self.sessions_lock:
+                    if not self.sessions:
+                        # Nothing left to watch - the next open_session()
+                        # restarts this sweep.
+                        return
+                    now = time.monotonic()
+                    idle = [
+                        s
+                        for s in self.sessions.values()
+                        if now - s.last_activity > SESSION_IDLE_TIMEOUT_SECONDS
+                    ]
+                for session in idle:
+                    logger.info(
+                        f"Closing idle kali session {session.session_id} "
+                        f"({session.command!r})"
+                    )
+                    await self._close_session(session, reason="idle timeout")
+        except asyncio.CancelledError:
+            pass
 
     async def prepare_nftables(self, target: Target):
         # Reset only our own tables - NOT "nft flush ruleset". This container
@@ -389,6 +643,11 @@ class KaliManger:
         )
 
     async def stop(self):
+        if self._session_sweep_task is not None:
+            self._session_sweep_task.cancel()
+            self._session_sweep_task = None
+        await self.close_all_sessions()
+
         if self.container:
             logger.info(f"Closing Kali container: {self.container_name}")
             loop = asyncio.get_running_loop()

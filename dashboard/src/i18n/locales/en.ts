@@ -132,6 +132,11 @@ export const en = {
 
     agent_logs: {
         tool_kali_command: "Kali Command",
+        tool_open_session: "Session Opened",
+        tool_send_to_session: "Sent to Session",
+        tool_read_session: "Session Read",
+        tool_close_session: "Session Closed",
+        tool_list_sessions: "Listed Sessions",
         tool_report_vulnerability: "Vulnerability Report",
         tool_finish_task: "Task Finished",
         running: "Agent is running",

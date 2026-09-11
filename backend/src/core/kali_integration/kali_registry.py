@@ -23,6 +23,13 @@ class KaliRegistry:
             self._active_managers[project_id] = manager
             return manager
 
+    async def get_manager_if_exists(self, project_id: str) -> Optional[KaliManger]:
+        """Like get_manager, but never creates one - for cleanup paths (e.g.
+        closing a target's sessions when its run ends) that shouldn't spin
+        up a container just because a run is finishing."""
+        async with self._lock:
+            return self._active_managers.get(project_id)
+
     async def delete_manager(self, project_id: str):
         async with self._lock:
             manager = self._active_managers.pop(project_id, None)

@@ -23,20 +23,24 @@ class AgentInterruptAction(TypedDict):
     tool_calls: list[Any]
 
 
-REASONING_SYSTEM_PROMPT = (
-    "Before every tool call, briefly state your reasoning first: what you "
-    "currently know, what you're trying to find out or accomplish next, and "
-    "why this specific action is the right next step. Write this as plain "
-    "text content alongside the tool call, not inside the tool call's "
-    "arguments. Keep it to 1-3 sentences - this is shown to the user "
-    "live as your thought process, so it must never be empty."
+# Two-phase turn: many tool-calling chat templates only give the model a
+# slot for EITHER plain text OR a tool call in one turn, never both, no
+# matter what a system prompt asks for - that's a template/training
+# constraint a single call can't reliably override (confirmed empirically:
+# a one-time system message, then a per-turn reminder, both failed to
+# produce visible reasoning across multiple real turns). Splitting into a
+# plain reasoning call followed by a tool-bound call guarantees a reasoning
+# line every time, and - as a secondary benefit - tends to improve decision
+# quality even on models that aren't dedicated "reasoning" models, since it
+# forces the same step-by-step scaffold chain-of-thought prompting relies on.
+REASONING_ONLY_PROMPT = (
+    "Think through the current situation before acting: what you know so "
+    "far, what you're trying to find out or accomplish next, and why that "
+    "is the right next step. Respond with ONLY that reasoning as 1-3 "
+    "sentences of plain text - do not call a tool or take any action yet."
 )
 
-REASONING_REMINDER = (
-    "Reminder: include your reasoning as plain text content alongside any "
-    "tool call you make this turn - 1-3 sentences on what you're trying to "
-    "find out and why. Never call a tool with empty text content."
-)
+ACT_ON_REASONING_PROMPT = "Now act on the reasoning above by calling the appropriate tool."
 
 
 class Agent:
@@ -80,15 +84,35 @@ class Agent:
         )
 
     def _call_model(self, state: AgentState):
-        """Node: LLM processes the current state"""
-        # Re-injected on every turn (not persisted to state/checkpoint) since
-        # a one-time system message at the start of a long conversation loses
-        # influence over later turns - putting it last, right before the
-        # model's turn, keeps it fresh regardless of how long the history is.
-        messages = list(state["messages"]) + [
-            SystemMessage(content=REASONING_REMINDER)
-        ]
-        response = self.llm_with_tools.invoke(messages)
+        """Node: LLM processes the current state.
+
+        Two calls, not one: first the plain (non-tool-bound) model states
+        its reasoning as text, then the tool-bound model acts on it. Neither
+        the reasoning prompt nor the reasoning response itself is persisted
+        into state/checkpoint - only the final response (with the reasoning
+        folded into its content) is, keeping the saved conversation the same
+        shape as before."""
+        messages = list(state["messages"])
+
+        reasoning_response = self.llm.invoke(
+            messages + [SystemMessage(content=REASONING_ONLY_PROMPT)]
+        )
+        reasoning_text = str(reasoning_response.content).strip()
+
+        response = self.llm_with_tools.invoke(
+            messages
+            + [
+                AIMessage(content=reasoning_text),
+                SystemMessage(content=ACT_ON_REASONING_PROMPT),
+            ]
+        )
+
+        # Make sure the reasoning is visible even if the tool-calling model
+        # itself returns empty content alongside its tool call, which is the
+        # common case this whole two-call split exists to work around.
+        if reasoning_text and not str(response.content).strip():
+            response = response.model_copy(update={"content": reasoning_text})
+
         return {"messages": [response]}
 
     def _should_continue(self, state: AgentState):
@@ -133,10 +157,7 @@ class Agent:
                 "ports": target.ports,
             }
             input_data = {
-                "messages": [
-                    SystemMessage(content=REASONING_SYSTEM_PROMPT),
-                    ("user", start_prompt),
-                ],
+                "messages": [("user", start_prompt)],
                 "target_scope": target_scope,
             }
 

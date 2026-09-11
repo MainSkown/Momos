@@ -77,7 +77,15 @@ const { t: $t } = useI18n();
 const store = useMomosStore();
 const ws_client = useWebSocketClient();
 
-type ToolName = "execute_kali_command" | "report_vulnerability" | "finish_task";
+type ToolName =
+  | "execute_kali_command"
+  | "open_session"
+  | "send_to_session"
+  | "read_session"
+  | "close_session"
+  | "list_sessions"
+  | "report_vulnerability"
+  | "finish_task";
 
 const logEntries = ref<AgentLogResponse[]>([]);
 const logScreenRef = ref<HTMLElement | null>(null);
@@ -154,12 +162,22 @@ watch(
 
 const TOOL_LABELS: Record<ToolName, string> = {
   execute_kali_command: $t("agent_logs.tool_kali_command"),
+  open_session: $t("agent_logs.tool_open_session"),
+  send_to_session: $t("agent_logs.tool_send_to_session"),
+  read_session: $t("agent_logs.tool_read_session"),
+  close_session: $t("agent_logs.tool_close_session"),
+  list_sessions: $t("agent_logs.tool_list_sessions"),
   report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
   finish_task: $t("agent_logs.tool_finish_task"),
 };
 
 const TOOL_ICONS: Record<ToolName, string> = {
   execute_kali_command: "terminal",
+  open_session: "power_settings_new",
+  send_to_session: "keyboard",
+  read_session: "visibility",
+  close_session: "link_off",
+  list_sessions: "list",
   report_vulnerability: "bug_report",
   finish_task: "task_alt",
 };

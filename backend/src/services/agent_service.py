@@ -3,12 +3,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    HumanMessage,
-    SystemMessage,
     ToolMessage,
 )
-from langchain_ollama import ChatOllama
-from src.core import db_manager, settings
+from src.core import db_manager
 from src.core.agent import Agent, agent_tools
 from src.core.agent import agent_checkpointer
 from src.core.kali_integration import kali_registry
@@ -154,40 +151,22 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
         return str(args.get("summary", ""))
 
+    if tool_name == agent_tools.OPEN_SESSION_TOOL_NAME:
+        return str(args.get("command", ""))
+
+    if tool_name == agent_tools.SEND_TO_SESSION_TOOL_NAME:
+        return f"[{args.get('session_id', '')}] {args.get('input', '')}"
+
+    if tool_name == agent_tools.READ_SESSION_TOOL_NAME:
+        return f"[{args.get('session_id', '')}] (read)"
+
+    if tool_name == agent_tools.CLOSE_SESSION_TOOL_NAME:
+        return f"[{args.get('session_id', '')}] (close)"
+
+    if tool_name == agent_tools.LIST_SESSIONS_TOOL_NAME:
+        return "(list sessions)"
+
     return ", ".join(f"{k}={v}" for k, v in args.items())
-
-
-LOG_SUMMARY_SYSTEM_PROMPT = (
-    "You are summarizing a penetration-testing agent's activity for a live "
-    "status log. Rewrite the given text as a single short, clear sentence "
-    "describing what the agent is doing, thinking, or found. Keep it factual "
-    "and concise - no preamble, no commentary, just the summary."
-)
-
-
-async def _summarize_for_log(project_id: str, content: str) -> str:
-    parsing_model_name = await agent_tools.get_parsing_model_name(project_id)
-
-    if not parsing_model_name:
-        # No parsing model configured for this project - fall back to raw content
-        return content
-
-    parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
-
-    try:
-        response = await parser_llm.ainvoke(
-            [
-                SystemMessage(content=LOG_SUMMARY_SYSTEM_PROMPT),
-                HumanMessage(content=content),
-            ]
-        )
-    except Exception as e:
-        # A flaky/unreachable parsing model must not take down the whole
-        # agent run - fall back to the raw content for this one log entry.
-        print(f"Log summarization failed, using raw content: {e}")
-        return content
-
-    return str(response.content)
 
 
 def _message_to_log_specs(
@@ -439,14 +418,13 @@ class AgentService:
                     continue
 
                 for log_type, content, tool_name in _message_to_log_specs(event):
-                    if log_type == "thinking":
-                        content = await _summarize_for_log(project_id, content)
-                    # "action" (ToolMessage) content is never summarized here -
-                    # kali command output already went through the parsing
-                    # model inside the tool itself (see agent_tools.py), and
-                    # other action content (vulnerability confirmations, tool
-                    # errors) is already short. Summarizing it again would
-                    # double the local-LLM load for every single tool call.
+                    # Log content is shown as-is now, no summarization pass -
+                    # in testing, running the agent's own deliberate
+                    # reasoning (from the two-phase _call_model split) back
+                    # through a separate parsing model degraded it rather
+                    # than clarified it. Kali command output is already
+                    # condensed by the parsing model inside the tool itself
+                    # (see agent_tools.py) before it ever reaches here.
 
                     await _persist_and_broadcast(
                         project_id, target_id, log_type, content, tool_name
@@ -476,6 +454,10 @@ class AgentService:
             )
             await _persist_run_state(project_id, target_id, AgentRunState.FINISHED, 0)
         finally:
+            manager = await kali_registry.get_manager_if_exists(project_id)
+            if manager is not None:
+                await manager.close_sessions_for_target(target_id)
+
             _pending_interrupts.pop(target_id, None)
             _stop_events.pop(target_id, None)
             _run_states.pop(target_id, None)
