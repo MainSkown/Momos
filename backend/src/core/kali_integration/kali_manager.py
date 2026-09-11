@@ -40,6 +40,13 @@ L4PROTO_ICMPV6: Final = 58
 # no listening tool exists yet; revisit (e.g. per-project ranges) once one does.
 REVERSE_SHELL_PORT_RANGE: Final[range] = range(4444, 4449)
 
+# Applied to every command run via execute() (agent tool calls and console
+# commands both go through it). Without this, a command that never
+# terminates on its own - nc/telnet opening an interactive session, an
+# unexpected prompt, anything waiting on stdin - hangs the exec call
+# forever, and everything queued behind it via command_lock along with it.
+DEFAULT_COMMAND_TIMEOUT_SECONDS: Final = 120
+
 DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     "kali-linux-headless",
     "wordlists",
@@ -96,17 +103,47 @@ class KaliManger:
     def _create_container(
         self, on_stage: Optional[Callable[[KaliCreationStage], None]] = None
     ):
-        # Check if container with same name exist
+        # Check if a container with the same name already exists and, if so,
+        # whether it's actually usable as-is - re-downloading and
+        # reinstalling every package on every reuse (e.g. every backend
+        # restart during dev) is slow and unnecessary if it's already there.
         self._report(on_stage, KaliCreationStage.checking_container)
+        existing_container = None
         try:
-            old_container = self.client.containers.get(self.container_name)
-            print(
-                f"Container {self.container_name} already exists. Removing.", flush=True
-            )
-            # Removing because it can have not completed the initializing
-            old_container.remove(force=True)
+            existing_container = self.client.containers.get(self.container_name)
         except docker.errors.NotFound:
             pass
+
+        if existing_container is not None:
+            if existing_container.status != "running":
+                try:
+                    existing_container.start()
+                    existing_container.reload()
+                except Exception as e:
+                    print(
+                        f"Could not restart existing container {self.container_name}: {e}",
+                        flush=True,
+                    )
+                    existing_container = None
+
+            if existing_container is not None and existing_container.status == "running":
+                self.container = existing_container
+
+                if self._is_configured_correctly():
+                    print(
+                        f"Reusing already-configured container: {self.container_name}",
+                        flush=True,
+                    )
+                    return
+
+                print(
+                    f"Container {self.container_name} exists but isn't correctly "
+                    "configured - rebuilding.",
+                    flush=True,
+                )
+
+            self.container = None
+            existing_container.remove(force=True)
 
         print("Starting container")
         self._report(on_stage, KaliCreationStage.starting_container)
@@ -114,13 +151,19 @@ class KaliManger:
             image="kalilinux/kali-rolling:latest",
             name=self.container_name,
             detach=True,
-            tty=True,            
+            tty=True,
             remove=True,
             cap_add=["NET_ADMIN", "NET_RAW"],
             ports={f"{port}/tcp": port for port in REVERSE_SHELL_PORT_RANGE},
         )
 
         self._configure_container(on_stage)
+
+        self._report(on_stage, KaliCreationStage.verifying_setup)
+        if not self._is_configured_correctly():
+            raise RuntimeError(
+                f"Kali container {self.container_name} failed post-setup verification"
+            )
 
     def _configure_container(
         self, on_stage: Optional[Callable[[KaliCreationStage], None]] = None
@@ -136,7 +179,7 @@ class KaliManger:
         )
         print("Setting up momos user")
         self._report(on_stage, KaliCreationStage.creating_user)
-        
+
         self._exec_in_container(
             f"id -u {MOMOS_USER} >/dev/null 2>&1 || useradd --system -s /bin/bash {MOMOS_USER}"
         )
@@ -146,7 +189,41 @@ class KaliManger:
             f"install -d -o {MOMOS_USER} -g {MOMOS_USER} /home/{MOMOS_USER}"
         )
 
-    def _exec_in_container(self, command: str, user: str = "root"):
+    def _is_configured_correctly(self) -> bool:
+        """Checks that the container has every required package installed,
+        a working nftables setup, and the momos user - used both to decide
+        whether an existing container can be reused, and as a final sanity
+        check right after a fresh setup.
+
+        The nftables check only confirms the binary/kernel support actually
+        works (can list the ruleset) - it deliberately does NOT check for
+        any specific target's rules, since there's no target in scope here
+        and none would be reliable anyway: prepare_nftables() unconditionally
+        tears down and rebuilds the target-scoped rules on every agent start,
+        whether the container was just reused or freshly built. So stale or
+        wrong target rules can't persist regardless of what this finds."""
+        try:
+            self._exec_in_container(f"dpkg -s {' '.join(self.packages)} >/dev/null 2>&1")
+            self._exec_in_container(f"id -u {MOMOS_USER} >/dev/null 2>&1")
+            self._exec_in_container("nft list ruleset >/dev/null 2>&1")
+        except RuntimeError as e:
+            print(f"Kali container configuration check failed: {e}", flush=True)
+            return False
+
+        return True
+
+    def _exec_in_container(
+        self, command: str, user: str = "root", timeout_seconds: Optional[int] = None
+    ):
+        if timeout_seconds is not None:
+            # Anything that opens an interactive session and waits on stdin
+            # (nc without -z, telnet, an ftp/ssh client, ...) would otherwise
+            # hang this call forever - and everything serialized behind it
+            # via command_lock along with it. `timeout` runs entirely inside
+            # the container's own process tree, so it reliably kills the
+            # actual hung process regardless of what it's doing.
+            command = f"timeout --kill-after=5 {timeout_seconds} {command}"
+
         shell_cmd = ["/bin/bash", "-c", command]
 
         if self.container is None:
@@ -161,6 +238,13 @@ class KaliManger:
             if isinstance(result.output, (bytes, bytearray))
             else str(result.output)
         )
+
+        # `timeout` exits 124 if it had to send SIGTERM, or 137 if the
+        # command ignored that and needed SIGKILL after the grace period.
+        if timeout_seconds is not None and exit_code in (124, 137):
+            raise RuntimeError(
+                f"Command timed out after {timeout_seconds}s and was terminated: {shell_cmd}\n{output}"
+            )
 
         if exit_code != 0:
             raise RuntimeError(
@@ -292,10 +376,17 @@ class KaliManger:
             user=KALI_USERS.root,
         )
 
-    async def execute(self, command: str, user: KALI_USERS = KALI_USERS.momos) -> str:
+    async def execute(
+        self,
+        command: str,
+        user: KALI_USERS = KALI_USERS.momos,
+        timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    ) -> str:
         loop = asyncio.get_running_loop()
 
-        return await loop.run_in_executor(None, self._exec_in_container, command, user)
+        return await loop.run_in_executor(
+            None, self._exec_in_container, command, user, timeout_seconds
+        )
 
     async def stop(self):
         if self.container:

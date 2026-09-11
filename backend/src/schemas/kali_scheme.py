@@ -18,6 +18,7 @@ class KaliCreationStage(str, Enum):
     updating_packages = "updating_packages"
     installing_packages = "installing_packages"
     creating_user = "creating_user"
+    verifying_setup = "verifying_setup"
 
     def __str__(self) -> str:
         return self.value

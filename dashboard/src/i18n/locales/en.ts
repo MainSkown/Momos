@@ -120,7 +120,8 @@ export const en = {
             starting_container: "Starting Kali container",
             updating_packages: "Updating package lists",
             installing_packages: "Installing Kali packages",
-            creating_user: "Setting up user account"
+            creating_user: "Setting up user account",
+            verifying_setup: "Verifying container setup"
         }
     },
 
