@@ -78,13 +78,14 @@ const store = useMomosStore();
 const ws_client = useWebSocketClient();
 
 type ToolName =
-  | "execute_kali_command"
   | "install_kali_package"
-  | "open_session"
-  | "send_to_session"
-  | "read_session"
+  | "run"
+  | "new_session"
+  | "switch_session"
   | "close_session"
   | "list_sessions"
+  | "interrupt_session"
+  | "switch_mode"
   | "report_vulnerability"
   | "log_attack_attempt"
   | "finish_task";
@@ -163,26 +164,28 @@ watch(
 );
 
 const TOOL_LABELS: Record<ToolName, string> = {
-  execute_kali_command: $t("agent_logs.tool_kali_command"),
   install_kali_package: $t("agent_logs.tool_install_package"),
-  open_session: $t("agent_logs.tool_open_session"),
-  send_to_session: $t("agent_logs.tool_send_to_session"),
-  read_session: $t("agent_logs.tool_read_session"),
+  run: $t("agent_logs.tool_run"),
+  new_session: $t("agent_logs.tool_new_session"),
+  switch_session: $t("agent_logs.tool_switch_session"),
   close_session: $t("agent_logs.tool_close_session"),
   list_sessions: $t("agent_logs.tool_list_sessions"),
+  interrupt_session: $t("agent_logs.tool_interrupt_session"),
+  switch_mode: $t("agent_logs.tool_switch_mode"),
   report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
   log_attack_attempt: $t("agent_logs.tool_log_attack_attempt"),
   finish_task: $t("agent_logs.tool_finish_task"),
 };
 
 const TOOL_ICONS: Record<ToolName, string> = {
-  execute_kali_command: "terminal",
   install_kali_package: "download",
-  open_session: "power_settings_new",
-  send_to_session: "keyboard",
-  read_session: "visibility",
+  run: "terminal",
+  new_session: "power_settings_new",
+  switch_session: "swap_horiz",
   close_session: "link_off",
   list_sessions: "list",
+  interrupt_session: "block",
+  switch_mode: "compare_arrows",
   report_vulnerability: "bug_report",
   log_attack_attempt: "history_edu",
   finish_task: "task_alt",

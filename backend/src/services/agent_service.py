@@ -157,20 +157,27 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
         return str(args.get("summary", ""))
 
-    if tool_name == agent_tools.OPEN_SESSION_TOOL_NAME:
-        return str(args.get("command", ""))
+    if tool_name == agent_tools.SWITCH_MODE_TOOL_NAME:
+        return f"{args.get('mode', '')}: {args.get('reason', '')}"
 
-    if tool_name == agent_tools.SEND_TO_SESSION_TOOL_NAME:
-        return f"[{args.get('session_id', '')}] {args.get('input', '')}"
+    if tool_name == agent_tools.RUN_TOOL_NAME:
+        input_value = args.get("input")
+        return str(input_value) if input_value is not None else "(checking for output)"
 
-    if tool_name == agent_tools.READ_SESSION_TOOL_NAME:
-        return f"[{args.get('session_id', '')}] (read)"
+    if tool_name == agent_tools.NEW_SESSION_TOOL_NAME:
+        return f"[{args.get('name', '')}] {args.get('command', '')}"
+
+    if tool_name == agent_tools.SWITCH_SESSION_TOOL_NAME:
+        return str(args.get("name", ""))
 
     if tool_name == agent_tools.CLOSE_SESSION_TOOL_NAME:
-        return f"[{args.get('session_id', '')}] (close)"
+        return str(args.get("name", ""))
 
     if tool_name == agent_tools.LIST_SESSIONS_TOOL_NAME:
         return "(list sessions)"
+
+    if tool_name == agent_tools.INTERRUPT_SESSION_TOOL_NAME:
+        return "(Ctrl-C)"
 
     return ", ".join(f"{k}={v}" for k, v in args.items())
 
@@ -182,7 +189,19 @@ def _message_to_log_specs(
     specs: List[Tuple[AgentLogType, str, Optional[str]]] = []
 
     if isinstance(message, AIMessage):
-        content = _stringify_content(message.content)
+        # Prefer additional_kwargs['reasoning_content'] - Agent.changeModel
+        # sets reasoning=True, and that's where a native "thinking" model's
+        # reasoning ends up rather than in .content (see agent.py's
+        # _call_model), so it doesn't get replayed into the model's own
+        # future context. Fall back to .content for a model that puts
+        # substantive text there directly instead (no native reasoning
+        # support, template allows text alongside/instead of a tool call).
+        reasoning_content = message.additional_kwargs.get("reasoning_content")
+        content = (
+            _stringify_content(reasoning_content)
+            if reasoning_content
+            else _stringify_content(message.content)
+        )
 
         if content.strip():
             specs.append(("thinking", content, None))

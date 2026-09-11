@@ -10,20 +10,26 @@ MAX_READ_WINDOW_SECONDS: Final = 30
 # sessions, not targets that are just slow to connect back.
 SESSION_IDLE_TIMEOUT_SECONDS: Final = 20 * 60
 SESSION_SWEEP_INTERVAL_SECONDS: Final = 60
-MAX_SESSIONS_PER_PROJECT: Final = 5
+# Per-target, not per-project - each agent run only ever manages its own
+# target's sessions (see KaliManger._session_key).
+MAX_SESSIONS_PER_TARGET: Final = 5
 SOCKET_RECV_CHUNK_BYTES: Final = 4096
 SOCKET_WRITE_TIMEOUT_SECONDS: Final = 10
 
 
 class KaliSessionError(RuntimeError):
     """Session-level problem that must reach the agent as a clear tool
-    result (unknown id, already closed, process exited) rather than a hang
-    or silent empty string."""
+    result (unknown name, already closed, process exited) rather than a
+    hang or silent empty string."""
 
 
 @dataclass
 class KaliSession:
-    session_id: str
+    # Human-readable and agent-chosen (e.g. "default", "ftp") rather than a
+    # UUID - unique per target, not globally, so two different targets in
+    # the same project can each have their own "default" session. See
+    # KaliManger._session_key for how that's namespaced internally.
+    name: str
     command: str
     target_id: str
     exec_id: str

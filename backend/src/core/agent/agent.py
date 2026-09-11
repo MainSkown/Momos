@@ -1,4 +1,8 @@
 import asyncio
+import json
+import logging
+import re
+import uuid
 from typing import (
     Annotated,
     Any,
@@ -17,9 +21,23 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
+from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
 from src.core import settings
 import time
+
+logger = logging.getLogger("momos.agent")
+
+# Matches Qwen's own native tool-call wire syntax
+# (<tool_call>{"name": ..., "arguments": {...}}</tool_call>). Ollama is
+# supposed to parse this into the response's structured tool_calls, but has
+# a confirmed bug (ollama/ollama #11662, #14601) where it sometimes doesn't -
+# the block just falls through as plain text in .content or
+# additional_kwargs['reasoning_content'] instead, and the tool call silently
+# never executes. Observed in production: a real log_attack_attempt call
+# lost this way, with no error and no log entry - see
+# Agent._recover_leaked_tool_calls.
+_LEAKED_TOOL_CALL_PATTERN = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 
 class AgentState(TypedDict):
@@ -34,6 +52,12 @@ class AgentState(TypedDict):
     # pause/resume for free.
     enumeration: Dict[str, Dict[str, str]]
     attack_log: List[Dict[str, str]]
+    # Current focus - "scouting" or "exploiting" (see agent_tools.py's
+    # switch_mode/VALID_MODES). Mirrors Agent.mode, which is the live,
+    # synchronously-updated source of truth (see Agent._set_mode) - this
+    # field only exists so the value survives a pause/resume via the same
+    # Postgres checkpoint as everything else.
+    mode: str
 
 
 class AgentInterruptAction(TypedDict):
@@ -41,33 +65,31 @@ class AgentInterruptAction(TypedDict):
     tool_calls: list[Any]
 
 
-# Two-phase turn: many tool-calling chat templates only give the model a
-# slot for EITHER plain text OR a tool call in one turn, never both, no
-# matter what a system prompt asks for - that's a template/training
-# constraint a single call can't reliably override (confirmed empirically:
-# a one-time system message, then a per-turn reminder, both failed to
-# produce visible reasoning across multiple real turns). Splitting into a
-# plain reasoning call followed by a tool-bound call guarantees a reasoning
-# line every time, and - as a secondary benefit - tends to improve decision
-# quality even on models that aren't dedicated "reasoning" models, since it
-# forces the same step-by-step scaffold chain-of-thought prompting relies on.
-REASONING_ONLY_PROMPT = (
-    "Think through the current situation before acting: what you know so "
-    "far, what you're trying to find out or accomplish next, and why that "
-    "is the right next step. Respond with ONLY that reasoning as 1-3 "
-    "sentences of plain text - do not call a tool or take any action yet. "
-    "Do not write out a command, session prompt, or transcript (e.g. "
-    "`ftp> anonymous`) as if it has already run - describing what you plan "
-    "to type is not the same as typing it, and nothing you write here will "
-    "actually execute."
-)
-
-ACT_ON_REASONING_PROMPT = (
-    "Now act on the reasoning above by calling exactly one tool. Writing a "
-    "command as plain text or inside a code block does NOT run it, no "
-    "matter how it's formatted - the only way to actually do anything, "
-    "including sending input to an open session, is a real tool call."
-)
+# Previously this graph made two LLM calls per turn - a plain reasoning-only
+# call, then a separate tool-bound call told to act on it - because many
+# tool-calling chat templates only allow text OR a tool call in one turn,
+# never both. That split turned out not to actually prevent the failure it
+# was built for (the model narrating a command instead of calling a tool
+# happened in EITHER phase, in production runs against Metasploitable 2),
+# while doubling per-turn latency and - since the reasoning text got folded
+# into persisted message content whenever the tool-call response came back
+# empty - permanently bloating every future turn's context with what was
+# often just decorative narration, not functional reasoning. Collapsed back
+# to one call: bind tools directly with reasoning=True, and let each
+# model's own template decide how (or whether) to interleave thinking and
+# tool-calling, rather than hand-rolling a scaffold around it. Reasoning
+# text - when the model/Ollama actually populates it - is captured from
+# additional_kwargs['reasoning_content'] for logging, and deliberately
+# never folded into .content, since LangChain's message serialization back
+# to the provider only resends .content/.tool_calls, not additional_kwargs -
+# so it stays visible in the UI without ever being replayed into the
+# model's own future context. Accepted trade-off: for a model whose
+# template genuinely can't produce text and a tool call together, a turn
+# may now come back with a tool call and no visible reasoning at all -
+# there's no second call trying to force it out. The
+# consecutive_no_tool_calls/NUDGE_MESSAGE stall-recovery loop in
+# start_agent() is the backstop for whenever a turn comes back with
+# neither.
 
 
 class Agent:
@@ -84,16 +106,26 @@ class Agent:
         self.ollama_url = settings.ollama_url
         self.finish_summary: Optional[str] = None
 
-        # Written to by tool calls (execute_kali_command's FACTS extraction,
-        # log_attack_attempt) as they happen inside the "tools" node - tools
-        # have no direct handle on graph state, so these buffer updates
-        # until the next _call_model run, which folds them into the
-        # checkpointed enumeration/attack_log state fields and clears the
-        # buffer. Safe because the graph always routes tools -> agent
-        # (never two tool-executing turns back to back), and because
-        # asyncio's single-threaded event loop makes these plain
-        # (non-await-ing) dict/list mutations atomic even when several tool
-        # calls from one LLM turn run concurrently.
+        # Live, synchronously-updated source of truth for the current
+        # scouting/exploiting focus (see agent_tools.py's switch_mode) -
+        # read directly by report_vulnerability/log_attack_attempt's gating
+        # via _get_mode, so a switch_mode call is visible to them
+        # immediately rather than only after the next _call_model flush.
+        # Mirrored into the checkpointed AgentState.mode field every turn
+        # (see _call_model) purely so it survives a pause/resume; restored
+        # from checkpoint in start_agent() when resuming.
+        self.mode: str = "scouting"
+
+        # Written to by tool calls (log_attack_attempt, run()'s FACTS
+        # extraction) as they happen inside the "tools" node - tools have no
+        # direct handle on graph state, so these buffer updates until the
+        # next _call_model run, which folds them into the checkpointed
+        # enumeration/attack_log state fields and clears the buffer. Safe
+        # because the graph always routes tools -> agent (never two
+        # tool-executing turns back to back), and because asyncio's
+        # single-threaded event loop makes these plain (non-await-ing)
+        # dict/list mutations atomic even when several tool calls from one
+        # LLM turn run concurrently.
         self._pending_enumeration: Dict[str, dict] = {}
         self._pending_attack_log: List[dict] = []
 
@@ -103,6 +135,8 @@ class Agent:
             self._mark_finished,
             self._record_enumeration,
             self._record_attack_attempt,
+            self._get_mode,
+            self._set_mode,
         )
 
         self.changeModel(model_name=model_name)
@@ -117,6 +151,12 @@ class Agent:
 
     def _record_attack_attempt(self, entry: dict):
         self._pending_attack_log.append(entry)
+
+    def _get_mode(self) -> str:
+        return self.mode
+
+    def _set_mode(self, mode: str):
+        self.mode = mode
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
@@ -134,81 +174,151 @@ class Agent:
             checkpointer=self.checkpointer, interrupt_before=["tools"]
         )
 
-    def _render_context_message(self, state: AgentState) -> Optional[SystemMessage]:
-        """Renders the running enumeration table / attack-attempt log as one
-        compact reminder, so a fact from many turns ago (or from before a
-        pause/resume) doesn't depend on the model re-finding it buried in a
-        long transcript - which matters more here than usual, since this
-        runs on local Ollama models with comparatively weak long-context
-        recall and often a small context window to begin with."""
+    def _render_context_message(self, state: AgentState) -> SystemMessage:
+        """Renders the current scouting/exploiting mode plus the running
+        enumeration table / attack-attempt log as one compact reminder,
+        every turn - so neither the current focus nor a fact from many
+        turns ago (or from before a pause/resume) depends on the model
+        re-finding it buried in a long transcript. The one-time starting
+        prompt's directives are only ever sent once, as the very first
+        message of what can be a long run - re-injecting this every turn is
+        far more reliable than relying on the model to remember that, which
+        matters more here than usual given this runs on local Ollama models
+        with comparatively weak long-context recall and often a small
+        context window to begin with."""
+        mode = self.mode
+        lines = [f"### Current mode: {mode}"]
+        if mode == "scouting":
+            lines.append(
+                "Focus on enumeration - identify open ports/services and "
+                "their versions. switch_mode to \"exploiting\" once you "
+                "have a specific service/version and a candidate "
+                "vulnerability to test."
+            )
+        else:
+            lines.append(
+                "Focus on testing the specific vector you switched here "
+                "for. If you haven't already, run searchsploit for this "
+                "service/version FIRST and follow a real match exactly - "
+                "do not improvise your own exploit/payload (e.g. a "
+                "hand-rolled reverse-shell one-liner) for a service that "
+                "has a known, specific vulnerability you haven't looked up "
+                "yet. switch_mode back to \"scouting\" if you need broader "
+                "enumeration first."
+            )
+
         enumeration = state.get("enumeration") or {}
         attack_log = state.get("attack_log") or []
 
-        if not enumeration and not attack_log:
-            return None
+        if enumeration or attack_log:
+            lines.append("")
+            lines.append(
+                "### Known so far (auto-maintained - trust this over your "
+                "own memory of earlier turns, and don't repeat work it "
+                "already covers):"
+            )
 
-        lines = [
-            "### Known so far (auto-maintained - trust this over your own "
-            "memory of earlier turns, and don't repeat work it already covers):"
-        ]
+            if enumeration:
+                lines.append("Enumeration:")
+                for port in sorted(enumeration):
+                    info = enumeration[port]
+                    detail = " ".join(
+                        part
+                        for part in (info.get("service", ""), info.get("version", ""))
+                        if part
+                    )
+                    line = f"- {port}: {detail}" if detail else f"- {port}"
+                    if info.get("notes"):
+                        line += f" ({info['notes']})"
+                    lines.append(line)
 
-        if enumeration:
-            lines.append("Enumeration:")
-            for port in sorted(enumeration):
-                info = enumeration[port]
-                detail = " ".join(
-                    part for part in (info.get("service", ""), info.get("version", "")) if part
-                )
-                line = f"- {port}: {detail}" if detail else f"- {port}"
-                if info.get("notes"):
-                    line += f" ({info['notes']})"
-                lines.append(line)
-
-        if attack_log:
-            lines.append("Attempted attack vectors:")
-            for entry in attack_log:
-                line = (
-                    f"- [{entry.get('outcome', '?')}] {entry.get('target', '?')}: "
-                    f"{entry.get('vector', '?')}"
-                )
-                if entry.get("notes"):
-                    line += f" - {entry['notes']}"
-                lines.append(line)
+            if attack_log:
+                lines.append("Attempted attack vectors:")
+                for entry in attack_log:
+                    line = (
+                        f"- [{entry.get('outcome', '?')}] {entry.get('target', '?')}: "
+                        f"{entry.get('vector', '?')}"
+                    )
+                    if entry.get("notes"):
+                        line += f" - {entry['notes']}"
+                    lines.append(line)
 
         return SystemMessage(content="\n".join(lines))
 
-    def _call_model(self, state: AgentState):
-        """Node: LLM processes the current state.
+    def _recover_leaked_tool_calls(self, response: AIMessage) -> AIMessage:
+        """Recovers a tool call Ollama failed to parse into
+        response.tool_calls (see _LEAKED_TOOL_CALL_PATTERN above) by
+        pulling it back out of .content/reasoning_content, validating it
+        names one of our actual tools, and promoting it to a real
+        structured tool call so the graph executes it like any other. Also
+        strips the raw block from whatever field it was found in, so it
+        isn't shown to the user (or the model itself, next turn) as
+        garbled JSON on top of silently not running."""
+        if response.tool_calls:
+            return response
 
-        Two calls, not one: first the plain (non-tool-bound) model states
-        its reasoning as text, then the tool-bound model acts on it. Neither
-        the reasoning prompt nor the reasoning response itself is persisted
-        into state/checkpoint - only the final response (with the reasoning
-        folded into its content) is, keeping the saved conversation the same
-        shape as before."""
+        valid_tool_names = {t.name for t in self.tools}
+        recovered: list = []
+        update: dict = {}
+
+        for field, text in (
+            ("content", str(response.content) if response.content else ""),
+            ("reasoning_content", response.additional_kwargs.get("reasoning_content") or ""),
+        ):
+            matches = list(_LEAKED_TOOL_CALL_PATTERN.finditer(text))
+            if not matches:
+                continue
+
+            cleaned = text
+            for match in matches:
+                try:
+                    call = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+                name = call.get("name")
+                if name not in valid_tool_names:
+                    continue
+                recovered.append(
+                    {
+                        "name": name,
+                        "args": call.get("arguments") or {},
+                        "id": f"recovered-{uuid.uuid4()}",
+                        "type": "tool_call",
+                    }
+                )
+                cleaned = cleaned.replace(match.group(0), "").strip()
+
+            if field == "content":
+                update["content"] = cleaned
+            else:
+                update["additional_kwargs"] = {
+                    **response.additional_kwargs,
+                    "reasoning_content": cleaned,
+                }
+
+        if not recovered:
+            return response
+
+        logger.warning(
+            f"Recovered {len(recovered)} tool call(s) Ollama failed to parse "
+            f"natively: {[c['name'] for c in recovered]}"
+        )
+        update["tool_calls"] = recovered
+        return response.model_copy(update=update)
+
+    def _call_model(self, state: AgentState):
+        """Node: one LLM call per turn, tools bound directly, with
+        reasoning=True (set in changeModel) so native "thinking" models can
+        surface their reasoning via additional_kwargs['reasoning_content']
+        - see the module-level comment above for why this replaced the
+        previous two-call split. The response is persisted as-is;
+        reasoning_content (when present) is read out for logging by
+        agent_service.py's _message_to_log_specs, not touched here."""
         messages = list(state["messages"])
         context_message = self._render_context_message(state)
-        context = [context_message] if context_message else []
 
-        reasoning_response = self.llm.invoke(
-            messages + context + [SystemMessage(content=REASONING_ONLY_PROMPT)]
-        )
-        reasoning_text = str(reasoning_response.content).strip()
-
-        response = self.llm_with_tools.invoke(
-            messages
-            + context
-            + [
-                AIMessage(content=reasoning_text),
-                SystemMessage(content=ACT_ON_REASONING_PROMPT),
-            ]
-        )
-
-        # Make sure the reasoning is visible even if the tool-calling model
-        # itself returns empty content alongside its tool call, which is the
-        # common case this whole two-call split exists to work around.
-        if reasoning_text and not str(response.content).strip():
-            response = response.model_copy(update={"content": reasoning_text})
+        response = self.llm_with_tools.invoke(messages + [context_message])
+        response = self._recover_leaked_tool_calls(response)
 
         # Fold whatever tool calls buffered since the last turn (see
         # _record_enumeration/_record_attack_attempt) into the checkpointed
@@ -225,7 +335,12 @@ class Agent:
         attack_log.extend(self._pending_attack_log)
         self._pending_attack_log = []
 
-        return {"messages": [response], "enumeration": enumeration, "attack_log": attack_log}
+        return {
+            "messages": [response],
+            "enumeration": enumeration,
+            "attack_log": attack_log,
+            "mode": self.mode,
+        }
 
     def _should_continue(self, state: AgentState):
         last_message = state["messages"][-1]
@@ -234,21 +349,30 @@ class Agent:
         return END
 
     def changeModel(self, model_name: str):
-        self.llm = ChatOllama(model=model_name, base_url=self.ollama_url)
-
-        # A separate instance (not reusing self.llm) so this only affects
-        # the tool-calling phase, not the plain reasoning-only call above.
-        # "Thinking" models (e.g. the Qwen3 family) default to wrapping a
-        # <think>...</think> block into the response content even when
-        # tools are bound - which both duplicates the explicit reasoning
-        # call this graph already does, and, per known Ollama/Qwen3
-        # tool-call parsing issues (ollama/ollama #11662, #14601), raises
-        # the odds the model's tool-call JSON gets returned as plain text
-        # content instead of being parsed into an actual tool call. Forcing
-        # reasoning off here removes that interaction for the call that
-        # actually needs a clean, structured tool call to come back.
-        tool_llm = ChatOllama(model=model_name, base_url=self.ollama_url, reasoning=False)
-        self.llm_with_tools = tool_llm.bind_tools(self.tools)
+        # reasoning=True: lets a native "thinking" model (e.g. the Qwen3
+        # family) surface its reasoning via
+        # additional_kwargs['reasoning_content'] instead of mixed into
+        # .content - see the module-level comment above _call_model for why
+        # this matters (visibility without replaying it into future
+        # context). For a model that doesn't support thinking, Ollama
+        # simply ignores the flag - this is not conditioned on model name.
+        #
+        # repeat_penalty/repeat_last_n: raised above Ollama's own defaults
+        # (~1.1 / 64) because a reasoning-heavy model was observed getting
+        # stuck oscillating within a single reasoning generation ("it's A -
+        # no, maybe B - no, it's A" repeated many times) rather than
+        # converging. These are universal anti-repetition sampling knobs,
+        # not conditioned on model name/family - unlike a per-model prompt
+        # branch, this is expected to help any model prone to the same
+        # failure mode, not just one specific one.
+        llm = ChatOllama(
+            model=model_name,
+            base_url=self.ollama_url,
+            reasoning=True,
+            repeat_penalty=1.3,
+            repeat_last_n=256,
+        )
+        self.llm_with_tools = llm.bind_tools(self.tools)
 
     # --- Execution and Interaction ---
     async def start_agent(
@@ -273,6 +397,11 @@ class Agent:
 
         if existing_state.values:
             input_data = None
+            # Restore the live mode from the checkpoint - a fresh Agent
+            # instance always starts at self.mode = "scouting" (see
+            # __init__), so resuming a paused run that had switched to
+            # "exploiting" needs this or it would silently reset.
+            self.mode = existing_state.values.get("mode", self.mode)
         else:
             target_scope: AgentTargetScope = {
                 "name": target.name,
@@ -285,6 +414,21 @@ class Agent:
                 "messages": [("user", start_prompt)],
                 "target_scope": target_scope,
             }
+
+        # Give the agent a terminal from turn one - no "open a session
+        # first" step for it to forget. Best-effort: if this fails (should
+        # only happen if the container isn't actually ready yet), the run
+        # tool itself opens "default" defensively on its first call anyway.
+        manager = await kali_registry.get_manager(self.project_id)
+        if not manager.has_current_session(self.target_id):
+            try:
+                await manager.open_session(
+                    self.target_id,
+                    agent_tools.DEFAULT_SESSION_NAME,
+                    agent_tools.DEFAULT_SESSION_COMMAND,
+                )
+            except Exception as e:
+                print(f"Could not pre-open default session for {self.target_id}: {e}")
 
         time_left = duration_seconds
         run_state["time_left"] = time_left
@@ -304,9 +448,9 @@ class Agent:
             "end with a tool call. If you wrote out a command or session "
             "prompt as plain text or in a code block, that did NOT run it; "
             "nothing happens until you make a real tool call - if you meant "
-            "to send input to an open session, call send_to_session now. "
-            "Continue the assessment with a tool call, or call finish_task "
-            "if it is genuinely complete."
+            "to send input to your current session, call run(input=...) "
+            "now. Continue the assessment with a tool call, or call "
+            "finish_task if it is genuinely complete."
         )
 
         while (
@@ -391,8 +535,12 @@ class Agent:
                 last_message: AIMessage = state.values["messages"][-1]
                 tool_calls = last_message.tool_calls
 
+                # execute_kali_command is commented out (see agent_tools.py)
+                # - run/new_session are now the tools that actually execute
+                # something in the container, so those are what
+                # should_interrupt gates on instead.
                 requires_interrupt = should_interrupt and any(
-                    tc["name"] == agent_tools.KALI_COMMAND_TOOL_NAME
+                    tc["name"] in (agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME)
                     for tc in tool_calls
                 )
 

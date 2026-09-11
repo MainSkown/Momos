@@ -131,13 +131,14 @@ export const en = {
     },
 
     agent_logs: {
-        tool_kali_command: "Kali Command",
         tool_install_package: "Package Installed",
-        tool_open_session: "Session Opened",
-        tool_send_to_session: "Sent to Session",
-        tool_read_session: "Session Read",
+        tool_run: "Terminal",
+        tool_new_session: "Session Opened",
+        tool_switch_session: "Session Switched",
         tool_close_session: "Session Closed",
         tool_list_sessions: "Listed Sessions",
+        tool_interrupt_session: "Session Interrupted",
+        tool_switch_mode: "Mode Switched",
         tool_report_vulnerability: "Vulnerability Report",
         tool_log_attack_attempt: "Attack Attempt Logged",
         tool_finish_task: "Task Finished",
