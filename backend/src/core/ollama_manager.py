@@ -53,5 +53,47 @@ class OllamaManager:
                 f"Could not show requested model: {model_name}, {str(e)}"
             )
 
+    async def get_model_capabilities(self, model_name: str) -> dict:
+        """Single source of truth for the "does this model natively
+        support reasoning/thinking, and how big is its context window"
+        heuristics - see capabilities_from_show_info below for the actual
+        detection logic (pulled out as a pure function so a caller that
+        already has a show() result, like OllamaService.get_models_list(),
+        can reuse it without a second network round-trip). Used by
+        Agent.changeModel so reasoning isn't hardcoded on for every model
+        regardless of whether its own chat template actually supports it -
+        a non-reasoning model forced into reasoning=True can return
+        empty/garbled output."""
+        show_info = await self.show(model_name)
+        return capabilities_from_show_info(model_name, show_info)
+
+
+def capabilities_from_show_info(model_name: str, show_info) -> dict:
+    """Pure detection logic behind OllamaManager.get_model_capabilities -
+    Ollama doesn't expose a clean boolean capability for "does this model
+    support reasoning", hence the name/modelfile heuristic rather than a
+    real capability flag.
+
+    Returns {"thinking": bool, "context_window": int} - context_window
+    falls back to 2048 (a conservative floor, not a real default any
+    current model actually ships with) if model_info has no
+    "*.context_length" key to read it from."""
+    model_info = getattr(show_info, "model_info", {}) or {}
+    context_window = next(
+        (v for k, v in model_info.items() if k.endswith(".context_length")),
+        2048,
+    )
+
+    model_file = getattr(show_info, "modelfile", "").lower()
+    thinking = any(
+        [
+            "deepseek-r1" in model_name.lower(),
+            "qwq" in model_name.lower(),
+            "thinking" in model_file,
+        ]
+    )
+
+    return {"thinking": thinking, "context_window": int(context_window)}
+
 
 ollama_manager = OllamaManager()

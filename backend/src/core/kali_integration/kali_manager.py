@@ -13,6 +13,7 @@ from .kali_session import (
     DEFAULT_READ_WINDOW_SECONDS,
     MAX_READ_WINDOW_SECONDS,
     MAX_SESSIONS_PER_TARGET,
+    NO_OUTPUT_MESSAGE,
     SESSION_IDLE_TIMEOUT_SECONDS,
     SESSION_SWEEP_INTERVAL_SECONDS,
     SOCKET_RECV_CHUNK_BYTES,
@@ -85,6 +86,15 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     # Provides setcap/getcap - needed to grant nmap raw-socket capabilities
     # for the unprivileged momos user, see _configure_container.
     "libcap2-bin",
+    # Large (~518MB download, pulls in a full postgresql server, ruby,
+    # mingw toolchains, ...) - the same category of cost that got
+    # kali-linux-headless dropped above. Added anyway despite that,
+    # specifically so the agent doesn't have to install_kali_package it
+    # (and wait through that same download) on every single run that ends
+    # up needing it - observed in production repeatedly reaching for
+    # msfconsole once past initial recon. Revisit if container startup
+    # time becomes a problem again.
+    "metasploit-framework",
 )
 
 # Granted to this binary (via setcap, in _configure_container) so nmap's
@@ -227,7 +237,7 @@ class KaliManger:
 
         self._report(on_stage, KaliCreationStage.installing_packages)
         self._exec_in_container(
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
             + " ".join(self.packages)
         )
         print("Setting up momos user")
@@ -432,16 +442,29 @@ class KaliManger:
         self,
         sock: socket_module.socket,
         data: Optional[bytes],
-        read_window: float,
+        wait_seconds: float,
     ) -> str:
         """Runs in the executor thread. Optionally writes `data`, then
-        drains whatever arrives until `read_window` seconds pass with no
-        new data, or the peer closes (the session's process exited)."""
+        drains whatever arrives until `wait_seconds` pass with NO new data
+        at all, or the peer closes (the session's process exited).
+
+        Deliberately a single idle-timeout, not a short "stop at the first
+        quiet gap" heuristic - a command can print a little (a banner, a
+        warning) and then legitimately go quiet for real seconds while it
+        keeps working before printing its actual result, and there is no
+        way to tell that apart from "actually finished" without
+        understanding the specific command. A shorter settle-based cutoff
+        was tried and reliably returned early in exactly that case (see
+        MAX_READ_WINDOW_SECONDS's comment), silently truncating the
+        result. Requiring the full `wait_seconds` of quiet, uninterrupted,
+        is the only way to avoid that - which is why callers should pick
+        `wait_seconds` based on how long a command might pause internally,
+        not just its typical total runtime."""
         if data is not None:
             sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
             sock.sendall(data)
 
-        sock.settimeout(read_window)
+        sock.settimeout(wait_seconds)
         chunks = bytearray()
         try:
             while True:
@@ -458,13 +481,13 @@ class KaliManger:
         self,
         target_id: str,
         input: Optional[str],
-        read_window: float = DEFAULT_READ_WINDOW_SECONDS,
+        wait_seconds: float = DEFAULT_READ_WINDOW_SECONDS,
     ) -> str:
         # tty=True means the program on the other end expects a line
         # terminator to treat this as "Enter was pressed".
         data = (input + "\n").encode() if input is not None else None
         session = self._get_current_session(target_id)
-        return await self._session_io(session, data, read_window)
+        return await self._session_io(session, data, wait_seconds)
 
     async def interrupt_session(self, target_id: str) -> str:
         """Sends Ctrl-C to the current session's foreground process, and
@@ -476,15 +499,15 @@ class KaliManger:
         return await self._session_io(session, b"\x03", DEFAULT_READ_WINDOW_SECONDS)
 
     async def _session_io(
-        self, session: KaliSession, data: Optional[bytes], read_window: float
+        self, session: KaliSession, data: Optional[bytes], wait_seconds: float
     ) -> str:
-        read_window = max(0.5, min(read_window, MAX_READ_WINDOW_SECONDS))
+        wait_seconds = max(0.5, min(wait_seconds, MAX_READ_WINDOW_SECONDS))
         loop = asyncio.get_running_loop()
 
         async with session.io_lock:
             try:
                 output = await loop.run_in_executor(
-                    None, self._session_io_sync, session.sock, data, read_window
+                    None, self._session_io_sync, session.sock, data, wait_seconds
                 )
             except EOFError:
                 exit_info = await loop.run_in_executor(
@@ -509,7 +532,7 @@ class KaliManger:
                 )
 
         session.last_activity = time.monotonic()
-        return output if output else "(no output within the read window)"
+        return output if output else NO_OUTPUT_MESSAGE
 
     async def switch_session(self, target_id: str, name: str) -> None:
         # Raises KaliSessionError if unknown/closed - validated before
@@ -602,7 +625,16 @@ class KaliManger:
                     idle = [
                         s
                         for s in self.sessions.values()
-                        if now - s.last_activity > SESSION_IDLE_TIMEOUT_SECONDS
+                        # A session blocked in a single call is never idle,
+                        # no matter how long that call has been running - a
+                        # run() call can now legitimately block for up to
+                        # MAX_READ_WINDOW_SECONDS waiting on a slow command,
+                        # which can exceed SESSION_IDLE_TIMEOUT_SECONDS, and
+                        # last_activity alone can't tell "no one has touched
+                        # this in a while" apart from "someone is actively
+                        # waiting on this right now".
+                        if not s.io_lock.locked()
+                        and now - s.last_activity > SESSION_IDLE_TIMEOUT_SECONDS
                     ]
                 for session in idle:
                     logger.info(

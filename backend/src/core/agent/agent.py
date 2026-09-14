@@ -39,6 +39,29 @@ logger = logging.getLogger("momos.agent")
 # Agent._recover_leaked_tool_calls.
 _LEAKED_TOOL_CALL_PATTERN = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
+# Used only when ollama_manager.get_model_capabilities couldn't be reached
+# for this model (see Agent.__init__/_prepare_and_run) - a conservative
+# floor, not a real default any current model actually ships with, so the
+# message-trimming budget below stays tight rather than silently assuming
+# a large window it hasn't actually confirmed.
+DEFAULT_CONTEXT_WINDOW_FALLBACK = 4096
+
+# _trim_messages_for_model reserves this fraction of the model's context
+# window for the trimmed conversation history it sends; the rest is left
+# for the per-turn context message (target scope, mode, enumeration table,
+# attack log - see _render_context_message), the tools' own schemas (sent
+# with every request once bound), and the model's own generation. No
+# tokenizer is available for an arbitrary local Ollama model, so this is
+# necessarily a rough per-message token estimate rather than an exact
+# count - deliberately conservative in both constants below, since
+# UNDER-trimming (context overflow silently truncating from the wrong end,
+# or the request failing outright) is a much worse failure mode than
+# trimming a little more eagerly than strictly necessary.
+_CONTEXT_BUDGET_FRACTION = 0.5
+_EST_TOKENS_PER_MESSAGE = 250
+_MIN_MESSAGES_SENT_TO_MODEL = 12
+_MAX_MESSAGES_SENT_TO_MODEL = 80
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -99,12 +122,23 @@ class Agent:
         checkpointer: AsyncPostgresSaver,
         project_id: str,
         target_id: str,
+        reasoning: Optional[bool] = None,
+        context_window: Optional[int] = None,
     ):
         self.project_id = project_id
         self.target_id = target_id
         self.checkpointer = checkpointer
         self.ollama_url = settings.ollama_url
         self.finish_summary: Optional[str] = None
+
+        # Best-effort per-model info from ollama_manager.get_model_capabilities
+        # (see agent_service.py's _prepare_and_run, which fetches this
+        # before constructing Agent) - None whenever that lookup wasn't
+        # available/failed, in which case changeModel/_message_budget fall
+        # back to conservative, previously-hardcoded defaults rather than
+        # guessing. context_window backs the message-trimming budget below;
+        # reasoning is consumed directly by changeModel.
+        self.context_window = context_window or DEFAULT_CONTEXT_WINDOW_FALLBACK
 
         # Live, synchronously-updated source of truth for the current
         # scouting/exploiting focus (see agent_tools.py's switch_mode) -
@@ -115,6 +149,20 @@ class Agent:
         # (see _call_model) purely so it survives a pause/resume; restored
         # from checkpoint in start_agent() when resuming.
         self.mode: str = "scouting"
+
+        # Whether a real run()/new_session() call has happened since the
+        # last switch_mode call - gates report_vulnerability/
+        # log_attack_attempt alongside mode itself. Mode gating alone
+        # turned out not to be enough: observed in production, the agent
+        # called switch_mode("exploiting", ...) and then immediately
+        # log_attack_attempt + report_vulnerability with a fully fabricated
+        # CVE, exploit-db id, and CVSS score - without ever actually
+        # running anything against the target in between. Same
+        # synchronous-instance-attribute pattern as self.mode (see
+        # _get_mode/_set_mode) and the same reasoning for why: tool calls
+        # need to observe this immediately, not just after the next
+        # _call_model flush.
+        self._tested_since_mode_switch: bool = False
 
         # Written to by tool calls (log_attack_attempt, run()'s FACTS
         # extraction) as they happen inside the "tools" node - tools have no
@@ -137,9 +185,11 @@ class Agent:
             self._record_attack_attempt,
             self._get_mode,
             self._set_mode,
+            self._get_tested_since_mode_switch,
+            self._mark_tested,
         )
 
-        self.changeModel(model_name=model_name)
+        self.changeModel(model_name=model_name, reasoning=reasoning)
 
         self.app = self._build_graph()
 
@@ -157,6 +207,17 @@ class Agent:
 
     def _set_mode(self, mode: str):
         self.mode = mode
+        # Fresh mode, fresh requirement to prove something was actually
+        # tried in it - including re-entering "exploiting" after having
+        # left it, so a vector's confirmation can't ride on testing done
+        # for a different, earlier vector.
+        self._tested_since_mode_switch = False
+
+    def _get_tested_since_mode_switch(self) -> bool:
+        return self._tested_since_mode_switch
+
+    def _mark_tested(self):
+        self._tested_since_mode_switch = True
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
@@ -174,6 +235,35 @@ class Agent:
             checkpointer=self.checkpointer, interrupt_before=["tools"]
         )
 
+    @staticmethod
+    def _render_target_scope_reminder(target_scope: Optional[AgentTargetScope]) -> str:
+        """Re-states the exact authorized address every turn, for the same
+        reason mode/enumeration are re-injected below - the starting
+        prompt's target scope is otherwise only ever seen once, as part of
+        the very first message. Observed in production: on a target named
+        after a well-known vulnerable-by-design box (e.g. "Metasploitable
+        2"), a local model drifted into scanning a plausible-looking IP it
+        associated with that name from its own training data instead of
+        the actual one given in scope - wasting a run chasing a host that
+        was never actually configured here. Re-stating the real address
+        every turn gives it much less room to substitute a memorized one."""
+        if not target_scope:
+            return ""
+
+        def _value(v):
+            if isinstance(v, list):
+                return ", ".join(str(x) for x in v) if v else "not defined"
+            return str(v) if v not in (None, "") else "not defined"
+
+        return (
+            "### Authorized target - use exactly this, never a different "
+            "address you recall for a target with this name:\n"
+            f"- Name: {_value(target_scope.get('name'))}\n"
+            f"- IPv4: {_value(target_scope.get('ipv4'))}\n"
+            f"- IPv6: {_value(target_scope.get('ipv6'))}\n"
+            f"- Authorized ports: {_value(target_scope.get('ports'))}"
+        )
+
     def _render_context_message(self, state: AgentState) -> SystemMessage:
         """Renders the current scouting/exploiting mode plus the running
         enumeration table / attack-attempt log as one compact reminder,
@@ -186,8 +276,11 @@ class Agent:
         matters more here than usual given this runs on local Ollama models
         with comparatively weak long-context recall and often a small
         context window to begin with."""
+        scope_reminder = self._render_target_scope_reminder(state.get("target_scope"))
+        lines = [scope_reminder, ""] if scope_reminder else []
+
         mode = self.mode
-        lines = [f"### Current mode: {mode}"]
+        lines.append(f"### Current mode: {mode}")
         if mode == "scouting":
             lines.append(
                 "Focus on enumeration - identify open ports/services and "
@@ -198,14 +291,20 @@ class Agent:
         else:
             lines.append(
                 "Focus on testing the specific vector you switched here "
-                "for. If you haven't already, run searchsploit for this "
-                "service/version FIRST and follow a real match exactly - "
-                "do not improvise your own exploit/payload (e.g. a "
-                "hand-rolled reverse-shell one-liner) for a service that "
-                "has a known, specific vulnerability you haven't looked up "
-                "yet. switch_mode back to \"scouting\" if you need broader "
-                "enumeration first."
+                "for. Before improvising your own exploit/payload (e.g. a "
+                "hand-rolled one-liner), check for an existing tested "
+                "approach first - e.g. searchsploit for this "
+                "service/version, or the relevant tool's own checks - and "
+                "follow a real match exactly. switch_mode back to "
+                "\"scouting\" if you need broader enumeration first."
             )
+            if not self._tested_since_mode_switch:
+                lines.append(
+                    "You have NOT yet run() anything against the target "
+                    "since switching to exploiting mode - report_vulnerability "
+                    "and log_attack_attempt will be refused until you do. "
+                    "Make the real attempt first."
+                )
 
         enumeration = state.get("enumeration") or {}
         attack_log = state.get("attack_log") or []
@@ -306,6 +405,71 @@ class Agent:
         update["tool_calls"] = recovered
         return response.model_copy(update=update)
 
+    def _message_budget(self) -> int:
+        """How many of the persisted conversation's messages
+        _trim_messages_for_model keeps, sized off self.context_window (see
+        the module-level comment above _CONTEXT_BUDGET_FRACTION for the
+        reasoning behind the constants used here)."""
+        usable_tokens = self.context_window * _CONTEXT_BUDGET_FRACTION
+        budget = int(usable_tokens // _EST_TOKENS_PER_MESSAGE)
+        return max(_MIN_MESSAGES_SENT_TO_MODEL, min(_MAX_MESSAGES_SENT_TO_MODEL, budget))
+
+    def _trim_messages_for_model(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Shrinks what's actually SENT to the model each turn, independent
+        of what's PERSISTED - state["messages"] (and so the UI's full audit
+        log via agent_service.py) keeps every message regardless; this only
+        affects the invoke() input built here. Safe to drop older turns
+        outright because the model's actual working memory - current mode,
+        the enumeration table, the attack-attempt log - is independently
+        re-synthesized into context_message every single turn (see
+        _render_context_message), not reconstructed by the model re-reading
+        old messages. Without this, a long-running turn count would grow
+        this call's prompt without bound, which a small local model's often
+        narrow (commonly 4k-8k token) context window can't absorb.
+
+        Always keeps the very first message (the rendered starting prompt -
+        target scope, tool inventory, operating directives) as a stable
+        anchor, plus as many of the most recent messages as the budget
+        allows. Never lets the kept "recent" window start on a bare
+        ToolMessage - every backend's tool-call/tool-response linkage
+        expects one to immediately follow the AIMessage(tool_calls=...) it
+        answers, so an orphaned one at the very start of the window (i.e.
+        missing that AIMessage, which fell on the trimmed side of the cut)
+        risks a hard error from the chat template, not just confusion."""
+        budget = self._message_budget()
+        if len(messages) <= budget:
+            return messages
+
+        first = messages[0]
+        candidate_start = max(1, len(messages) - (budget - 1))
+
+        start = candidate_start
+        while start < len(messages) and isinstance(messages[start], ToolMessage):
+            start += 1
+
+        if start >= len(messages) or start <= 1:
+            # Budget too tight to safely cut anywhere (everything past the
+            # candidate start is part of one giant trailing tool-call
+            # exchange, or there's nothing to trim in the first place) -
+            # send the untrimmed conversation rather than risk an orphaned
+            # ToolMessage or trimming nothing useful.
+            return messages
+
+        recent = messages[start:]
+        trimmed_count = start - 1
+
+        notice = SystemMessage(
+            content=(
+                f"[{trimmed_count} earlier turn(s) omitted here to keep "
+                "this prompt a manageable size - they are NOT lost: the "
+                "current mode, enumeration table, and attack-attempt log "
+                "shown below already reflect everything learned in them. "
+                "Don't re-run something already listed there just because "
+                "you can no longer see the turn that found it.]"
+            )
+        )
+        return [first, notice] + recent
+
     def _call_model(self, state: AgentState):
         """Node: one LLM call per turn, tools bound directly, with
         reasoning=True (set in changeModel) so native "thinking" models can
@@ -317,7 +481,8 @@ class Agent:
         messages = list(state["messages"])
         context_message = self._render_context_message(state)
 
-        response = self.llm_with_tools.invoke(messages + [context_message])
+        trimmed_messages = self._trim_messages_for_model(messages)
+        response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
         response = self._recover_leaked_tool_calls(response)
 
         # Fold whatever tool calls buffered since the last turn (see
@@ -348,15 +513,7 @@ class Agent:
             return "tools"
         return END
 
-    def changeModel(self, model_name: str):
-        # reasoning=True: lets a native "thinking" model (e.g. the Qwen3
-        # family) surface its reasoning via
-        # additional_kwargs['reasoning_content'] instead of mixed into
-        # .content - see the module-level comment above _call_model for why
-        # this matters (visibility without replaying it into future
-        # context). For a model that doesn't support thinking, Ollama
-        # simply ignores the flag - this is not conditioned on model name.
-        #
+    def changeModel(self, model_name: str, reasoning: Optional[bool] = None):
         # repeat_penalty/repeat_last_n: raised above Ollama's own defaults
         # (~1.1 / 64) because a reasoning-heavy model was observed getting
         # stuck oscillating within a single reasoning generation ("it's A -
@@ -365,10 +522,23 @@ class Agent:
         # not conditioned on model name/family - unlike a per-model prompt
         # branch, this is expected to help any model prone to the same
         # failure mode, not just one specific one.
+        #
+        # reasoning, by contrast, IS model-specific and was previously
+        # hardcoded True for every model regardless of whether its own
+        # chat template actually supports interleaving thinking with a
+        # tool call - a non-reasoning model (e.g. a plain instruct-tuned
+        # 8B) forced into reasoning=True was observed able to return
+        # empty/garbled output instead of a usable response. `reasoning`
+        # here comes from ollama_manager.get_model_capabilities (see
+        # agent_service.py) when that lookup succeeded; None (lookup
+        # unavailable/failed, or a direct changeModel call from elsewhere
+        # that doesn't pass one) preserves the old default of True rather
+        # than silently disabling reasoning for a model that might need it.
+        use_reasoning = True if reasoning is None else reasoning
         llm = ChatOllama(
             model=model_name,
             base_url=self.ollama_url,
-            reasoning=True,
+            reasoning=use_reasoning,
             repeat_penalty=1.3,
             repeat_last_n=256,
         )
@@ -442,7 +612,7 @@ class Agent:
         # instead, and only actually give up after several such turns in a
         # row (protects against a truly stuck model spinning forever).
         consecutive_no_tool_calls = 0
-        MAX_CONSECUTIVE_NO_TOOL_CALLS = 3
+        MAX_CONSECUTIVE_NO_TOOL_CALLS = 5
         NUDGE_MESSAGE = (
             "You did not call a tool on your last turn - every turn must "
             "end with a tool call. If you wrote out a command or session "

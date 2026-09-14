@@ -5,7 +5,7 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-from src.core import db_manager
+from src.core import db_manager, ollama_manager
 from src.core.agent import Agent, agent_tools
 from src.core.agent import agent_checkpointer
 from src.core.kali_integration import kali_registry
@@ -152,7 +152,8 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
         return f"[{args.get('outcome', '')}] {args.get('target', '')}: {args.get('vector', '')}"
 
     if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
-        return str(args.get("name", ""))
+        severity = args.get("severity", "")
+        return f"[{severity}] {args.get('name', '')}" if severity else str(args.get("name", ""))
 
     if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
         return str(args.get("summary", ""))
@@ -334,6 +335,26 @@ class AgentService:
                 loop,
             )
 
+        # Best-effort - a model whose capabilities can't be looked up
+        # (Ollama unreachable, model not actually pulled yet, ...) still
+        # gets to run, just with Agent's previous hardcoded defaults
+        # (reasoning=True, a conservative context-window fallback) rather
+        # than failing the whole run over a lookup that's only ever an
+        # optimization, never a requirement.
+        reasoning: Optional[bool] = None
+        context_window: Optional[int] = None
+        try:
+            capabilities = await ollama_manager.get_model_capabilities(
+                project_settings.base_model_name
+            )
+            reasoning = capabilities["thinking"]
+            context_window = capabilities["context_window"]
+        except Exception as e:
+            print(
+                f"Could not fetch capabilities for model "
+                f"'{project_settings.base_model_name}', using defaults: {e}"
+            )
+
         try:
             kali_manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
             await kali_manager.prepare_nftables(target)
@@ -343,6 +364,8 @@ class AgentService:
                 checkpointer=agent_checkpointer.checkpointer,
                 project_id=project_id,
                 target_id=target_id,
+                reasoning=reasoning,
+                context_window=context_window,
             )
         except Exception as e:
             # Without this, a failure preparing the container would leave the

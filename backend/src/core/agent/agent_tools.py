@@ -1,5 +1,7 @@
 import asyncio
+import os
 import re
+import shlex
 from typing import Callable, Dict, List, Optional
 from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
@@ -7,9 +9,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from src.core import db_manager, settings
 from src.core.kali_integration import kali_registry
-from src.core.kali_integration.kali_manager import KALI_USERS
-from src.core.kali_integration.kali_session import KaliSessionError
-from src.schemas import Vulnerability, VulnerabilityBase
+from src.core.kali_integration.kali_manager import KaliManger, KALI_USERS
+from src.core.kali_integration.kali_session import KaliSessionError, NO_OUTPUT_MESSAGE
+from src.schemas import Vulnerability, VulnerabilityBase, SEVERITY_LEVELS
 
 KALI_COMMAND_TOOL_NAME = "execute_kali_command"
 REPORT_VULNERABILITY_TOOL_NAME = "report_vulnerability"
@@ -48,11 +50,6 @@ PACKAGE_INSTALL_TIMEOUT_SECONDS = 300
 # immediately or not at all until something is sent.
 SESSION_OPEN_READ_SECONDS = 3
 
-# Below this, run() always returns raw output unmodified - keeps small
-# interactive exchanges (banners, short replies) fast and byte-exact. Above
-# it, output gets condensed the same way execute_kali_command's output
-# always used to (see _maybe_condense).
-CONDENSE_THRESHOLD_CHARS = 1500
 # Only a genuine, still-unanswered credential prompt should block
 # condensation regardless of length - NOT an ordinary shell prompt (which
 # also ends in $/#/> with no trailing newline, but reappears after every
@@ -61,18 +58,234 @@ _CREDENTIAL_PROMPT_PATTERN = re.compile(
     r"(username|login|password|passphrase)\s*:\s*$", re.IGNORECASE
 )
 
+# A junior model - especially at 8B scale - regularly gets a real CLI
+# tool's own flag/argument syntax wrong (wrong flag spelling, wrong
+# argument order, a flag that doesn't exist in this tool's version, ...).
+# This is deliberately narrow to the SHELL/ARGUMENT-PARSING layer
+# complaining about how it was invoked, not the target/service refusing
+# the connection - "Connection refused"/"No route to host"/"Connection
+# timed out" must NOT trigger this, since a man page can't fix a
+# network-level failure and offering one there would be actively
+# misleading. See _maybe_help_with_usage below.
+_USAGE_ERROR_PATTERN = re.compile(
+    r"command not found"
+    r"|(?:invalid|unrecognized|unknown)\s+option"
+    r"|invalid\s+argument"
+    r"|usage:\s"
+    r"|missing\s+(?:required\s+)?(?:operand|argument)"
+    r"|try\s+['\"].*--help"
+    r"|requires?\s+an?\s+argument",
+    re.IGNORECASE,
+)
+
+# Only a plain shell prompt is something _extract_binary_name's parsing of
+# `input` as a shell command line actually makes sense for - once the
+# current session is INSIDE another interactive program (ftp, msfconsole,
+# ...), `input` is a line typed at THAT program's own prompt, not a Kali
+# shell command, and "man <first word>" would be fetching documentation
+# for something that was never actually invoked as a standalone command.
+_USAGE_HELP_ELIGIBLE_SESSION_COMMANDS = {DEFAULT_SESSION_COMMAND}
+
+# Kept short - this is a quick, best-effort lookup running alongside the
+# agent's regular turn, not a scan; man/--help/-h all answer near-instantly
+# once the package itself is installed.
+USAGE_HELP_TIMEOUT_SECONDS = 15
+
+# Man pages can run to tens of thousands of characters (nmap's is a good
+# example) - far more than a small local parsing model needs to fix one
+# invocation, and more than its context window may comfortably hold
+# alongside the failed command/output. Truncating from the top keeps
+# NAME/SYNOPSIS (and usually the start of OPTIONS), which is what actually
+# answers "what's the right flag/argument shape" - deep per-flag detail
+# further down matters far less for this than for reading the whole page.
+USAGE_REFERENCE_MAX_CHARS = 8000
+
+# Escape/overstrike cleanup for `man` output read back over a non-tty exec
+# (no pager) - equivalent to what `col -bx` does, done in Python instead of
+# depending on the `bsdmainutils`/`util-linux` package (not guaranteed to
+# be installed) providing that binary inside the container.
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_OVERSTRIKE_PATTERN = re.compile(r".\x08")
+
+# Prefix tokens to skip past when identifying the actual binary a failed
+# command invoked, e.g. "sudo nmap ..." or "env FOO=bar nmap ...".
+_COMMAND_PREFIX_TOKENS = {"sudo", "env", "timeout"}
+_ENV_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+# "timeout" (unlike sudo/env) takes its own positional duration argument
+# before the real command, e.g. "timeout 30 nmap ..." or "timeout 5m nmap
+# ..." - without skipping this too, the duration itself would be
+# misidentified as the binary.
+_DURATION_ARG_PATTERN = re.compile(r"^\d+(\.\d+)?[smhd]?$")
+
+USAGE_HELP_SYSTEM_PROMPT = (
+    "You are a command-line syntax assistant supporting an autonomous "
+    "penetration-testing agent working in a Kali Linux shell. The agent "
+    "ran one command and it looks like the tool itself rejected the "
+    "command line - wrong flag, wrong argument order, or a similar syntax "
+    "mistake - not a network or target-side failure. You are given the "
+    "exact command it ran, the output that came back, and a reference "
+    "(a man page or --help/-h output) for that specific tool.\n\n"
+    "Your ONLY job is to fix the command's SYNTAX so it runs the way the "
+    "agent already intended - correct flag spelling, correct argument "
+    "order/form, correct quoting. Do not change what the agent is trying "
+    "to do, do not suggest a different tool, and do not suggest what "
+    "target, service, or vulnerability to investigate or which one to try "
+    "next - that is entirely the agent's own decision, not yours. If the "
+    "reference doesn't let you tell what a valid corrected command would "
+    "be, leave 'corrected_command' empty rather than guessing.\n\n"
+    "In 'corrected_command', give ONE concrete, directly runnable corrected "
+    "command line (empty string if you can't determine one). In "
+    "'explanation', one short sentence on what was wrong with the "
+    "original - syntax only, not strategy."
+)
+
+
+class _UsageSuggestion(BaseModel):
+    corrected_command: str = ""
+    explanation: str = ""
+
+
+def _extract_binary_name(command: str) -> Optional[str]:
+    """Best-effort extraction of the actual binary a shell command line
+    invokes, for looking up its man page/--help - e.g. "sudo nmap -sV
+    <target>" -> "nmap", "FOO=bar hydra ..." -> "hydra". Deliberately
+    conservative: returns None (skip usage-help entirely, rather than
+    guessing) for anything shlex can't tokenize or that doesn't end up
+    looking like a bare command name."""
+    first_segment = command.split("|", 1)[0]
+    try:
+        tokens = shlex.split(first_segment)
+    except ValueError:
+        return None
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if _ENV_ASSIGNMENT_PATTERN.match(token):
+            i += 1
+            continue
+        if token in _COMMAND_PREFIX_TOKENS:
+            i += 1
+            while i < len(tokens) and tokens[i].startswith("-"):
+                i += 1
+            if (
+                token == "timeout"
+                and i < len(tokens)
+                and _DURATION_ARG_PATTERN.match(tokens[i])
+            ):
+                i += 1
+            continue
+        break
+
+    if i >= len(tokens):
+        return None
+
+    binary = os.path.basename(tokens[i])
+    if not re.match(r"^[a-zA-Z0-9_.+-]+$", binary):
+        return None
+    return binary
+
+
+def _clean_man_output(text: str) -> str:
+    text = _ANSI_ESCAPE_PATTERN.sub("", text)
+    text = _OVERSTRIKE_PATTERN.sub("", text)
+    return text
+
+
+async def _fetch_usage_reference(manager: "KaliManger", binary: str) -> Optional[str]:
+    """One-shot, isolated lookup of a tool's own usage documentation -
+    never touches the agent's interactive session (uses manager.execute(),
+    the same one-shot exec path as install_kali_package, not
+    run_in_current_session), so this can't itself leave stray output
+    sitting in whatever session the agent is mid-command in. Tries `man`
+    first, falling back to --help/-h for tools that don't ship a man page
+    at all (common for smaller/newer utilities)."""
+    for candidate_command, is_man in (
+        (f"MANWIDTH=100 man {binary} 2>&1", True),
+        (f"{binary} --help 2>&1", False),
+        (f"{binary} -h 2>&1", False),
+    ):
+        try:
+            output = await manager.execute(
+                candidate_command,
+                user=KALI_USERS.momos,
+                timeout_seconds=USAGE_HELP_TIMEOUT_SECONDS,
+            )
+        except RuntimeError:
+            # Nonzero exit (e.g. "No manual entry for X", or --help itself
+            # exiting non-zero as some tools do) - try the next fallback
+            # rather than giving up on the first miss.
+            continue
+
+        if is_man and "no manual entry" in output.lower():
+            continue
+
+        cleaned = _clean_man_output(output).strip()
+        if cleaned:
+            return cleaned[:USAGE_REFERENCE_MAX_CHARS]
+
+    return None
+
+
+async def _suggest_command_fix(
+    project_id: str, command: str, output: str, reference: str
+) -> Optional[str]:
+    """Asks the project's configured parsing model to propose a corrected
+    invocation for a command that looks like it hit a syntax/usage error,
+    given that tool's own man page/--help text. Returns None (never raises)
+    on any failure - this is a best-effort assist layered on top of the
+    regular tool result, not something that should ever break run() itself
+    if the parsing model is unavailable or misbehaves."""
+    parsing_model_name = await get_parsing_model_name(project_id)
+    if not parsing_model_name:
+        return None
+
+    parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
+    structured_llm = parser_llm.with_structured_output(_UsageSuggestion)
+
+    try:
+        result = await structured_llm.ainvoke(
+            [
+                SystemMessage(content=USAGE_HELP_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=(
+                        f"Command attempted:\n{command}\n\n"
+                        f"Output/error:\n{output}\n\n"
+                        f"Reference (man/--help) for this tool:\n{reference}"
+                    )
+                ),
+            ]
+        )
+    except Exception as e:
+        print(f"Usage-help suggestion failed, skipping: {e}")
+        return None
+
+    corrected = result.corrected_command.strip()
+    if not corrected:
+        return None
+
+    note = f"Suggested corrected command: {corrected}"
+    if result.explanation.strip():
+        note += f" ({result.explanation.strip()})"
+    return note
+
+
 PARSER_SYSTEM_PROMPT = (
-    "You are a data-extraction assistant supporting a penetration-testing agent. "
-    "You are given the exact input sent to a Kali Linux terminal session and "
-    "its raw output.\n\n"
+    "You are a data-extraction assistant supporting an autonomous "
+    "penetration-testing agent. You are given one command the agent itself "
+    "just ran directly in its own Kali Linux terminal session, and that "
+    "command's raw output.\n\n"
     "In 'summary', condense the output to only the information relevant to a "
     "security assessment: open ports, service names/versions, discovered "
     "hosts, vulnerabilities, file paths, credentials, and other actionable "
     "findings. Remove repetitive noise, banners, and formatting clutter. "
     "Quote any credentials, paths, or flags VERBATIM - never paraphrase or "
     "approximate them. If the command failed or produced an error, clearly "
-    "state the failure and its cause. Plain, concise text only - no "
-    "commentary or suggestions.\n\n"
+    "state the failure and its cause. There is no separate human 'user' "
+    "here - never write 'the user ran/attempted/tried ...'; state what the "
+    "command did and produced directly instead (e.g. \"msfconsole: command "
+    "not found\", not \"the user attempted to run msfconsole\"). Plain, "
+    "concise text only - no commentary or suggestions.\n\n"
     "In 'facts', list any specific network ports this output identifies a "
     "service name and/or version for, one entry per port in the exact "
     "'<number>/tcp' or '<number>/udp' form. Leave it empty if none were "
@@ -177,8 +390,29 @@ async def _maybe_condense(
     raw_output: str,
     on_enumeration: Callable[[dict], None],
 ) -> str:
-    if len(raw_output) <= CONDENSE_THRESHOLD_CHARS or _looks_like_open_prompt(raw_output):
+    """Every command result that actually has content is routed through
+    the parsing model (when one is configured for the project - see
+    _parse_output) rather than only output long enough to seem worth the
+    extra call. This keeps what the agent sees consistently condensed to
+    what's relevant instead of raw tool noise, and keeps the enumeration
+    table populated from every result rather than only from the larger
+    ones - previously a normal, reasonably-sized scan skipped parsing
+    entirely, so the table stayed empty while the model narrated made-up
+    service versions with nothing auto-maintained to check itself against.
+
+    Two things are still deliberately excluded, since there is nothing for
+    a parser to usefully condense: a still-open credential prompt (see
+    _looks_like_open_prompt - paraphrasing that risks losing the exact
+    verbatim text the agent still needs to respond to), and the fixed
+    NO_OUTPUT_MESSAGE placeholder substituted when a read genuinely
+    produced nothing."""
+    if (
+        not raw_output.strip()
+        or raw_output == NO_OUTPUT_MESSAGE
+        or _looks_like_open_prompt(raw_output)
+    ):
         return raw_output
+
     return await _parse_output(project_id, label, raw_output, on_enumeration)
 
 
@@ -206,8 +440,7 @@ async def _install_kali_package(project_id: str, package: str) -> str:
             # run, failing with exit 127. `env` is a real binary timeout can
             # exec, and it sets the var before exec'ing apt-get itself.
             output = await manager.execute(
-                "env DEBIAN_FRONTEND=noninteractive apt-get install -y "
-                f"--no-install-recommends {package}",
+                f"env DEBIAN_FRONTEND=noninteractive apt-get install -y {package}",
                 user=KALI_USERS.root,
                 timeout_seconds=PACKAGE_INSTALL_TIMEOUT_SECONDS,
             )
@@ -228,6 +461,11 @@ def create_install_package_tool(project_id: str):
         accepted - no flags, paths, spaces, or shell operators (e.g.
         "hydra", not "hydra; rm -rf /" or "-y hydra"). Installing can take a
         while for larger packages.
+
+        Your regular terminal session (run()) is NOT root - `apt`,
+        `apt-get`, `dpkg`, and anything else needing root will fail there
+        with a permission error. This tool is the only way to install
+        something; do not try `apt install`/`apt update` directly in run().
 
         Args:
             package: The exact apt package name to install, e.g. "hydra" or
@@ -284,6 +522,34 @@ async def _save_vulnerability(vulnerability: Vulnerability) -> Vulnerability:
     return await loop.run_in_executor(None, db_manager.add_vulnerability, vulnerability)
 
 
+def _require_tested(
+    get_mode: Callable[[], str], has_tested: Callable[[], bool], tool_name: str
+) -> Optional[str]:
+    """Shared gate for report_vulnerability/log_attack_attempt. Mode alone
+    isn't enough - observed in production: the agent called
+    switch_mode("exploiting", ...) and then immediately reported a fully
+    fabricated CVE/CVSS score with no real run() call against the target
+    anywhere in between. This additionally requires at least one real
+    run()/new_session() call since the last switch_mode before either tool
+    can succeed, so a mode switch alone can no longer be used as a
+    substitute for actually testing something."""
+    if get_mode() != "exploiting":
+        return (
+            "Not in exploiting mode - call switch_mode(\"exploiting\", "
+            f"<reason>) first. {tool_name} is only for a finding you have "
+            "already reproduced while actively testing a specific vector, "
+            "not while scouting."
+        )
+    if not has_tested():
+        return (
+            "You haven't actually run anything against the target since "
+            "switching to exploiting mode - call run() to make the real "
+            f"attempt first. {tool_name} requires a real tool result you "
+            "have seen, not just a plan for one."
+        )
+    return None
+
+
 CVSS4_EXAMPLE_VECTOR = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
 
 # Repeated verbatim in both the tool's own error message (so a failed
@@ -306,39 +572,46 @@ CVSS4_METRIC_REFERENCE = (
 
 
 def create_vulnerability_tool(
-    project_id: str, target_id: str, get_mode: Callable[[], str]
+    project_id: str,
+    target_id: str,
+    get_mode: Callable[[], str],
+    has_tested: Callable[[], bool],
 ):
     """Builds a report_vulnerability tool bound to a specific project/target."""
 
     @tool(REPORT_VULNERABILITY_TOOL_NAME)
     async def report_vulnerability(
-        name: str, cvss4_vector: str, proof_of_concept: str
+        name: str, severity: str, proof_of_concept: str, cvss4_vector: str = ""
     ) -> str:
         """Records a confirmed vulnerability found on the current target. Only
         call this once a finding has actually been verified - not for suspected
-        or untested issues. Only works while in "exploiting" mode - call
-        switch_mode("exploiting", ...) first if you haven't already.
+        or untested issues. Only works while in "exploiting" mode, and only
+        after you have actually run something against the target since
+        switching to it - call switch_mode("exploiting", ...) first if you
+        haven't already, then run() the real attempt before this.
 
         Args:
             name: A short, descriptive name for the vulnerability.
-            cvss4_vector: A valid CVSS v4.0 vector string, e.g.
-                "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N".
-                Its severity score is derived automatically - do not include
-                one. CVSS v4.0 uses different base metric names than v3.x -
-                VC/VI/VA and SC/SI/SA, not a bare C/I/A or a Scope (S)
-                metric. If a previous attempt was rejected, the error
-                message repeats this reference - follow it exactly rather
-                than guessing again.
+            severity: Your own assessment of impact - one of "low",
+                "medium", "high", or "critical". This is the field that
+                actually matters here; always give your honest best
+                judgment for it.
             proof_of_concept: Step-by-step instructions describing exactly how to
                 verify or exploit the vulnerability, in enough detail to reproduce it.
+            cvss4_vector: OPTIONAL - leave this empty unless you are
+                confident you can construct a precise, valid CVSS v4.0
+                vector yourself, e.g.
+                "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N".
+                severity alone is enough to record the finding - a wrong or
+                malformed vector is worse than none, so when unsure, omit
+                it rather than guess. Its score is derived automatically;
+                do not include one. CVSS v4.0 uses different base metric
+                names than v3.x - VC/VI/VA and SC/SI/SA, not a bare C/I/A
+                or a Scope (S) metric.
         """
-        if get_mode() != "exploiting":
-            return (
-                "Not in exploiting mode - call switch_mode(\"exploiting\", "
-                "<reason>) first. report_vulnerability is only for a finding "
-                "you have already reproduced while actively testing a "
-                "specific vector, not while scouting."
-            )
+        gate_error = _require_tested(get_mode, has_tested, REPORT_VULNERABILITY_TOOL_NAME)
+        if gate_error:
+            return gate_error
 
         try:
             # SQLModel table models don't run Pydantic validators on
@@ -346,23 +619,35 @@ def create_vulnerability_tool(
             # then build the table row from the already-validated data.
             validated = VulnerabilityBase(
                 name=name,
-                cvss4_vector=cvss4_vector,
+                severity=severity,
+                cvss4_vector=cvss4_vector or None,
                 proof_of_concept=proof_of_concept,
             )
         except ValidationError as e:
-            # Only cvss4_vector is realistically ever wrong here (name/
-            # proof_of_concept have no format to get wrong) - repeat the
-            # metric reference and a concrete example every time, not just
-            # the raw pydantic-cvss error text, since that alone was
-            # observed not being enough to stop repeated wrong guesses.
+            # A bad `severity` is now the common failure (name/
+            # proof_of_concept have no format to get wrong). cvss4_vector
+            # is optional, so its simplest fix is usually to just drop it
+            # rather than get the syntax right - only repeat the full
+            # metric reference when a vector was actually supplied, since
+            # that's the only case a vector-specific mistake could be why
+            # this failed.
+            extra = ""
+            if cvss4_vector.strip():
+                extra = (
+                    f"\n\n{CVSS4_METRIC_REFERENCE}\n"
+                    f"Example of a valid vector: {CVSS4_EXAMPLE_VECTOR}\n"
+                    "Or simply omit cvss4_vector entirely and report "
+                    "severity alone - it is optional."
+                )
             return (
                 f"Could not record vulnerability, fix the input and try again: {e}\n\n"
-                f"{CVSS4_METRIC_REFERENCE}\n"
-                f"Example of a valid vector: {CVSS4_EXAMPLE_VECTOR}"
+                f"Valid severities: {', '.join(sorted(SEVERITY_LEVELS))}."
+                f"{extra}"
             )
 
         vulnerability = Vulnerability(
             name=validated.name,
+            severity=validated.severity,
             cvss4_vector=validated.cvss4_vector,
             cvss4_score=validated.cvss4_score,
             proof_of_concept=validated.proof_of_concept,
@@ -373,8 +658,8 @@ def create_vulnerability_tool(
         saved = await _save_vulnerability(vulnerability)
 
         return (
-            f"Recorded vulnerability '{saved.name}' "
-            f"(CVSS v4.0 score: {saved.cvss4_score})."
+            f"Recorded vulnerability '{saved.name}' (severity: {saved.severity}, "
+            f"CVSS v4.0 score: {saved.cvss4_score})."
         )
 
     return report_vulnerability
@@ -402,7 +687,9 @@ def create_finish_task_tool(on_finish: Callable[[str], None]):
 
 
 def create_attack_log_tool(
-    on_attempt: Callable[[dict], None], get_mode: Callable[[], str]
+    on_attempt: Callable[[dict], None],
+    get_mode: Callable[[], str],
+    has_tested: Callable[[], bool],
 ):
     """Builds a log_attack_attempt tool - the agent's own working-memory
     audit trail of what it has tried against the target and whether it
@@ -433,19 +720,17 @@ def create_attack_log_tool(
 
         Args:
             target: The port/service or host the attempt was against, e.g.
-                "21/tcp (vsftpd 2.3.4)".
-            vector: What was tried, e.g. "exploit-db 49757 (vsftpd 2.3.4
-                backdoor)" or a short description of the manual technique.
+                "21/tcp (identified service and version)".
+            vector: What was tried, e.g. "searchsploit match for the
+                identified service/version" or a short description of the
+                manual technique.
             outcome: One of "vulnerable", "not_vulnerable", or "inconclusive".
             notes: Any short additional context - error messages, why it
                 failed, what would be needed to confirm it, etc.
         """
-        if get_mode() != "exploiting":
-            return (
-                "Not in exploiting mode - call switch_mode(\"exploiting\", "
-                "<reason>) first. log_attack_attempt is only for a vector "
-                "you are actively testing, not while scouting."
-            )
+        gate_error = _require_tested(get_mode, has_tested, ATTACK_LOG_TOOL_NAME)
+        if gate_error:
+            return gate_error
 
         normalized = outcome.strip().lower()
         if normalized not in ATTACK_OUTCOMES:
@@ -481,10 +766,10 @@ def create_switch_mode_tool(on_mode_change: Callable[[str], None]):
 
         Args:
             mode: Either "scouting" or "exploiting".
-            reason: A short reason for the switch, e.g. "found FTP 21/tcp
-                running vsftpd 2.3.4, want to test the known backdoor" or
-                "vsftpd backdoor didn't pan out, going back to enumerate the
-                remaining ports".
+            reason: A short reason for the switch, e.g. "identified the
+                service/version on 21/tcp, want to test a candidate
+                vulnerability for it" or "that attempt didn't pan out, going
+                back to enumerate the remaining ports".
         """
         normalized = mode.strip().lower()
         if normalized not in VALID_MODES:
@@ -497,7 +782,10 @@ def create_switch_mode_tool(on_mode_change: Callable[[str], None]):
 
 
 def create_terminal_tools(
-    project_id: str, target_id: str, on_enumeration: Callable[[dict], None]
+    project_id: str,
+    target_id: str,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
 ) -> list:
     """Builds the terminal-style tool set (run/new_session/switch_session/
     list_sessions/close_session/interrupt_session), bound to a project's
@@ -516,34 +804,122 @@ def create_terminal_tools(
     Deliberately does NOT use manager.command_lock (a long-lived session
     must never block install_kali_package, or vice versa)."""
 
+    # Per-run cache of a binary's man/--help text, keyed by binary name -
+    # shared by every call to _maybe_help_with_usage below. A man page is
+    # static reference material, so there's no reason to re-fetch it from
+    # the container every time the agent mis-invokes the same tool again
+    # in a different way; only the parsing-model suggestion (which depends
+    # on the specific failed command) is ever redone.
+    _usage_reference_cache: Dict[str, Optional[str]] = {}
+
+    async def _maybe_help_with_usage(command: str, raw_output: str) -> Optional[str]:
+        """Best-effort syntax-fix suggestion for a command that looks like
+        it hit a CLI usage/argument-parsing error (see _USAGE_ERROR_PATTERN)
+        - fetches that tool's own man page/--help (cached per binary) and
+        asks the parsing model to propose a corrected invocation. Returns
+        None whenever it can't help or anything along the way fails; never
+        raises, since this rides along with the regular tool result and
+        must never be the reason a real run() call fails."""
+        if not _USAGE_ERROR_PATTERN.search(raw_output):
+            return None
+
+        try:
+            manager = await kali_registry.get_manager(project_id)
+            current_name = manager.get_current_session_name(target_id)
+            sessions = await manager.list_sessions(target_id=target_id)
+            current = next((s for s in sessions if s.name == current_name), None)
+            if (
+                current is None
+                or current.command not in _USAGE_HELP_ELIGIBLE_SESSION_COMMANDS
+            ):
+                # Not a plain shell prompt (e.g. mid-way through ftp/
+                # msfconsole) - `command` isn't a Kali shell command line
+                # here, so "man <first word>" wouldn't mean anything.
+                return None
+
+            binary = _extract_binary_name(command)
+            if not binary:
+                return None
+
+            if binary in _usage_reference_cache:
+                reference = _usage_reference_cache[binary]
+            else:
+                reference = await _fetch_usage_reference(manager, binary)
+                _usage_reference_cache[binary] = reference
+
+            if not reference:
+                return None
+
+            return await _suggest_command_fix(project_id, command, raw_output, reference)
+        except Exception as e:
+            print(f"Usage-help lookup failed, skipping: {e}")
+            return None
+
     @tool(RUN_TOOL_NAME)
-    async def run(input: Optional[str] = None, wait_seconds: int = 5) -> str:
+    async def run(input: Optional[str] = None, wait_seconds: int = 8) -> str:
         """Runs something in your current terminal session - the one tool
         for actually doing anything (recon commands, interactive login
         exchanges, everything). If `input` is given, it's sent (as if typed
         and followed by Enter) to the current session first; either way,
-        this then waits up to `wait_seconds` and returns whatever output
-        appeared. Omit `input` to just check for new output without sending
-        anything (e.g. polling something slow-running).
+        this then waits for `wait_seconds` of continuous quiet in the
+        session before returning everything that appeared - never a
+        partial, still-in-progress read. Omit `input` to just wait for new
+        output without sending anything (e.g. picking up more from
+        something already running in the background in another session).
+
+        Omitting `input` never sends anything, no matter what you just
+        said you were about to run - it only waits on whatever is already
+        happening in the session (which, on an otherwise-idle session, is
+        nothing at all, and this will simply time out empty). If you have
+        decided on a command to run, put it directly in `input` on THIS
+        call - do not call run() with no input first "to check", planning
+        to send the actual command on a later turn.
 
         You always have a current session ready to use - no setup needed.
         Use new_session/switch_session if you want a second terminal (e.g.
         to keep a listener running while continuing recon elsewhere in
         another session).
 
+        If a command you send at your plain shell prompt looks like it
+        failed on its own syntax (wrong flag, wrong argument form, ...),
+        the result may include a line starting "Suggested corrected
+        command:" - that's looked up from the tool's own documentation for
+        you; it only ever fixes how a command is written, never what to
+        run or why, which stays entirely your own call.
+
+        Since this always waits out the FULL `wait_seconds` of quiet before
+        returning, set it based on the longest pause the command might take
+        while it's still working, not just its typical total runtime - a
+        command can print a little (a banner, a warning) and then go quiet
+        for real seconds while it keeps computing before printing its
+        actual result. Too short a `wait_seconds` is what returns a
+        partial result; when in doubt, prefer a larger value over a
+        smaller one. Only fall back to a follow-up run() with no input if
+        a command outlasts even a generous wait_seconds. Only use
+        interrupt_session once a follow-up wait still shows nothing at all
+        - not just because one call is taking a while.
+
         Examples:
-        - One-shot recon: run("nmap -p 21,25,53 -sV 10.0.0.5")
-        - Anonymous FTP login, after run("ftp 10.0.0.5") has connected you
-          to the ftp> prompt: run("anonymous") to send the username, then
-          run("") to send an empty password when prompted.
-        - Checking on a long-running command without sending anything:
-          run(wait_seconds=15) with no input.
+        - One-shot recon: run("nmap -Pn -sV <target>") - the `-Pn` skips
+          host-discovery probes to ports outside what's authorized here,
+          which would otherwise be blocked and print irrelevant permission
+          errors.
+        - A scan expected to have long internal pauses: run("nmap -Pn -p- -sV <target>", wait_seconds=120)
+        - Driving an interactive program one line at a time, after
+          run("python3") has dropped you at its ">>>" prompt: run("print(1+1)")
+          sends that single line and returns its output, exactly as if typed.
+          An interactive network client works the same way - connect with
+          one run() call, then send each subsequent line as its own call.
 
         Args:
             input: The line to send, without a trailing newline. Omit
-                (leave as None) to only check for output.
-            wait_seconds: How long to wait for output, 1-30 (default 5).
-                Use a larger value for a command you expect to take a while.
+                (leave as None) to only wait for output.
+            wait_seconds: How long the session must stay completely quiet
+                before its output is considered complete, 1-1800 (default
+                8). The call always waits this long, even for a command
+                that finishes sooner - set it based on the longest pause
+                the command might have mid-run, not just how long it
+                usually takes overall.
         """
         manager = await kali_registry.get_manager(project_id)
 
@@ -560,21 +936,55 @@ def create_terminal_tools(
 
         try:
             raw_output = await manager.run_in_current_session(
-                target_id, input, read_window=wait_seconds
+                target_id, input, wait_seconds=wait_seconds
             )
         except KaliSessionError as e:
             return str(e)
 
+        # Only counts as "tested" when input was actually sent - a bare
+        # poll (no input) doesn't itself constitute an attempt against the
+        # target, and shouldn't be enough to unlock report_vulnerability/
+        # log_attack_attempt on its own.
+        if input is not None:
+            mark_tested()
+
         label = input if input is not None else "(checking for new output)"
-        return await _maybe_condense(project_id, label, raw_output, on_enumeration)
+        condensed = await _maybe_condense(project_id, label, raw_output, on_enumeration)
+
+        # Detection runs against the RAW output, before condensation may
+        # paraphrase away the exact wording the regex looks for - only
+        # matters when input was actually sent (a bare poll never invoked
+        # a command in the first place).
+        if input is not None:
+            usage_note = await _maybe_help_with_usage(input, raw_output)
+            if usage_note:
+                condensed = f"{condensed}\n\n{usage_note}"
+
+        return condensed
 
     @tool(NEW_SESSION_TOOL_NAME)
     async def new_session(name: str, command: str = DEFAULT_SESSION_COMMAND) -> str:
         """Opens a new named terminal session and makes it your current
         session (run() will act on it from now on, until you switch_session
         elsewhere). Omit `command` for a plain shell; pass another
-        interactive command (e.g. "ftp 10.0.0.5") to start there instead.
-        Reverse-shell listeners are not a supported use of this yet.
+        interactive command (e.g. "ftp <target>", "msfconsole -q") to start
+        there instead. Reverse-shell listeners are not a supported use of
+        this yet.
+
+        Once `command` is an interactive program, you are AT ITS OWN PROMPT
+        from the very next run() call onward - send exactly what you would
+        type into that program directly, one command per run() call, not
+        the program's own launch command again (e.g. after
+        new_session("msf", "msfconsole -q"), send run("use <module>"), then
+        run("set RHOSTS <target>"), then run("run") - never another
+        "msfconsole ..." into that same session, which most such programs
+        refuse or mishandle as
+        an attempt to nest themselves). Also don't assume chaining several
+        of the program's own commands with ";" on one line works the way it
+        does in bash - many interactive programs (msfconsole included) only
+        support that for their own one-shot startup flag, not for lines
+        typed at their prompt afterward; when unsure, send one command per
+        run() call.
 
         Only open a second session when you specifically need two terminals
         active at once - for one thing at a time, just use run() in your
@@ -588,11 +998,14 @@ def create_terminal_tools(
         try:
             await manager.open_session(target_id, name, command)
             initial_output = await manager.run_in_current_session(
-                target_id, None, read_window=SESSION_OPEN_READ_SECONDS
+                target_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
             )
         except KaliSessionError as e:
             return str(e)
-        return f"Session '{name}' opened and is now current.\n\n{initial_output}"
+        condensed = await _maybe_condense(
+            project_id, f"(opening session '{name}')", initial_output, on_enumeration
+        )
+        return f"Session '{name}' opened and is now current.\n\n{condensed}"
 
     @tool(SWITCH_SESSION_TOOL_NAME)
     async def switch_session(name: str) -> str:
@@ -630,15 +1043,24 @@ def create_terminal_tools(
 
     @tool(INTERRUPT_SESSION_TOOL_NAME)
     async def interrupt_session() -> str:
-        """Sends Ctrl-C to your current session, to recover from a hung or
-        unwanted foreground command (e.g. one you forgot would block, or a
-        long scan you want to abandon). Returns whatever output that
-        produces (usually "^C" plus a fresh prompt)."""
+        """Sends Ctrl-C to your current session, to recover from a
+        genuinely hung or unwanted foreground command (e.g. one you forgot
+        would block, or a long scan you deliberately want to abandon).
+        Returns whatever output that produces (usually "^C" plus a fresh
+        prompt).
+
+        run() itself already waits for a command to actually finish rather
+        than returning early, so reach for this only once a follow-up
+        run() with no input still shows no progress at all - not just
+        because a command is taking a while."""
         manager = await kali_registry.get_manager(project_id)
         try:
-            return await manager.interrupt_session(target_id)
+            raw_output = await manager.interrupt_session(target_id)
         except KaliSessionError as e:
             return str(e)
+        return await _maybe_condense(
+            project_id, "(sending Ctrl-C)", raw_output, on_enumeration
+        )
 
     return [run, new_session, switch_session, list_sessions, close_session, interrupt_session]
 
@@ -651,15 +1073,17 @@ def build_agent_tools(
     on_attempt: Callable[[dict], None],
     get_mode: Callable[[], str],
     on_mode_change: Callable[[str], None],
+    has_tested: Callable[[], bool],
+    mark_tested: Callable[[], None],
 ) -> list:
     return [
         # create_kali_tool(project_id, on_enumeration),  # commented out, not
         # deleted - see create_kali_tool's docstring. The terminal tools
         # below are the agent's only way to run commands now.
         create_install_package_tool(project_id),
-        *create_terminal_tools(project_id, target_id, on_enumeration),
+        *create_terminal_tools(project_id, target_id, on_enumeration, mark_tested),
         create_switch_mode_tool(on_mode_change),
-        create_vulnerability_tool(project_id, target_id, get_mode),
-        create_attack_log_tool(on_attempt, get_mode),
+        create_vulnerability_tool(project_id, target_id, get_mode, has_tested),
+        create_attack_log_tool(on_attempt, get_mode, has_tested),
         create_finish_task_tool(on_finish),
     ]
