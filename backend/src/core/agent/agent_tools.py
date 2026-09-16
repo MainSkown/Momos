@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from src.core import db_manager, settings
+from src.core import db_manager, ollama_manager, settings
 from src.core.kali_integration import kali_registry
 from src.core.kali_integration.kali_manager import KaliManger, KALI_USERS
 from src.core.kali_integration.kali_session import KaliSessionError, NO_OUTPUT_MESSAGE
@@ -145,19 +145,14 @@ class _UsageSuggestion(BaseModel):
     explanation: str = ""
 
 
-def _extract_binary_name(command: str) -> Optional[str]:
-    """Best-effort extraction of the actual binary a shell command line
-    invokes, for looking up its man page/--help - e.g. "sudo nmap -sV
-    <target>" -> "nmap", "FOO=bar hydra ..." -> "hydra". Deliberately
-    conservative: returns None (skip usage-help entirely, rather than
-    guessing) for anything shlex can't tokenize or that doesn't end up
-    looking like a bare command name."""
-    first_segment = command.split("|", 1)[0]
-    try:
-        tokens = shlex.split(first_segment)
-    except ValueError:
-        return None
-
+def _find_binary_token(tokens: List[str]) -> Optional[int]:
+    """Index of the actual binary token within `tokens`, skipping past any
+    leading env-assignment / sudo / env / timeout prefix tokens - e.g.
+    ["sudo", "nmap", "-sV", ...] -> 1, ["FOO=bar", "hydra", ...] -> 1.
+    Returns None if the token list is exhausted before a real binary is
+    found (a bare prefix with nothing after it). Shared by
+    _extract_binary_name and _maybe_inject_nmap_pn below - both need to
+    locate the real binary past the same prefix shapes."""
     i = 0
     while i < len(tokens):
         token = tokens[i]
@@ -177,13 +172,110 @@ def _extract_binary_name(command: str) -> Optional[str]:
             continue
         break
 
-    if i >= len(tokens):
+    return i if i < len(tokens) else None
+
+
+def _extract_binary_name(command: str) -> Optional[str]:
+    """Best-effort extraction of the actual binary a shell command line
+    invokes, for looking up its man page/--help - e.g. "sudo nmap -sV
+    <target>" -> "nmap", "FOO=bar hydra ..." -> "hydra". Deliberately
+    conservative: returns None (skip usage-help entirely, rather than
+    guessing) for anything shlex can't tokenize or that doesn't end up
+    looking like a bare command name."""
+    first_segment = command.split("|", 1)[0]
+    try:
+        tokens = shlex.split(first_segment)
+    except ValueError:
         return None
 
-    binary = os.path.basename(tokens[i])
+    index = _find_binary_token(tokens)
+    if index is None:
+        return None
+
+    binary = os.path.basename(tokens[index])
     if not re.match(r"^[a-zA-Z0-9_.+-]+$", binary):
         return None
     return binary
+
+
+# Binaries whose output can legitimately describe the TARGET's live network
+# state (open ports, running services, discovered hosts) - shared between
+# _parse_output (which only trusts `facts` from one of these for populating
+# the enumeration table - see its own comment) and the silent-on-connect
+# table below. Deliberately a narrow allowlist, not a blocklist: anything
+# NOT in here - including any binary _extract_binary_name/_find_binary_token
+# fails to identify at all - is treated as NOT network-facing, since
+# wrongly trusting an unrecognized tool's output is a worse failure mode
+# (a fabricated open port silently entering the enumeration table) than
+# wrongly distrusting a real one (the agent just doesn't get an enumeration
+# entry from that specific command, same as if no parsing model were
+# configured at all).
+_NETWORK_FACING_BINARIES = {
+    "nmap", "curl", "wget", "nc", "ncat", "netcat", "telnet", "ftp", "ssh",
+    "gobuster", "nikto", "whatweb", "smbclient", "whois", "hydra",
+    "sqlmap", "dig", "nslookup", "host", "ping", "ping6", "traceroute",
+    "msfconsole", "msfvenom",
+}
+
+# Binaries/session commands known to give NO natural confirmation of their
+# own when a connection actually starts (no banner, no "connected" line) -
+# see _render_activation_no_output_note below (F4). A program not in here
+# still gets a (more neutral) generic no-output note rather than the bare
+# NO_OUTPUT_MESSAGE placeholder.
+_SILENT_ON_CONNECT_BINARIES = {"nc", "ncat", "netcat"}
+
+
+def _is_network_facing(command: str) -> bool:
+    """Whether `command` invokes a binary whose output is eligible to
+    populate the enumeration table - see _NETWORK_FACING_BINARIES."""
+    binary = _extract_binary_name(command)
+    return binary is not None and binary in _NETWORK_FACING_BINARIES
+
+
+# nmap's default host-discovery probes (a ping-scan-style pass before the
+# actual port scan) go to a handful of common ports (80, 443, ICMP, ...)
+# that this environment's nftables rules almost never authorize for a given
+# target (see kali_manager.py's prepare_nftables) - without -Pn, those
+# probes are unconditionally blocked ("Operation not permitted"/"Offending
+# packet" noise) and the scan is left incomplete. This isn't a judgment
+# call worth asking the agent to remember every time - the starting prompt
+# already says "always include -Pn", but a model deep into a long run
+# doesn't reliably keep re-applying a one-time instruction from turn one
+# (observed in production: exactly this failure). -Pn is correct here
+# essentially unconditionally, so add it automatically rather than relying
+# on the agent to.
+_NMAP_PN_INJECTED_NOTE = (
+    "[Note: -Pn was added to this nmap command automatically - "
+    "host-discovery probes to ports outside what's authorized for this "
+    "target are always blocked in this environment, so -Pn (skip host "
+    "discovery, scan directly) is effectively required for every nmap "
+    "invocation here.]"
+)
+
+
+def _maybe_inject_nmap_pn(command: str) -> tuple[str, bool]:
+    """If `command` invokes nmap without an explicit -Pn, inserts one right
+    after the nmap token (past any sudo/env/timeout prefix - see
+    _find_binary_token) and returns (rewritten command, True). Returns the
+    original command unchanged (and False) for anything that doesn't parse,
+    doesn't invoke nmap, or already has -Pn. Only rewrites the segment
+    before a pipe, if any - anything piped into another command is left
+    untouched."""
+    segments = command.split("|", 1)
+    try:
+        tokens = shlex.split(segments[0])
+    except ValueError:
+        return command, False
+
+    index = _find_binary_token(tokens)
+    if index is None or os.path.basename(tokens[index]) != "nmap":
+        return command, False
+    if "-Pn" in tokens:
+        return command, False
+
+    new_tokens = tokens[: index + 1] + ["-Pn"] + tokens[index + 1 :]
+    rewritten_first_segment = shlex.join(new_tokens)
+    return "|".join([rewritten_first_segment] + segments[1:]), True
 
 
 def _clean_man_output(text: str) -> str:
@@ -236,11 +328,15 @@ async def _suggest_command_fix(
     on any failure - this is a best-effort assist layered on top of the
     regular tool result, not something that should ever break run() itself
     if the parsing model is unavailable or misbehaves."""
-    parsing_model_name = await get_parsing_model_name(project_id)
+    project_settings = await _get_project_settings(project_id)
+    parsing_model_name = project_settings.parsing_model_name if project_settings else None
     if not parsing_model_name:
         return None
 
-    parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
+    num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
+    parser_llm = ChatOllama(
+        model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
+    )
     structured_llm = parser_llm.with_structured_output(_UsageSuggestion)
 
     try:
@@ -275,12 +371,30 @@ PARSER_SYSTEM_PROMPT = (
     "penetration-testing agent. You are given one command the agent itself "
     "just ran directly in its own Kali Linux terminal session, and that "
     "command's raw output.\n\n"
-    "In 'summary', condense the output to only the information relevant to a "
-    "security assessment: open ports, service names/versions, discovered "
-    "hosts, vulnerabilities, file paths, credentials, and other actionable "
-    "findings. Remove repetitive noise, banners, and formatting clutter. "
+    "In 'summary', condense the output to only the information it actually "
+    "contains that's relevant to a security assessment: open ports, service "
+    "names/versions, discovered hosts, vulnerabilities, file paths, "
+    "credentials, and other actionable findings. Only mention a category if "
+    "the output actually contains something about it - if this command "
+    "never addressed a category at all (e.g. a plain port scan says nothing "
+    "about credentials), that is not information, so leave it out entirely. "
+    "Do NOT write that something was 'not found'/'not discovered' for a "
+    "category this command never looked for - stating that falsely implies "
+    "it was checked for and ruled out. The one exception: if the output "
+    "ITSELF explicitly reports a negative result for something it actually "
+    "checked (e.g. nmap reporting 0 hosts up, or a scan completing with no "
+    "matches), that IS real information - state that plainly. Never pad the "
+    "summary with a checklist of every category this command didn't "
+    "address. Remove repetitive noise, banners, and formatting clutter. "
     "Quote any credentials, paths, or flags VERBATIM - never paraphrase or "
-    "approximate them. If the command failed or produced an error, clearly "
+    "approximate them. The local Kali session itself runs as user 'momos' - "
+    "this string appearing in a shell prompt (e.g. 'momos@host:~$') or as a "
+    "client's own default-username suggestion (e.g. ftp's 'Name "
+    "(host:momos):') is your OWN local username, never a credential found "
+    "on the target; never report it as one. A program asking for a "
+    "username/password is not itself evidence of a credential - only an "
+    "actual authentication result (success or failure) is. If the command "
+    "failed or produced an error, clearly "
     "state the failure and its cause. There is no separate human 'user' "
     "here - never write 'the user ran/attempted/tried ...'; state what the "
     "command did and produced directly instead (e.g. \"msfconsole: command "
@@ -314,13 +428,47 @@ class _ParsedCommandOutput(BaseModel):
     facts: List[_PortFact] = Field(default_factory=list)
 
 
-async def get_parsing_model_name(project_id: str) -> str | None:
+async def _get_project_settings(project_id: str):
     loop = asyncio.get_running_loop()
-    project_settings = await loop.run_in_executor(
-        None, db_manager.get_project_settings, project_id
-    )
+    return await loop.run_in_executor(None, db_manager.get_project_settings, project_id)
 
-    return project_settings.parsing_model_name if project_settings else None
+
+# Per-process cache of a model's own capabilities (context window/thinking
+# support), keyed by model name - a model's capabilities don't change during
+# a run, and _parse_output/_suggest_command_fix are called on essentially
+# every tool result, so re-fetching via Ollama's show() on every single call
+# would be wasteful. Mirrors the per-run _usage_reference_cache pattern used
+# for man pages inside create_terminal_tools below.
+_parsing_model_capabilities_cache: Dict[str, dict] = {}
+
+
+async def _get_parsing_model_num_ctx(parsing_model_name: str, project_settings) -> Optional[int]:
+    """Effective num_ctx to request for the project's configured parsing
+    model - its own detected max context, clamped to project_settings' own
+    max_context_window override (or settings.DEFAULT_MAX_CONTEXT_WINDOW if
+    unset/None) - same clamping agent_service.py applies to the base model.
+    Takes the caller's already-fetched project_settings (both call sites
+    need it anyway for parsing_model_name itself) instead of re-fetching -
+    avoids a second DB round-trip per call, and means this can never raise
+    from ITS OWN DB access. Returns None (let ChatOllama fall back to
+    Ollama's own server-side default) only if the model's own capabilities
+    lookup fails - best-effort, never blocks a parsing call over what's
+    only ever an optimization."""
+    if parsing_model_name in _parsing_model_capabilities_cache:
+        capabilities = _parsing_model_capabilities_cache[parsing_model_name]
+    else:
+        try:
+            capabilities = await ollama_manager.get_model_capabilities(parsing_model_name)
+        except Exception as e:
+            print(f"Could not fetch capabilities for parsing model '{parsing_model_name}': {e}")
+            return None
+        _parsing_model_capabilities_cache[parsing_model_name] = capabilities
+
+    ceiling = (
+        (project_settings.max_context_window if project_settings else None)
+        or settings.DEFAULT_MAX_CONTEXT_WINDOW
+    )
+    return min(capabilities["context_window"], ceiling)
 
 
 async def _parse_output(
@@ -329,20 +477,51 @@ async def _parse_output(
     raw_output: str,
     on_enumeration: Callable[[dict], None],
 ) -> str:
-    parsing_model_name = await get_parsing_model_name(project_id)
+    project_settings = await _get_project_settings(project_id)
+    parsing_model_name = project_settings.parsing_model_name if project_settings else None
 
     if not parsing_model_name:
         # No parsing model configured for this project - fall back to raw output
         return raw_output
 
-    parser_llm = ChatOllama(model=parsing_model_name, base_url=settings.ollama_url)
+    num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
+    parser_llm = ChatOllama(
+        model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
+    )
     structured_llm = parser_llm.with_structured_output(_ParsedCommandOutput)
+
+    # Prompt-level hint (best-effort, see the code-level gate below for the
+    # part that actually matters): tell the parser whether this command even
+    # CAN legitimately describe the target's live network state, so it
+    # doesn't force-fit unrelated numbers/strings (exploit-db IDs, the
+    # shell's own reappeared prompt, ...) into the ports/hosts categories
+    # for something like a local `searchsploit` lookup. See
+    # _NETWORK_FACING_BINARIES.
+    network_facing = _is_network_facing(command)
+    classification_note = (
+        "This command interacted with the network/target directly - port, "
+        "service, host, and credential information in its output, if any, "
+        "can be trusted."
+        if network_facing
+        else "This command does NOT interact with the network or the "
+        "target at all (a local, offline, or reference tool) - it has no "
+        "access to the target's live port/service/host state. Do not "
+        "report open ports, hosts, or service versions from it, even if "
+        "the output happens to contain numbers that could look like port "
+        "numbers (file IDs, version numbers, line counts, ...) - none of "
+        "those are network information."
+    )
 
     try:
         result = await structured_llm.ainvoke(
             [
                 SystemMessage(content=PARSER_SYSTEM_PROMPT),
-                HumanMessage(content=f"Command: {command}\n\nOutput:\n{raw_output}"),
+                HumanMessage(
+                    content=(
+                        f"Command: {command}\n\n{classification_note}\n\n"
+                        f"Output:\n{raw_output}"
+                    )
+                ),
             ]
         )
     except Exception as e:
@@ -352,20 +531,63 @@ async def _parse_output(
         print(f"Output parsing failed, using raw output: {e}")
         return raw_output
 
-    entries: Dict[str, dict] = {}
-    for fact in result.facts:
-        port = fact.port.strip()
-        if not port:
-            continue
-        entries[port] = {
-            "service": fact.service,
-            "version": fact.version,
-            "notes": fact.notes,
-        }
-    if entries:
-        on_enumeration(entries)
+    # Code-level gate, not just a prompt-level hint - a purely local/
+    # reference command's output never populates the enumeration table
+    # (state()["enumeration"], which _render_context_message tells the
+    # agent to "trust... over your own memory"), regardless of what the
+    # parsing model's `facts` list claims. Observed in production:
+    # `searchsploit ftpd 2.3.4`'s exploit-db entry IDs (e.g. "49757.py")
+    # got reported as open ports ("49757/tcp") despite the prompt-level
+    # instruction above, and the shell's own reappeared prompt got reported
+    # as a discovered host - a purely textual instruction isn't reliable
+    # enough for something this consequential to fabricate, so this doesn't
+    # even look at `result.facts` unless the command is one we actually
+    # trust to have talked to the target.
+    if network_facing:
+        entries: Dict[str, dict] = {}
+        for fact in result.facts:
+            port = fact.port.strip()
+            if not port:
+                continue
+            entries[port] = {
+                "service": fact.service,
+                "version": fact.version,
+                "notes": fact.notes,
+            }
+        if entries:
+            on_enumeration(entries)
 
     return result.summary or raw_output
+
+
+# Hard safety cap on any raw tool output returned to the agent, applied
+# regardless of whether a parsing model is configured for the project (see
+# _maybe_condense below) - a project simply not configuring one is the
+# out-of-the-box default (project_settings_factory sets
+# parsing_model_name=""), and without this, a large scan's raw output (e.g.
+# nmap -p- across a wide port range) would otherwise flow straight into a
+# small local model's own already-tight context, completely uncondensed.
+# Head+tail rather than a flat head-only cut, similar in spirit to
+# USAGE_REFERENCE_MAX_CHARS's man-page truncation above: the start usually
+# has the command's own banner/early results, the end usually has a scan's
+# final summary - both are more useful than an equivalent-sized arbitrary
+# slice out of the middle.
+RAW_OUTPUT_MAX_CHARS = 20000
+_RAW_OUTPUT_HEAD_CHARS = 12000
+_RAW_OUTPUT_TAIL_CHARS = 6000
+
+
+def _cap_raw_output(raw_output: str) -> str:
+    if len(raw_output) <= RAW_OUTPUT_MAX_CHARS:
+        return raw_output
+
+    omitted = len(raw_output) - _RAW_OUTPUT_HEAD_CHARS - _RAW_OUTPUT_TAIL_CHARS
+    return (
+        raw_output[:_RAW_OUTPUT_HEAD_CHARS]
+        + f"\n\n[...{omitted} characters omitted here - output too large to "
+        "show in full...]\n\n"
+        + raw_output[-_RAW_OUTPUT_TAIL_CHARS:]
+    )
 
 
 def _looks_like_open_prompt(raw_output: str) -> bool:
@@ -384,11 +606,38 @@ def _looks_like_open_prompt(raw_output: str) -> bool:
     return bool(_CREDENTIAL_PROMPT_PATTERN.search(raw_output[-80:]))
 
 
+def _render_activation_no_output_note(session_command: str) -> str:
+    """Replaces the bare NO_OUTPUT_MESSAGE placeholder with an explicit,
+    tool-aware statement that the session is genuinely live even though it
+    hasn't printed anything - see F4. Without this, a silent-by-design
+    program (nc opening a raw connection, most obviously - see
+    _SILENT_ON_CONNECT_BINARIES) reads as "this might not have worked" when
+    it almost certainly did; the bare placeholder gives the agent no way to
+    tell "confirmed silent" apart from "possibly failed"."""
+    binary = _extract_binary_name(session_command)
+    if binary is not None and binary in _SILENT_ON_CONNECT_BINARIES:
+        return (
+            f"`{session_command}` is running and is now your current "
+            "session. It hasn't printed anything yet - that's expected for "
+            "a raw connection like this (it stays silent until data is "
+            "sent, not a failure). Send your first line with run() "
+            "whenever you're ready."
+        )
+    return (
+        f"`{session_command}` is running and is now your current session. "
+        "It hasn't printed anything yet within the wait window - this may "
+        "be a delayed banner, or it may still be starting/connecting. A "
+        "follow-up run() with no input will pick up anything that arrives, "
+        "or you can send input directly if you're ready."
+    )
+
+
 async def _maybe_condense(
     project_id: str,
     label: str,
     raw_output: str,
     on_enumeration: Callable[[dict], None],
+    session_command: Optional[str] = None,
 ) -> str:
     """Every command result that actually has content is routed through
     the parsing model (when one is configured for the project - see
@@ -403,9 +652,17 @@ async def _maybe_condense(
     Two things are still deliberately excluded, since there is nothing for
     a parser to usefully condense: a still-open credential prompt (see
     _looks_like_open_prompt - paraphrasing that risks losing the exact
-    verbatim text the agent still needs to respond to), and the fixed
-    NO_OUTPUT_MESSAGE placeholder substituted when a read genuinely
-    produced nothing."""
+    verbatim text the agent still needs to respond to), and the
+    NO_OUTPUT_MESSAGE placeholder substituted when a read genuinely produced
+    nothing - which, when the caller knows which session command is running
+    (`session_command`, e.g. from new_session/run()), gets replaced with an
+    explicit, tool-aware note instead of surfaced verbatim (see
+    _render_activation_no_output_note/F4). Callers that don't have a
+    session command handy (or genuinely don't know it) keep the old bare
+    placeholder - still a valid, if less informative, result."""
+    if raw_output == NO_OUTPUT_MESSAGE and session_command:
+        return _render_activation_no_output_note(session_command)
+
     if (
         not raw_output.strip()
         or raw_output == NO_OUTPUT_MESSAGE
@@ -413,7 +670,14 @@ async def _maybe_condense(
     ):
         return raw_output
 
-    return await _parse_output(project_id, label, raw_output, on_enumeration)
+    # Cap BEFORE handing off to _parse_output, not just on its result - the
+    # parsing model is itself often a small local model, so the whole point
+    # of this cap (see RAW_OUTPUT_MAX_CHARS's comment) is defeated if it
+    # only trims what's shown to the agent afterward while the parsing
+    # model call still receives the full, uncapped output.
+    return await _parse_output(
+        project_id, label, _cap_raw_output(raw_output), on_enumeration
+    )
 
 
 async def _install_kali_package(project_id: str, package: str) -> str:
@@ -576,6 +840,8 @@ def create_vulnerability_tool(
     target_id: str,
     get_mode: Callable[[], str],
     has_tested: Callable[[], bool],
+    clear_tested: Callable[[], None],
+    on_reported: Callable[[], None],
 ):
     """Builds a report_vulnerability tool bound to a specific project/target."""
 
@@ -657,6 +923,17 @@ def create_vulnerability_tool(
 
         saved = await _save_vulnerability(vulnerability)
 
+        # Proof-of-testing is a per-CLAIM requirement, not a per-mode-switch
+        # one - see Agent._clear_tested's docstring. A fresh run() is
+        # required again before the NEXT report_vulnerability/
+        # log_attack_attempt call.
+        clear_tested()
+
+        # Resolves one outstanding "vulnerable" log_attack_attempt claim
+        # (see Agent._unresolved_vulnerable_claims) - a real, PoC-backed
+        # report now exists for a human to actually review.
+        on_reported()
+
         return (
             f"Recorded vulnerability '{saved.name}' (severity: {saved.severity}, "
             f"CVSS v4.0 score: {saved.cvss4_score})."
@@ -690,6 +967,7 @@ def create_attack_log_tool(
     on_attempt: Callable[[dict], None],
     get_mode: Callable[[], str],
     has_tested: Callable[[], bool],
+    clear_tested: Callable[[], None],
 ):
     """Builds a log_attack_attempt tool - the agent's own working-memory
     audit trail of what it has tried against the target and whether it
@@ -742,6 +1020,24 @@ def create_attack_log_tool(
         on_attempt(
             {"target": target, "vector": vector, "outcome": normalized, "notes": notes}
         )
+
+        # Proof-of-testing is a per-CLAIM requirement, not a per-mode-switch
+        # one - see Agent._clear_tested's docstring. A fresh run() is
+        # required again before the NEXT report_vulnerability/
+        # log_attack_attempt call.
+        clear_tested()
+
+        if normalized == "vulnerable":
+            return (
+                f"Logged attack attempt against '{target}' as VULNERABLE. "
+                "This is now unresolved - report_vulnerability requires a "
+                "fresh run() first (this log_attack_attempt call itself "
+                "just consumed your current proof-of-testing), then call "
+                "report_vulnerability with a step-by-step proof_of_concept "
+                "to make this a real, reviewable finding. It will keep "
+                "being flagged every turn until you do."
+            )
+
         return f"Logged attack attempt against '{target}' ({normalized})."
 
     return log_attack_attempt
@@ -786,6 +1082,8 @@ def create_terminal_tools(
     target_id: str,
     on_enumeration: Callable[[dict], None],
     mark_tested: Callable[[], None],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
 ) -> list:
     """Builds the terminal-style tool set (run/new_session/switch_session/
     list_sessions/close_session/interrupt_session), bound to a project's
@@ -831,10 +1129,18 @@ def create_terminal_tools(
             if (
                 current is None
                 or current.command not in _USAGE_HELP_ELIGIBLE_SESSION_COMMANDS
+                or not current.at_shell_prompt
             ):
                 # Not a plain shell prompt (e.g. mid-way through ftp/
                 # msfconsole) - `command` isn't a Kali shell command line
                 # here, so "man <first word>" wouldn't mean anything.
+                # current.command alone isn't enough to catch this: it only
+                # changes via new_session, so an interactive program
+                # launched as a plain run() input (e.g. run("ftp <host>"))
+                # never updates it - at_shell_prompt (updated from the
+                # session's own live output, see kali_manager.py's
+                # _looks_like_shell_prompt) is what actually detects that
+                # case.
                 return None
 
             binary = _extract_binary_name(command)
@@ -855,7 +1161,7 @@ def create_terminal_tools(
             print(f"Usage-help lookup failed, skipping: {e}")
             return None
 
-    @tool(RUN_TOOL_NAME)
+    @tool(RUN_TOOL_NAME, response_format="content_and_artifact")
     async def run(input: Optional[str] = None, wait_seconds: int = 8) -> str:
         """Runs something in your current terminal session - the one tool
         for actually doing anything (recon commands, interactive login
@@ -878,7 +1184,16 @@ def create_terminal_tools(
         You always have a current session ready to use - no setup needed.
         Use new_session/switch_session if you want a second terminal (e.g.
         to keep a listener running while continuing recon elsewhere in
-        another session).
+        another session). Do NOT background a command in your CURRENT
+        session (e.g. "nmap ... &") to try to get the same effect - its
+        output arrives on the same connection as everything else you send
+        afterward, with no way to tell it apart from a later, unrelated
+        run() call's own output. Open a second session with new_session
+        instead whenever you want something running in parallel. Likewise,
+        run("/bin/bash") or re-running any other shell binary inside your
+        current session does NOT give you a fresh terminal - it just types
+        that program's name at whatever prompt you're currently at; use
+        new_session for an actual second terminal.
 
         If a command you send at your plain shell prompt looks like it
         failed on its own syntax (wrong flag, wrong argument form, ...),
@@ -923,23 +1238,56 @@ def create_terminal_tools(
         """
         manager = await kali_registry.get_manager(project_id)
 
-        if not manager.has_current_session(target_id):
-            # Defensive fallback - should only happen if every session got
-            # closed without a new one being opened. start_agent() already
-            # opens "default" before the first turn.
+        # Should only happen if every session got closed without a new one
+        # being opened (idle timeout, the process exiting, ...) -
+        # start_agent() already opens "default" before the first turn.
+        # Tracked so the result below can tell the model its session was
+        # silently replaced, rather than returning what looks like an
+        # ordinary result from the session it thought it still had.
+        session_was_replaced = not manager.has_current_session(target_id)
+        if session_was_replaced:
             try:
                 await manager.open_session(
                     target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
                 )
             except KaliSessionError as e:
-                return str(e)
+                return str(e), None
+            on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+
+        # -Pn is effectively required for every nmap invocation in this
+        # environment (see _maybe_inject_nmap_pn's own comment) - rather
+        # than relying on the agent to keep re-applying the starting
+        # prompt's one-time "always include -Pn" instruction over a long
+        # run, add it automatically whenever it's missing. Only makes sense
+        # to parse `input` as a shell command line at all when the current
+        # session is a plain shell - inside another interactive program
+        # (ftp, msfconsole, ...) it's a line typed at THAT program's own
+        # prompt, not a Kali shell command.
+        nmap_pn_injected = False
+        current_session = manager.get_current_session(target_id)
+        if (
+            input is not None
+            and current_session is not None
+            and current_session.command == DEFAULT_SESSION_COMMAND
+            and current_session.at_shell_prompt
+        ):
+            input, nmap_pn_injected = _maybe_inject_nmap_pn(input)
 
         try:
             raw_output = await manager.run_in_current_session(
                 target_id, input, wait_seconds=wait_seconds
             )
         except KaliSessionError as e:
-            return str(e)
+            return str(e), None
+
+        # current_session is the same live object kali_manager mutates
+        # in-place during the call above, so its at_shell_prompt now
+        # reflects what just happened - surface it so Agent's per-turn
+        # reminder can tell the model when it may still be stuck inside
+        # another program's prompt (see _looks_like_shell_prompt).
+        on_prompt_state_change(
+            current_session.at_shell_prompt if current_session else True
+        )
 
         # Only counts as "tested" when input was actually sent - a bare
         # poll (no input) doesn't itself constitute an attempt against the
@@ -949,7 +1297,13 @@ def create_terminal_tools(
             mark_tested()
 
         label = input if input is not None else "(checking for new output)"
-        condensed = await _maybe_condense(project_id, label, raw_output, on_enumeration)
+        condensed = await _maybe_condense(
+            project_id,
+            label,
+            raw_output,
+            on_enumeration,
+            session_command=current_session.command if current_session else None,
+        )
 
         # Detection runs against the RAW output, before condensation may
         # paraphrase away the exact wording the regex looks for - only
@@ -960,9 +1314,21 @@ def create_terminal_tools(
             if usage_note:
                 condensed = f"{condensed}\n\n{usage_note}"
 
-        return condensed
+        if nmap_pn_injected:
+            condensed = f"{_NMAP_PN_INJECTED_NOTE}\n\n{condensed}"
 
-    @tool(NEW_SESSION_TOOL_NAME)
+        if session_was_replaced:
+            condensed = (
+                "[Your previous session was gone (closed, idle-timed-out, "
+                "or its process exited) - a brand-new plain shell session "
+                "was opened for you. Any prior state - working directory, "
+                "environment variables, an interactive program's prompt - "
+                "is lost; you're at a fresh shell prompt now.]\n\n" + condensed
+            )
+
+        return condensed, raw_output
+
+    @tool(NEW_SESSION_TOOL_NAME, response_format="content_and_artifact")
     async def new_session(name: str, command: str = DEFAULT_SESSION_COMMAND) -> str:
         """Opens a new named terminal session and makes it your current
         session (run() will act on it from now on, until you switch_session
@@ -1001,22 +1367,62 @@ def create_terminal_tools(
                 target_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
             )
         except KaliSessionError as e:
-            return str(e)
-        condensed = await _maybe_condense(
-            project_id, f"(opening session '{name}')", initial_output, on_enumeration
-        )
-        return f"Session '{name}' opened and is now current.\n\n{condensed}"
+            return str(e), None
 
-    @tool(SWITCH_SESSION_TOOL_NAME)
+        # Opening a session launches `command` for real against the
+        # container - counts as testing the same way run()'s mark_tested
+        # does when input is actually sent (see the comment there). Matches
+        # what Agent.__init__'s own comment on _tested_since_mode_switch
+        # already documents as the intended gate ("a real run()/
+        # new_session() call") - this was previously never implemented.
+        mark_tested()
+        on_session_change(name, command)
+
+        condensed = await _maybe_condense(
+            project_id,
+            f"(opening session '{name}')",
+            initial_output,
+            on_enumeration,
+            session_command=command,
+        )
+        return f"Session '{name}' opened and is now current.\n\n{condensed}", initial_output
+
+    @tool(SWITCH_SESSION_TOOL_NAME, response_format="content_and_artifact")
     async def switch_session(name: str) -> str:
         """Makes an already-open session current, so run() acts on it
-        instead. Use list_sessions if you've lost track of what's open."""
+        instead, and shows whatever that session has produced since you were
+        last on it (or since it opened, if you've never checked). Use
+        list_sessions if you've lost track of what's open."""
         manager = await kali_registry.get_manager(project_id)
         try:
             await manager.switch_session(target_id, name)
         except KaliSessionError as e:
-            return str(e)
-        return f"Switched to session '{name}'."
+            return f"{e} Use list_sessions to see what's currently open.", None
+        current = manager.get_current_session(target_id)
+        if current is None:
+            return f"Switched to session '{name}'.", None
+
+        on_session_change(current.name, current.command)
+
+        # Show what's actually happening in the session being switched to,
+        # not just confirm the pointer moved - the same "did this actually
+        # work" ambiguity F4 addresses for new_session applies here too,
+        # e.g. switching back to a quiet `nc` session with no way to tell
+        # whether it's still alive.
+        try:
+            initial_output = await manager.run_in_current_session(
+                target_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
+            )
+        except KaliSessionError as e:
+            return f"Switched to session '{name}'.\n\n{e}", None
+        condensed = await _maybe_condense(
+            project_id,
+            f"(switched to session '{name}')",
+            initial_output,
+            on_enumeration,
+            session_command=current.command,
+        )
+        return f"Switched to session '{name}'.\n\n{condensed}", initial_output
 
     @tool(LIST_SESSIONS_TOOL_NAME)
     async def list_sessions() -> str:
@@ -1038,7 +1444,16 @@ def create_terminal_tools(
         session (if any) automatically becomes current. Close a session
         once you're done with it - a small number can be open at once."""
         manager = await kali_registry.get_manager(project_id)
-        await manager.close_session(target_id, name)
+        existed = await manager.close_session(target_id, name)
+        if not existed:
+            return (
+                f"No such session '{name}' - nothing to close (it may "
+                "already be closed, idle-timed-out, or never existed)."
+            )
+        current = manager.get_current_session(target_id)
+        on_session_change(
+            current.name if current else None, current.command if current else None
+        )
         return f"Session '{name}' closed."
 
     @tool(INTERRUPT_SESSION_TOOL_NAME)
@@ -1075,15 +1490,28 @@ def build_agent_tools(
     on_mode_change: Callable[[str], None],
     has_tested: Callable[[], bool],
     mark_tested: Callable[[], None],
+    clear_tested: Callable[[], None],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_reported: Callable[[], None],
 ) -> list:
     return [
         # create_kali_tool(project_id, on_enumeration),  # commented out, not
         # deleted - see create_kali_tool's docstring. The terminal tools
         # below are the agent's only way to run commands now.
         create_install_package_tool(project_id),
-        *create_terminal_tools(project_id, target_id, on_enumeration, mark_tested),
+        *create_terminal_tools(
+            project_id,
+            target_id,
+            on_enumeration,
+            mark_tested,
+            on_session_change,
+            on_prompt_state_change,
+        ),
         create_switch_mode_tool(on_mode_change),
-        create_vulnerability_tool(project_id, target_id, get_mode, has_tested),
-        create_attack_log_tool(on_attempt, get_mode, has_tested),
+        create_vulnerability_tool(
+            project_id, target_id, get_mode, has_tested, clear_tested, on_reported
+        ),
+        create_attack_log_tool(on_attempt, get_mode, has_tested, clear_tested),
         create_finish_task_tool(on_finish),
     ]

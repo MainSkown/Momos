@@ -43,24 +43,60 @@ _LEAKED_TOOL_CALL_PATTERN = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
 # for this model (see Agent.__init__/_prepare_and_run) - a conservative
 # floor, not a real default any current model actually ships with, so the
 # message-trimming budget below stays tight rather than silently assuming
-# a large window it hasn't actually confirmed.
-DEFAULT_CONTEXT_WINDOW_FALLBACK = 4096
+# a large window it hasn't actually confirmed. Matches
+# ollama_manager.capabilities_from_show_info's own fallback (2048) - the
+# path with LESS information about the model should never fall back to a
+# LARGER assumed window than the path that at least got a response.
+DEFAULT_CONTEXT_WINDOW_FALLBACK = 2048
 
-# _trim_messages_for_model reserves this fraction of the model's context
-# window for the trimmed conversation history it sends; the rest is left
-# for the per-turn context message (target scope, mode, enumeration table,
-# attack log - see _render_context_message), the tools' own schemas (sent
-# with every request once bound), and the model's own generation. No
-# tokenizer is available for an arbitrary local Ollama model, so this is
-# necessarily a rough per-message token estimate rather than an exact
-# count - deliberately conservative in both constants below, since
-# UNDER-trimming (context overflow silently truncating from the wrong end,
-# or the request failing outright) is a much worse failure mode than
-# trimming a little more eagerly than strictly necessary.
+# _trim_messages_for_model first subtracts the fixed, measurable per-request
+# overhead (the starting prompt plus the bound tools' own JSON-schema
+# descriptions, sent with every request once bound - see
+# Agent._fixed_overhead_tokens) from the model's context window, then
+# reserves this fraction of what's left for the trimmed conversation
+# history it sends; the remainder stays available for the per-turn context
+# message (target scope, mode, enumeration table, attack log - see
+# _render_context_message) and the model's own generation. No tokenizer is
+# available for an arbitrary local Ollama model, so this is necessarily a
+# rough per-message token estimate rather than an exact count -
+# deliberately conservative in both constants below, since UNDER-trimming
+# (context overflow silently truncating from the wrong end, or the request
+# failing outright) is a much worse failure mode than trimming a little
+# more eagerly than strictly necessary.
 _CONTEXT_BUDGET_FRACTION = 0.5
 _EST_TOKENS_PER_MESSAGE = 250
-_MIN_MESSAGES_SENT_TO_MODEL = 12
 _MAX_MESSAGES_SENT_TO_MODEL = 80
+# Rough chars-per-token estimate for the one-time fixed-overhead
+# measurement below - same reasoning as _EST_TOKENS_PER_MESSAGE, no real
+# tokenizer available for an arbitrary local model.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+# How many of the auto-maintained attack-log entries _render_context_message
+# renders in full each turn (most recent first) - see _render_context_message.
+# Unlike the trimmed conversation history, this table has no natural size
+# cap of its own (enumeration is bounded by port count, but attack attempts
+# can accumulate indefinitely over a long run) and is rendered in addition
+# to, not instead of, the trimmed messages, so it needs its own bound.
+_MAX_ATTACK_LOG_ENTRIES_SHOWN = 40
+
+# Tool names whose success path WRITES to the exploiting-mode "proof of
+# testing" state (self.mode / self._tested_since_mode_switch - see
+# _set_mode/_mark_tested/_clear_tested below) vs. tool names whose gate
+# check READS that same state (_require_tested in agent_tools.py).
+# LangGraph's ToolNode runs every tool call from one LLM turn concurrently
+# via asyncio.gather (confirmed against the installed langgraph source), so
+# a writer and a reader landing in the SAME turn is order-dependent, not
+# just theoretically racy - see Agent._tools_node below, which rejects the
+# whole batch outright whenever a turn mixes one of each, rather than
+# trying to out-time the race.
+_MODE_GATE_WRITER_TOOL_NAMES = {
+    agent_tools.RUN_TOOL_NAME,
+    agent_tools.NEW_SESSION_TOOL_NAME,
+    agent_tools.SWITCH_MODE_TOOL_NAME,
+}
+_MODE_GATE_READER_TOOL_NAMES = {
+    agent_tools.REPORT_VULNERABILITY_TOOL_NAME,
+    agent_tools.ATTACK_LOG_TOOL_NAME,
+}
 
 
 class AgentState(TypedDict):
@@ -81,6 +117,27 @@ class AgentState(TypedDict):
     # field only exists so the value survives a pause/resume via the same
     # Postgres checkpoint as everything else.
     mode: str
+    # Mirrors Agent._tested_since_mode_switch, the live synchronously-
+    # updated source of truth (see _mark_tested/_clear_tested/_set_mode) -
+    # same reasoning as `mode` above: without this, resuming a paused run
+    # that had genuinely tested something would come back on a fresh Agent
+    # instance defaulting to False, falsely re-showing the "you have NOT
+    # yet run() anything" warning even though it had.
+    tested_since_mode_switch: bool
+    # Mirrors Agent._unresolved_vulnerable_claims - see
+    # _record_attack_attempt/_mark_vulnerability_reported. Same pause/resume
+    # reasoning as tested_since_mode_switch above: without this, resuming a
+    # paused run with a real outstanding "vulnerable" claim would come back
+    # on a fresh Agent instance defaulting to 0, silently dropping the
+    # reminder to actually report it.
+    unresolved_vulnerable_claims: int
+    # Mirrors Agent.finish_summary - see _mark_finished. Checkpointed for
+    # the same reason as the two fields above, even though in the normal
+    # flow this is largely masked: AgentService.start_agent deletes the
+    # checkpoint whenever the persisted run status isn't PAUSED, and both
+    # real completion paths leave the run FINISHED, not PAUSED, so a stale
+    # checkpoint can't normally be silently "resumed" as already finished.
+    finish_summary: Optional[str]
 
 
 class AgentInterruptAction(TypedDict):
@@ -132,13 +189,20 @@ class Agent:
         self.finish_summary: Optional[str] = None
 
         # Best-effort per-model info from ollama_manager.get_model_capabilities
-        # (see agent_service.py's _prepare_and_run, which fetches this
-        # before constructing Agent) - None whenever that lookup wasn't
-        # available/failed, in which case changeModel/_message_budget fall
-        # back to conservative, previously-hardcoded defaults rather than
-        # guessing. context_window backs the message-trimming budget below;
-        # reasoning is consumed directly by changeModel.
+        # (see agent_service.py's _prepare_and_run, which fetches this,
+        # clamps it to the project's/global max-context-window ceiling, and
+        # passes the already-clamped result here) - None whenever that
+        # lookup wasn't available/failed, in which case changeModel/
+        # _message_budget fall back to conservative, previously-hardcoded
+        # defaults rather than guessing. context_window is now the single
+        # source of truth for BOTH the message-trimming budget below AND
+        # the actual num_ctx requested from Ollama in changeModel - the two
+        # used to be computed from the same detected value but only the
+        # budget ever actually used it; changeModel silently left Ollama on
+        # its own server-side default instead.
         self.context_window = context_window or DEFAULT_CONTEXT_WINDOW_FALLBACK
+        # Memoized by _fixed_overhead_tokens on first use - see there.
+        self._cached_fixed_overhead_tokens: Optional[int] = None
 
         # Live, synchronously-updated source of truth for the current
         # scouting/exploiting focus (see agent_tools.py's switch_mode) -
@@ -164,6 +228,19 @@ class Agent:
         # _call_model flush.
         self._tested_since_mode_switch: bool = False
 
+        # Count of log_attack_attempt calls logged with outcome="vulnerable"
+        # that have no matching report_vulnerability call yet - incremented
+        # in _record_attack_attempt, decremented in
+        # _mark_vulnerability_reported. report_vulnerability requires a real
+        # proof_of_concept, which is the actual artifact a human reviews;
+        # log_attack_attempt does not, so without this a fabricated
+        # "vulnerable" claim could sit forever as an informal note that
+        # nothing ever prompts a human to look at. Mirrored into
+        # AgentState.unresolved_vulnerable_claims every turn, same pattern
+        # as tested_since_mode_switch above, for the same pause/resume
+        # reason.
+        self._unresolved_vulnerable_claims: int = 0
+
         # Written to by tool calls (log_attack_attempt, run()'s FACTS
         # extraction) as they happen inside the "tools" node - tools have no
         # direct handle on graph state, so these buffer updates until the
@@ -177,6 +254,30 @@ class Agent:
         self._pending_enumeration: Dict[str, dict] = {}
         self._pending_attack_log: List[dict] = []
 
+        # Live, synchronously-updated record of which terminal session is
+        # current and what it's running - same pattern as self.mode above,
+        # for the same reason: _render_context_message re-injects this every
+        # turn (see there) so the model can't lose track of "you're inside
+        # telnet, not a Kali shell" the same way it can't lose track of mode.
+        # None until start_agent()'s pre-open of the default session sets it
+        # (see there) - never checkpointed, since every session is
+        # unconditionally closed at the end of any run (paused or finished,
+        # see agent_service.py's close_sessions_for_target) and start_agent
+        # always re-opens a fresh default session before turn one regardless
+        # of what was open before pausing, so this always resets to match
+        # reality at that same point rather than needing to persist across it.
+        self._current_session_name: Optional[str] = None
+        self._current_session_command: Optional[str] = None
+
+        # Live, synchronously-updated guess at whether the current session's
+        # last output ended at a plain shell prompt vs. some other program's
+        # (ftp, an interpreter, ...) - see agent_tools.py's run() and
+        # kali_manager.py's _looks_like_shell_prompt. Defaults True (matches
+        # KaliSession.at_shell_prompt's own default) since nothing has run
+        # yet. Not checkpointed - same reasoning as _current_session_command
+        # above, it's cheaply recomputed on the very next run() call.
+        self._at_shell_prompt: bool = True
+
         self.tools = agent_tools.build_agent_tools(
             project_id,
             target_id,
@@ -187,6 +288,10 @@ class Agent:
             self._set_mode,
             self._get_tested_since_mode_switch,
             self._mark_tested,
+            self._clear_tested,
+            self._set_current_session,
+            self._set_at_shell_prompt,
+            self._mark_vulnerability_reported,
         )
 
         self.changeModel(model_name=model_name, reasoning=reasoning)
@@ -201,6 +306,14 @@ class Agent:
 
     def _record_attack_attempt(self, entry: dict):
         self._pending_attack_log.append(entry)
+        if entry.get("outcome") == "vulnerable":
+            self._unresolved_vulnerable_claims += 1
+
+    def _mark_vulnerability_reported(self):
+        self._unresolved_vulnerable_claims = max(0, self._unresolved_vulnerable_claims - 1)
+
+    def _set_at_shell_prompt(self, value: bool):
+        self._at_shell_prompt = value
 
     def _get_mode(self) -> str:
         return self.mode
@@ -219,12 +332,81 @@ class Agent:
     def _mark_tested(self):
         self._tested_since_mode_switch = True
 
+    def _clear_tested(self):
+        """Resets the "tested since mode switch" flag right after a
+        report_vulnerability/log_attack_attempt call actually succeeds -
+        makes proof-of-testing a per-CLAIM requirement rather than a
+        per-mode-switch one. Without this, a single real run() call used to
+        unlock an unlimited number of subsequent report_vulnerability/
+        log_attack_attempt calls until the next switch_mode - closing that
+        gap this way (rather than tracking exactly which vector was tested)
+        matches the existing starting prompt, which already tells the model
+        to log "immediately after" each attempt: requiring a fresh run()
+        before the *next* claim is the intended workflow, not an extra
+        burden. Same synchronous-instance-attribute pattern as
+        _mark_tested/_set_mode - see their comments for why tool calls need
+        to observe this immediately rather than only after the next
+        _call_model flush."""
+        self._tested_since_mode_switch = False
+
+    def _set_current_session(self, name: Optional[str], command: Optional[str]):
+        """Updates the live "current session" record read by
+        _render_context_message every turn - see that field's comment in
+        __init__. Called from agent_tools.py's new_session/switch_session/
+        close_session (whenever the current session's identity actually
+        changes) and from run()'s defensive auto-reopen path, plus once
+        from start_agent()'s pre-open of the default session before turn
+        one. Pass (None, None) when no session is current at all (e.g.
+        right after close_session removes the last open session)."""
+        self._current_session_name = name
+        self._current_session_command = command
+
+    async def _tools_node(self, state: AgentState, config: RunnableConfig):
+        """Wraps the real ToolNode with a pre-dispatch check for the race
+        described above _MODE_GATE_WRITER_TOOL_NAMES: a turn whose
+        tool_calls mix a writer (run/new_session/switch_mode) with a reader
+        (report_vulnerability/log_attack_attempt) is rejected outright -
+        NONE of that turn's calls execute for real, and every one gets a
+        synthetic ToolMessage explaining why, so the model can retry them
+        as separate turns instead. This removes the race by construction
+        (a writer and a reader can never actually run concurrently against
+        each other) rather than trying to out-time asyncio.gather."""
+        last_message: AIMessage = state["messages"][-1]
+        tool_calls = last_message.tool_calls
+
+        names = {tc["name"] for tc in tool_calls}
+        writers = names & _MODE_GATE_WRITER_TOOL_NAMES
+        readers = names & _MODE_GATE_READER_TOOL_NAMES
+
+        if writers and readers:
+            rejection = (
+                "Rejected: this turn called "
+                f"{', '.join(sorted(writers))} together with "
+                f"{', '.join(sorted(readers))} in the SAME turn - none of "
+                "these calls ran. Tool calls in one turn execute "
+                "concurrently, so a report_vulnerability/log_attack_attempt "
+                "call can't reliably see a run()/new_session()/switch_mode "
+                "result from the very same turn. See the result of "
+                f"{', '.join(sorted(writers))} on its own turn FIRST, then "
+                "call "
+                f"{', '.join(sorted(readers))} on a later turn."
+            )
+            return {
+                "messages": [
+                    ToolMessage(content=rejection, tool_call_id=tc["id"], name=tc["name"])
+                    for tc in tool_calls
+                ]
+            }
+
+        return await self._tool_node.ainvoke(state, config)
+
     def _build_graph(self):
         workflow = StateGraph(AgentState)
 
         # Nodes
         workflow.add_node("agent", self._call_model)
-        workflow.add_node("tools", ToolNode(self.tools))
+        self._tool_node = ToolNode(self.tools)
+        workflow.add_node("tools", self._tools_node)
 
         # Edges
         workflow.add_edge(START, "agent")
@@ -306,6 +488,46 @@ class Agent:
                     "Make the real attempt first."
                 )
 
+        if self._unresolved_vulnerable_claims > 0:
+            lines.append(
+                f"You have {self._unresolved_vulnerable_claims} 'vulnerable' "
+                "attack-log entry(ies) with no matching report_vulnerability "
+                "call yet - report_vulnerability requires a fresh run() "
+                "since your last claim (log_attack_attempt/"
+                "report_vulnerability itself consumes proof-of-testing), so "
+                "run() again first if you haven't since, then call "
+                "report_vulnerability with a real proof_of_concept for "
+                "each, or the finding will not be recorded."
+            )
+
+        if self._current_session_name is not None:
+            lines.append("")
+            lines.append(
+                f'### Current terminal session: "{self._current_session_name}" '
+                f"running `{self._current_session_command}`"
+            )
+            if self._current_session_command != agent_tools.DEFAULT_SESSION_COMMAND:
+                lines.append(
+                    f"You are INSIDE {self._current_session_command} right "
+                    "now - run()'s input goes directly to it, not a Kali "
+                    "shell. Send exactly what you'd type into it (protocol "
+                    "commands, credentials, ...), never a shell/Kali command "
+                    "like nmap or ls, until you switch_session back to a "
+                    "plain-shell session or open a new one."
+                )
+            elif not self._at_shell_prompt:
+                lines.append(
+                    "Your last output did not look like your plain shell "
+                    "prompt - you may still be inside another program you "
+                    "launched directly (e.g. run(\"ftp <host>\")), such as "
+                    "ftp, telnet, or an interpreter, even though this "
+                    "session was opened as a plain shell. If you didn't "
+                    "mean to be, exit it first (e.g. `quit`/`exit`/`bye`) "
+                    "before running further shell commands like nmap - they "
+                    "will otherwise just be typed at that program's prompt "
+                    "and silently fail."
+                )
+
         enumeration = state.get("enumeration") or {}
         attack_log = state.get("attack_log") or []
 
@@ -333,7 +555,16 @@ class Agent:
 
             if attack_log:
                 lines.append("Attempted attack vectors:")
-                for entry in attack_log:
+                shown_attack_log = attack_log
+                omitted_count = len(attack_log) - _MAX_ATTACK_LOG_ENTRIES_SHOWN
+                if omitted_count > 0:
+                    shown_attack_log = attack_log[-_MAX_ATTACK_LOG_ENTRIES_SHOWN:]
+                    lines.append(
+                        f"[{omitted_count} earlier attempt(s) also logged - "
+                        "don't repeat one of those just because it scrolled "
+                        "out of this view.]"
+                    )
+                for entry in shown_attack_log:
                     line = (
                         f"- [{entry.get('outcome', '?')}] {entry.get('target', '?')}: "
                         f"{entry.get('vector', '?')}"
@@ -350,15 +581,22 @@ class Agent:
         pulling it back out of .content/reasoning_content, validating it
         names one of our actual tools, and promoting it to a real
         structured tool call so the graph executes it like any other. Also
-        strips the raw block from whatever field it was found in, so it
-        isn't shown to the user (or the model itself, next turn) as
-        garbled JSON on top of silently not running."""
+        strips every matched block from whatever field it was found in -
+        regardless of whether it ended up recovered - so garbled or
+        duplicate JSON never lingers in the persisted message (and future
+        context) as-is, and deduplicates identical calls (by name+args)
+        found across both fields or repeated within one, so a leaked block
+        that's mirrored/repeated (a real failure mode for a model prone to
+        output oscillation) can't be promoted into two real tool
+        executions."""
         if response.tool_calls:
             return response
 
         valid_tool_names = {t.name for t in self.tools}
         recovered: list = []
+        seen_calls: set = set()
         update: dict = {}
+        any_matches = False
 
         for field, text in (
             ("content", str(response.content) if response.content else ""),
@@ -367,25 +605,42 @@ class Agent:
             matches = list(_LEAKED_TOOL_CALL_PATTERN.finditer(text))
             if not matches:
                 continue
+            any_matches = True
 
             cleaned = text
             for match in matches:
                 try:
                     call = json.loads(match.group(1))
                 except json.JSONDecodeError:
+                    cleaned = cleaned.replace(
+                        match.group(0), "[malformed tool call removed]"
+                    ).strip()
                     continue
+
                 name = call.get("name")
                 if name not in valid_tool_names:
+                    cleaned = cleaned.replace(
+                        match.group(0), "[malformed tool call removed]"
+                    ).strip()
                     continue
+
+                args = call.get("arguments") or {}
+                cleaned = cleaned.replace(match.group(0), "").strip()
+
+                dedup_key = (name, json.dumps(args, sort_keys=True))
+                if dedup_key in seen_calls:
+                    # Same call leaked more than once - already stripped
+                    # above, but only ever promoted to a real tool call once.
+                    continue
+                seen_calls.add(dedup_key)
                 recovered.append(
                     {
                         "name": name,
-                        "args": call.get("arguments") or {},
+                        "args": args,
                         "id": f"recovered-{uuid.uuid4()}",
                         "type": "tool_call",
                     }
                 )
-                cleaned = cleaned.replace(match.group(0), "").strip()
 
             if field == "content":
                 update["content"] = cleaned
@@ -396,7 +651,13 @@ class Agent:
                 }
 
         if not recovered:
-            return response
+            # Still apply whatever stripping happened above (malformed/
+            # duplicate/unknown-tool blocks removed) even when nothing was
+            # promotable - previously this returned the response completely
+            # unmodified whenever recovery produced zero calls, leaving raw
+            # <tool_call>...</tool_call> text sitting in the persisted
+            # message (and every future turn's context) forever.
+            return response.model_copy(update=update) if any_matches else response
 
         logger.warning(
             f"Recovered {len(recovered)} tool call(s) Ollama failed to parse "
@@ -405,14 +666,41 @@ class Agent:
         update["tool_calls"] = recovered
         return response.model_copy(update=update)
 
-    def _message_budget(self) -> int:
+    def _fixed_overhead_tokens(self, first_message: BaseMessage) -> int:
+        """One-time (memoized) estimate of the fixed per-request cost that
+        trimming can never reduce: the starting prompt (messages[0], always
+        kept verbatim - see _trim_messages_for_model) plus the bound tools'
+        own JSON-schema descriptions, resent with every request once bound
+        (see changeModel). Computed lazily against the real first message
+        the first time it's needed, rather than guessed at __init__ time -
+        the rendered starting prompt isn't known until the graph's first
+        turn actually runs."""
+        if self._cached_fixed_overhead_tokens is not None:
+            return self._cached_fixed_overhead_tokens
+
+        prompt_chars = len(str(first_message.content))
+        tools_chars = sum(len(t.description or "") for t in self.tools)
+        self._cached_fixed_overhead_tokens = (
+            prompt_chars + tools_chars
+        ) // _CHARS_PER_TOKEN_ESTIMATE
+        return self._cached_fixed_overhead_tokens
+
+    def _message_budget(self, messages: list[BaseMessage]) -> int:
         """How many of the persisted conversation's messages
-        _trim_messages_for_model keeps, sized off self.context_window (see
-        the module-level comment above _CONTEXT_BUDGET_FRACTION for the
-        reasoning behind the constants used here)."""
-        usable_tokens = self.context_window * _CONTEXT_BUDGET_FRACTION
+        _trim_messages_for_model keeps, sized off self.context_window minus
+        the fixed overhead this same request will also carry (see
+        _fixed_overhead_tokens) - see the module-level comment above
+        _CONTEXT_BUDGET_FRACTION for the reasoning behind the constants
+        used here. Deliberately does NOT force the result up to some
+        minimum floor when the honest computed value is smaller -
+        inflating past what the estimate says actually fits is exactly the
+        under-trimming failure mode this module exists to avoid; a
+        genuinely tiny effective window should produce a genuinely tiny
+        budget, not get padded back up."""
+        reserved = self._fixed_overhead_tokens(messages[0]) if messages else 0
+        usable_tokens = max(0, self.context_window - reserved) * _CONTEXT_BUDGET_FRACTION
         budget = int(usable_tokens // _EST_TOKENS_PER_MESSAGE)
-        return max(_MIN_MESSAGES_SENT_TO_MODEL, min(_MAX_MESSAGES_SENT_TO_MODEL, budget))
+        return max(1, min(_MAX_MESSAGES_SENT_TO_MODEL, budget))
 
     def _trim_messages_for_model(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """Shrinks what's actually SENT to the model each turn, independent
@@ -436,7 +724,7 @@ class Agent:
         answers, so an orphaned one at the very start of the window (i.e.
         missing that AIMessage, which fell on the trimmed side of the cut)
         risks a hard error from the chat template, not just confusion."""
-        budget = self._message_budget()
+        budget = self._message_budget(messages)
         if len(messages) <= budget:
             return messages
 
@@ -447,13 +735,42 @@ class Agent:
         while start < len(messages) and isinstance(messages[start], ToolMessage):
             start += 1
 
-        if start >= len(messages) or start <= 1:
-            # Budget too tight to safely cut anywhere (everything past the
-            # candidate start is part of one giant trailing tool-call
-            # exchange, or there's nothing to trim in the first place) -
-            # send the untrimmed conversation rather than risk an orphaned
-            # ToolMessage or trimming nothing useful.
+        if start <= 1:
+            # Budget is generous enough relative to how much history exists
+            # that trimming would keep nearly the whole conversation anyway
+            # - not worth an "earlier turns omitted" notice for near-zero
+            # savings.
             return messages
+
+        if start >= len(messages):
+            # No message at/after the candidate cut point is safe to start
+            # the kept "recent" window on - either budget collapsed so far
+            # (e.g. fixed overhead alone now exceeds a small model's real
+            # context - see _message_budget) that candidate_start itself
+            # landed at/past the end, or the whole remaining tail turned
+            # out to be one unbroken run of ToolMessages. Previously this
+            # fell back to the FULL untrimmed conversation - which, now
+            # that _message_budget no longer inflates a tiny honest budget
+            # up to a artificial floor, turned this rare edge case into the
+            # COMMON case for any small-context model: trimming would
+            # silently do NOTHING AT ALL, exactly the under-trimming
+            # failure mode this whole module exists to prevent. Dropping
+            # the ENTIRE recent window instead (keep only the anchor) is
+            # always safe re: orphaning (there is no trailing ToolMessage
+            # left to orphan when nothing trailing is kept) and is the
+            # correct, conservative response to a genuinely tiny budget.
+            notice = SystemMessage(
+                content=(
+                    f"[{len(messages) - 1} earlier turn(s) omitted here - "
+                    "your effective context window is small enough that "
+                    "none of the recent conversation fits alongside the "
+                    "starting prompt and tools. They are NOT lost: the "
+                    "current mode, enumeration table, and attack-attempt "
+                    "log shown below already reflect everything learned in "
+                    "them. Don't re-run something already listed there.]"
+                )
+            )
+            return [first, notice]
 
         recent = messages[start:]
         trimmed_count = start - 1
@@ -505,6 +822,9 @@ class Agent:
             "enumeration": enumeration,
             "attack_log": attack_log,
             "mode": self.mode,
+            "tested_since_mode_switch": self._tested_since_mode_switch,
+            "unresolved_vulnerable_claims": self._unresolved_vulnerable_claims,
+            "finish_summary": self.finish_summary,
         }
 
     def _should_continue(self, state: AgentState):
@@ -541,6 +861,16 @@ class Agent:
             reasoning=use_reasoning,
             repeat_penalty=1.3,
             repeat_last_n=256,
+            # Force Ollama to actually allocate this model's real (or
+            # project-/globally-capped) context window - self.context_window
+            # is set in __init__ from ollama_manager.get_model_capabilities,
+            # already clamped to settings.DEFAULT_MAX_CONTEXT_WINDOW or the
+            # project's own override (see agent_service.py's
+            # _prepare_and_run). Without this, Ollama silently falls back to
+            # its own server-side default (commonly 2048-4096) regardless of
+            # what the model actually supports or what _message_budget()
+            # above assumes it has room for.
+            num_ctx=self.context_window,
         )
         self.llm_with_tools = llm.bind_tools(self.tools)
 
@@ -570,8 +900,19 @@ class Agent:
             # Restore the live mode from the checkpoint - a fresh Agent
             # instance always starts at self.mode = "scouting" (see
             # __init__), so resuming a paused run that had switched to
-            # "exploiting" needs this or it would silently reset.
+            # "exploiting" needs this or it would silently reset. Same
+            # reasoning for tested_since_mode_switch/finish_summary - see
+            # their fields on AgentState.
             self.mode = existing_state.values.get("mode", self.mode)
+            self._tested_since_mode_switch = existing_state.values.get(
+                "tested_since_mode_switch", self._tested_since_mode_switch
+            )
+            self._unresolved_vulnerable_claims = existing_state.values.get(
+                "unresolved_vulnerable_claims", self._unresolved_vulnerable_claims
+            )
+            self.finish_summary = existing_state.values.get(
+                "finish_summary", self.finish_summary
+            )
         else:
             target_scope: AgentTargetScope = {
                 "name": target.name,
@@ -599,6 +940,17 @@ class Agent:
                 )
             except Exception as e:
                 print(f"Could not pre-open default session for {self.target_id}: {e}")
+
+        # Prime the "current session" reminder (see _set_current_session) for
+        # both a fresh start and a resume - whatever session is actually
+        # current right now (just pre-opened above, already open from
+        # before this call, or still none if the pre-open itself failed)
+        # becomes the value _render_context_message shows from turn one.
+        current = manager.get_current_session(self.target_id)
+        self._set_current_session(
+            current.name if current else None,
+            current.command if current else None,
+        )
 
         time_left = duration_seconds
         run_state["time_left"] = time_left
@@ -709,9 +1061,26 @@ class Agent:
                 # - run/new_session are now the tools that actually execute
                 # something in the container, so those are what
                 # should_interrupt gates on instead.
-                requires_interrupt = should_interrupt and any(
-                    tc["name"] in (agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME)
-                    for tc in tool_calls
+                tool_call_names = {tc["name"] for tc in tool_calls}
+                # _tools_node rejects this exact turn outright (see its own
+                # docstring) whenever it mixes a writer with a reader -
+                # don't ask the user to approve a run()/new_session() call
+                # that's going to be rejected the moment it's resumed
+                # regardless of their answer; that made an approval look
+                # like a silent no-op. Let it flow straight through to
+                # _tools_node instead, which explains the rejection to the
+                # model directly.
+                batch_will_be_rejected = bool(
+                    tool_call_names & _MODE_GATE_WRITER_TOOL_NAMES
+                    and tool_call_names & _MODE_GATE_READER_TOOL_NAMES
+                )
+                requires_interrupt = (
+                    should_interrupt
+                    and not batch_will_be_rejected
+                    and any(
+                        name in (agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME)
+                        for name in tool_call_names
+                    )
                 )
 
                 if not requires_interrupt:
@@ -738,7 +1107,34 @@ class Agent:
 
                     yield interrupt_action
 
-                    is_approved: bool = await resume_future
+                    # Race the approval against stop_event, the same way the
+                    # streaming loop above does - without this, pausing
+                    # while a run()/new_session() call is awaiting approval
+                    # had zero effect: the only way out used to be an actual
+                    # approve/reject via the websocket, so the run stayed
+                    # stuck at INTERRUPTED indefinitely regardless of a
+                    # pause request.
+                    stop_wait_task = asyncio.create_task(stop_event.wait())
+                    done, pending = await asyncio.wait(
+                        [resume_future, stop_wait_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+
+                    if resume_future not in done:
+                        # Paused while this approval was still pending -
+                        # leave resume_future unresolved (cancelled, never
+                        # approved or rejected) rather than force a decision.
+                        # Nothing is lost: state.next is still ("tools",) in
+                        # the checkpoint (the tools node never actually ran),
+                        # so resuming this run re-enters this exact branch
+                        # against the same pending tool call and re-surfaces
+                        # the same approval request normally.
+                        resume_future.cancel()
+                        return
+
+                    is_approved: bool = resume_future.result()
 
                     # Resume the clock fresh - time spent waiting for the
                     # user's decision must not count against the budget.

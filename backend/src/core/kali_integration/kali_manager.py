@@ -1,5 +1,6 @@
 import docker
 import asyncio
+import re
 import socket as socket_module
 import time
 from docker.errors import DockerException
@@ -32,6 +33,35 @@ class KALI_USERS(str, Enum):
 
 
 MOMOS_USER: Final = KALI_USERS.momos
+
+# Detects whether a session's latest output ended at the default session's
+# own plain shell prompt (e.g. "momos@bd30a780249c:~$ ") rather than some
+# other program's prompt (ftp's "ftp> ", mysql's "mysql> ", a Python
+# ">>> ", msfconsole's "msf6 > ", ...). Confirmed against a real leaked
+# prompt in production - see KaliManger._session_io's use of this.
+# Terminal escape sequences (bracketed-paste toggles, colors, ...) are
+# stripped first since a tty=True exec can emit them around the prompt.
+_ANSI_ESCAPE_PATTERN: Final = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+_SHELL_PROMPT_PATTERN: Final = re.compile(rf"{re.escape(str(MOMOS_USER))}@\S+:.*[$#]\s*$")
+
+
+def _looks_like_shell_prompt(output: str) -> bool:
+    cleaned = _ANSI_ESCAPE_PATTERN.sub("", output)
+    return bool(_SHELL_PROMPT_PATTERN.search(cleaned.strip()))
+
+
+# Only the last few dozen characters of a (possibly huge, e.g. full-port
+# nmap) accumulated buffer can ever match _SHELL_PROMPT_PATTERN's own $
+# anchor - checking only this tail on every chunk keeps the early-exit
+# check in _session_io_sync cheap regardless of how much output has piled
+# up, rather than re-decoding/re-matching the whole buffer every time.
+_PROMPT_TAIL_CHECK_BYTES: Final = 256
+
+# Once the session's own shell prompt reappears, the foreground command has
+# genuinely finished and returned control - see _session_io_sync's early-exit
+# comment. Still wait this much longer (rather than returning the instant
+# it's seen) in case a little more output is still trailing right behind it.
+_PROMPT_REAPPEAR_GRACE_SECONDS: Final = 2.0
 
 
 # IANA protocol numbers, used with "meta l4proto" instead of protocol names -
@@ -142,6 +172,12 @@ class KaliManger:
         # run()/interrupt_session() act on unless the agent switch_session's
         # elsewhere first).
         self.current_session: Dict[str, str] = {}
+        # (target_id, name) pairs currently being opened - validated (name
+        # not colliding, under MAX_SESSIONS_PER_TARGET) but not yet in
+        # `sessions` because the slow docker exec_create/exec_start hasn't
+        # finished. Guarded by sessions_lock, same as `sessions` itself -
+        # see open_session's TOCTOU fix.
+        self._pending_sessions: set[tuple[str, str]] = set()
         self._session_sweep_task: Optional[asyncio.Task] = None
 
         try:
@@ -368,6 +404,22 @@ class KaliManger:
     def get_current_session_name(self, target_id: str) -> Optional[str]:
         return self.current_session.get(target_id)
 
+    def get_current_session(self, target_id: str) -> Optional[KaliSession]:
+        """Non-raising counterpart to _get_current_session - returns None
+        (rather than raising) whenever there's no current session, or it's
+        somehow missing/closed, so a caller that just wants to know "what's
+        current, if anything" (e.g. agent.py's session-identity reminder, or
+        a tool wrapper reporting the session it just switched to) doesn't
+        need to handle KaliSessionError for what isn't really an error case
+        for it."""
+        name = self.current_session.get(target_id)
+        if name is None:
+            return None
+        session = self.sessions.get(self._session_key(target_id, name))
+        if session is None or session.closed:
+            return None
+        return session
+
     def _open_session_sync(
         self, command: str, user: KALI_USERS
     ) -> tuple[str, socket_module.socket]:
@@ -403,24 +455,40 @@ class KaliManger:
     ) -> KaliSession:
         key = self._session_key(target_id, name)
         async with self.sessions_lock:
-            if key in self.sessions and not self.sessions[key].closed:
+            if (
+                (key in self.sessions and not self.sessions[key].closed)
+                or (target_id, name) in self._pending_sessions
+            ):
                 raise KaliSessionError(
                     f"A session named '{name}' is already open - close it "
                     "first, or switch_session to it instead of opening another."
                 )
             open_for_target = sum(
                 1 for s in self.sessions.values() if s.target_id == target_id
-            )
+            ) + sum(1 for (t, _) in self._pending_sessions if t == target_id)
             if open_for_target >= MAX_SESSIONS_PER_TARGET:
                 raise KaliSessionError(
                     f"Too many open sessions ({MAX_SESSIONS_PER_TARGET} max) - "
                     "close an existing one with close_session before opening another."
                 )
+            # Reserve this (target_id, name) for the duration of the slow
+            # exec below, still inside the same locked section as the
+            # checks above - a concurrent open_session for the same name
+            # (ToolNode runs a turn's tool calls concurrently) now sees the
+            # reservation and fails validation immediately, instead of both
+            # calls passing the check here and one silently clobbering the
+            # other's `sessions` entry once the exec finishes.
+            self._pending_sessions.add((target_id, name))
 
-        loop = asyncio.get_running_loop()
-        exec_id, raw_sock = await loop.run_in_executor(
-            None, self._open_session_sync, command, user
-        )
+        try:
+            loop = asyncio.get_running_loop()
+            exec_id, raw_sock = await loop.run_in_executor(
+                None, self._open_session_sync, command, user
+            )
+        except Exception:
+            async with self.sessions_lock:
+                self._pending_sessions.discard((target_id, name))
+            raise
 
         session = KaliSession(
             name=name,
@@ -434,6 +502,7 @@ class KaliManger:
         async with self.sessions_lock:
             self.sessions[key] = session
             self.current_session[target_id] = name
+            self._pending_sessions.discard((target_id, name))
 
         self._ensure_session_sweep_running()
         return session
@@ -446,32 +515,92 @@ class KaliManger:
     ) -> str:
         """Runs in the executor thread. Optionally writes `data`, then
         drains whatever arrives until `wait_seconds` pass with NO new data
-        at all, or the peer closes (the session's process exited).
+        at all, the session's own shell prompt reappears (see below), or
+        the peer closes (the session's process exited).
 
-        Deliberately a single idle-timeout, not a short "stop at the first
-        quiet gap" heuristic - a command can print a little (a banner, a
-        warning) and then legitimately go quiet for real seconds while it
-        keeps working before printing its actual result, and there is no
-        way to tell that apart from "actually finished" without
-        understanding the specific command. A shorter settle-based cutoff
-        was tried and reliably returned early in exactly that case (see
-        MAX_READ_WINDOW_SECONDS's comment), silently truncating the
-        result. Requiring the full `wait_seconds` of quiet, uninterrupted,
-        is the only way to avoid that - which is why callers should pick
-        `wait_seconds` based on how long a command might pause internally,
-        not just its typical total runtime."""
+        Deliberately not a short "stop at the first quiet gap" heuristic -
+        a command can print a little (a banner, a warning) and then
+        legitimately go quiet for real seconds while it keeps working
+        before printing its actual result, and there is no way to tell
+        that apart from "actually finished" purely from a pause in output.
+        A shorter settle-based cutoff was tried and reliably returned early
+        in exactly that case (see MAX_READ_WINDOW_SECONDS's comment),
+        silently truncating the result.
+
+        The one signal that IS safe to short-circuit on is the session's
+        own shell prompt (_looks_like_shell_prompt) reappearing: bash only
+        ever reprints it once it has genuinely reclaimed the terminal from
+        the foreground process, so a still-running command cannot produce
+        this the way a mid-command pause could - unlike the quiet-gap
+        heuristic above, this isn't a guess about timing, it's the shell
+        itself reporting "I'm ready for the next command." Without this,
+        callers are pushed (by run()'s own docstring) toward generous
+        `wait_seconds` for anything scan-like "just in case" it pauses
+        internally - and a command that actually finishes in a few seconds
+        then sits idle for the rest of that generous window for no reason,
+        which measured live cost ~95% of a real nmap call's wall-clock
+        time. `wait_seconds` remains the hard ceiling either way - this
+        only ever shortens the wait once the prompt is back, never removes
+        it or returns a partial result while the command could plausibly
+        still be running."""
         if data is not None:
             sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
             sock.sendall(data)
 
-        sock.settimeout(wait_seconds)
+        # Each recv() below gets its own fresh timeout (Python's
+        # socket.settimeout applies per blocking call, not as a shared
+        # countdown) - so this is a resetting idle timer, not a fixed total
+        # budget: any new chunk pushes the deadline back out by the full
+        # window again, exactly like the original single-settimeout(wait_
+        # seconds)-before-the-loop version this replaced. The only change
+        # is *which* window gets applied next: the normal full wait_seconds
+        # after ordinary output, or the short grace window once the tail
+        # looks like the shell prompt reappearing.
         chunks = bytearray()
+        next_timeout = wait_seconds
+        # The terminal always echoes back the CURRENT prompt plus the
+        # just-typed line before the command actually runs (ordinary TTY
+        # echo) - _looks_like_shell_prompt cannot tell that apart from a
+        # genuinely-finished command's new prompt, so checking against it
+        # immediately would make nearly every call that sends input return
+        # right after the echo, before the real command has even started.
+        # Confirmed in production: this exact bug truncated a real nmap
+        # scan down to its first banner line. Only start checking once real
+        # output has begun arriving - i.e. after the first newline
+        # following the send, since the echoed input+Enter always ends
+        # with one before anything the command itself prints. A bare poll
+        # (no data sent) has no such echo to wait out, so it's eligible to
+        # check from the very first byte.
+        prompt_check_armed = data is None
         try:
             while True:
+                sock.settimeout(next_timeout)
                 chunk = sock.recv(SOCKET_RECV_CHUNK_BYTES)
                 if not chunk:
                     raise EOFError("session process exited")
                 chunks.extend(chunk)
+
+                if not prompt_check_armed and b"\n" in chunk:
+                    # Arms within the SAME chunk that ends the input echo,
+                    # rather than only from the next one - otherwise a fast
+                    # command whose entire echo+output+new-prompt arrives
+                    # in one recv() would still wait out a full unnecessary
+                    # cycle before this check is even attempted.
+                    prompt_check_armed = True
+
+                if not prompt_check_armed:
+                    next_timeout = wait_seconds
+                    continue
+
+                tail = chunks[-_PROMPT_TAIL_CHECK_BYTES:].decode(errors="replace")
+                if _looks_like_shell_prompt(tail):
+                    next_timeout = _PROMPT_REAPPEAR_GRACE_SECONDS
+                else:
+                    # Either ordinary output, or more data arrived right
+                    # after what looked like a prompt (a false match inside
+                    # real output, or a background flush) - either way,
+                    # back to waiting the normal generous amount.
+                    next_timeout = wait_seconds
         except socket_module.timeout:
             pass  # Expected: no more output within the window.
 
@@ -489,13 +618,43 @@ class KaliManger:
         session = self._get_current_session(target_id)
         return await self._session_io(session, data, wait_seconds)
 
+    def _write_to_session_sync(self, sock: socket_module.socket, data: bytes) -> None:
+        sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
+        sock.sendall(data)
+
     async def interrupt_session(self, target_id: str) -> str:
         """Sends Ctrl-C to the current session's foreground process, and
         reads back whatever it produces in response (e.g. "^C" echoed plus
         a fresh shell prompt) - the replacement for the automatic `timeout`
         wrapper execute_kali_command used to have, now that everything runs
-        inside a persistent session instead of a one-shot exec call."""
+        inside a persistent session instead of a one-shot exec call.
+
+        If the session's own io_lock is already held - a foreground
+        command's read is still blocked waiting for output, exactly the
+        situation this tool exists to recover from - this does NOT wait for
+        that lock: a socket WRITE is safe to issue while another thread has
+        a read in flight on the same socket (only two concurrent READS
+        would actually race), so the Ctrl-C byte is sent directly and this
+        returns immediately, letting the already-blocked read pick up
+        whatever the interrupt produces within its own still-open wait
+        window. Going through the normal locked path here instead would
+        just queue this call up behind the exact same stuck read it's
+        meant to recover from, defeating the one documented escape hatch
+        for that scenario."""
         session = self._get_current_session(target_id)
+
+        if session.io_lock.locked():
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, self._write_to_session_sync, session.sock, b"\x03"
+            )
+            return (
+                "Sent Ctrl-C while a previous read on this session was still "
+                "in progress - its output (including anything caused by "
+                "this interrupt) will appear in that call's result, or your "
+                "next run() call."
+            )
+
         return await self._session_io(session, b"\x03", DEFAULT_READ_WINDOW_SECONDS)
 
     async def _session_io(
@@ -531,6 +690,14 @@ class KaliManger:
                     f"Session '{session.name}' hit a socket error and was closed: {e}"
                 )
 
+        if output:
+            # Only meaningful for a plain-shell-launched session (a session
+            # opened via new_session with a genuinely different command,
+            # e.g. "msfconsole", simply never matches this pattern either -
+            # harmless, since callers only ever check at_shell_prompt
+            # alongside session.command == DEFAULT_SESSION_COMMAND anyway).
+            session.at_shell_prompt = _looks_like_shell_prompt(output)
+
         session.last_activity = time.monotonic()
         return output if output else NO_OUTPUT_MESSAGE
 
@@ -541,26 +708,41 @@ class KaliManger:
         async with self.sessions_lock:
             self.current_session[target_id] = name
 
-    async def close_session(self, target_id: str, name: str) -> None:
+    async def _reassign_current_after_close(self, target_id: str, name: str) -> None:
+        """If `name` was target_id's current session, falls back to any
+        other still-open session for that target, or clears the pointer if
+        none remain - the terminal tools layer (agent_tools.py) re-opens
+        "default" on the next run() call rather than kali_manager deciding
+        that policy itself. Shared by close_session and the idle sweep
+        below - the sweep previously cleared the pointer unconditionally
+        even when another session was alive and untouched, which could
+        make a later new_session("default", ...)/run()'s defensive re-open
+        fail on a stale name collision instead of actually falling back."""
+        async with self.sessions_lock:
+            if self.current_session.get(target_id) != name:
+                return
+            remaining = [
+                s.name
+                for s in self.sessions.values()
+                if s.target_id == target_id and not s.closed
+            ]
+            if remaining:
+                self.current_session[target_id] = remaining[0]
+            else:
+                self.current_session.pop(target_id, None)
+
+    async def close_session(self, target_id: str, name: str) -> bool:
+        """Closes a session by name. Returns True if a session with that
+        name actually existed and was closed, False if there was nothing to
+        close (already gone - explicitly, idle-swept, or its process
+        exited) - callers should report this accurately rather than always
+        claiming success."""
         session = self.sessions.get(self._session_key(target_id, name))
         if session is None:
-            return
+            return False
         await self._close_session(session, reason="closed by agent")
-        async with self.sessions_lock:
-            if self.current_session.get(target_id) == name:
-                # Fall back to any other still-open session for this target;
-                # if none remain, clear the pointer - the terminal tools
-                # layer (agent_tools.py) re-opens "default" on the next run()
-                # call rather than kali_manager deciding that policy itself.
-                remaining = [
-                    s.name
-                    for s in self.sessions.values()
-                    if s.target_id == target_id and not s.closed
-                ]
-                if remaining:
-                    self.current_session[target_id] = remaining[0]
-                else:
-                    self.current_session.pop(target_id, None)
+        await self._reassign_current_after_close(target_id, name)
+        return True
 
     async def _remove_from_registry(self, session: KaliSession) -> None:
         async with self.sessions_lock:
@@ -642,9 +824,9 @@ class KaliManger:
                         f"({session.command!r})"
                     )
                     await self._close_session(session, reason="idle timeout")
-                    async with self.sessions_lock:
-                        if self.current_session.get(session.target_id) == session.name:
-                            self.current_session.pop(session.target_id, None)
+                    await self._reassign_current_after_close(
+                        session.target_id, session.name
+                    )
         except asyncio.CancelledError:
             pass
 

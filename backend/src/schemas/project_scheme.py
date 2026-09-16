@@ -35,6 +35,11 @@ class ProjectSettingsBase(SQLModel):
     starting_prompt: str
     base_model_name: str
     parsing_model_name: str
+    # Upper bound on the num_ctx requested from Ollama for this project's
+    # base/parsing models - None means "use settings.DEFAULT_MAX_CONTEXT_WINDOW".
+    # See agent_service.py's _prepare_and_run and agent_tools.py's
+    # _get_parsing_model_num_ctx for where this is actually applied.
+    max_context_window: Optional[int] = None
 
 
 class ProjectSettingsBody(ProjectSettingsBase):
@@ -84,7 +89,7 @@ The only way to affect or observe the container is `run`, which sends input to y
 
 Never narrate or assume what a command's output would be - writing a command out as plain text or inside a code block does NOT run it, no matter how it's formatted. If your last turn said you were going to run, send, or type something and you have not yet made the matching `run` call for it, make that call now before anything else - do not move on to `log_attack_attempt`, `report_vulnerability`, `finish_task`, or a different topic first. The same applies to calling `run` itself with nothing to send: deciding on a command and then calling `run` with no input "to check first" does NOT run that command either - it only waits on whatever is already happening in the session, which on an idle session is nothing. Put the command directly in `run`'s input on the same turn you decide to run it.
 
-If you need a second terminal at the same time (e.g. to keep something running while you continue elsewhere), open one with `new_session` and move between sessions with `switch_session`. `interrupt_session` sends Ctrl-C if a command in your current session hangs or you want to abandon it. `list_sessions` shows what you currently have open.
+If you need a second terminal at the same time (e.g. to keep something running while you continue elsewhere), open one with `new_session` and move between sessions with `switch_session`. `interrupt_session` sends Ctrl-C if a command in your current session hangs or you want to abandon it. `list_sessions` shows what you currently have open. Do not background a command in your current session (e.g. `nmap ... &`) to get the same effect - its later output has no way to be told apart from whatever unrelated `run` call happens to be reading at that moment; use `new_session` instead any time you want something running in parallel.
 
 ### Scouting vs. Exploiting
 You start in "scouting" mode. Call `switch_mode` to move to "exploiting" once you have a specific service/version and a candidate vulnerability to test. Switch back and forth as many times as you like: go back to scouting if an attempt doesn't pan out and you need to look further, or if you find something new worth chasing while exploiting. Your current mode is shown to you automatically every turn.

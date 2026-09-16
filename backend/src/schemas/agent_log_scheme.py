@@ -14,6 +14,15 @@ class AgentLogBase(SQLModel):
     type: AgentLogType
     content: str
     tool_name: Optional[str] = None
+    # Raw, unparsed tool output for a "tool"-adjacent "action" entry, when
+    # available - populated from the ToolMessage.artifact that run()/
+    # new_session()/switch_session() attach via response_format=
+    # "content_and_artifact" (see agent_tools.py). Never shown to the model
+    # itself (LangChain never resends a ToolMessage's artifact back into the
+    # conversation) - this exists purely so a human reviewing the log can
+    # see what the parsing model actually condensed `content` from, instead
+    # of only ever seeing its (possibly wrong) summary.
+    raw_output: Optional[str] = None
 
 
 class AgentLog(AgentLogBase, table=True):

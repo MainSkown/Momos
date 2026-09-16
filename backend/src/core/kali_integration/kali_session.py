@@ -66,3 +66,10 @@ class KaliSession:
     last_activity: float = field(default_factory=time.monotonic)
     closed: bool = False
     close_reason: Optional[str] = None
+    # Best-effort guess at whether this session's last output ended at a
+    # plain shell prompt vs. some other program's prompt (ftp, mysql, an
+    # interpreter, ...) - only meaningfully tracked for the default
+    # (plain-shell-launched) session; see KaliManger._session_io and
+    # agent_tools.py's _looks_like_shell_prompt. Defaults True since a
+    # freshly opened session starts at its own shell/program prompt.
+    at_shell_prompt: bool = True

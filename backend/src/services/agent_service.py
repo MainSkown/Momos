@@ -5,7 +5,7 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-from src.core import db_manager, ollama_manager
+from src.core import db_manager, ollama_manager, settings
 from src.core.agent import Agent, agent_tools
 from src.core.agent import agent_checkpointer
 from src.core.kali_integration import kali_registry
@@ -142,9 +142,11 @@ def _render_start_prompt(template: str, target: Target) -> str:
 
 
 def _render_tool_call_content(tool_name: str, args: dict) -> str:
-    if tool_name == agent_tools.KALI_COMMAND_TOOL_NAME:
-        return str(args.get("command", ""))
-
+    # No branch for agent_tools.KALI_COMMAND_TOOL_NAME here - that tool is
+    # built but deliberately never bound in agent_tools.build_agent_tools
+    # (see create_kali_tool's own docstring), so it can never actually
+    # appear in a real tool call. Revive create_kali_tool's call site there
+    # first if this ever needs to render its args again.
     if tool_name == agent_tools.INSTALL_PACKAGE_TOOL_NAME:
         return str(args.get("package", ""))
 
@@ -185,9 +187,10 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
 
 def _message_to_log_specs(
     message: BaseMessage,
-) -> List[Tuple[AgentLogType, str, Optional[str]]]:
-    """Turns one agent message into zero or more (type, content, tool_name) specs."""
-    specs: List[Tuple[AgentLogType, str, Optional[str]]] = []
+) -> List[Tuple[AgentLogType, str, Optional[str], Optional[str]]]:
+    """Turns one agent message into zero or more (type, content, tool_name,
+    raw_output) specs."""
+    specs: List[Tuple[AgentLogType, str, Optional[str], Optional[str]]] = []
 
     if isinstance(message, AIMessage):
         # Prefer additional_kwargs['reasoning_content'] - Agent.changeModel
@@ -205,18 +208,24 @@ def _message_to_log_specs(
         )
 
         if content.strip():
-            specs.append(("thinking", content, None))
+            specs.append(("thinking", content, None, None))
 
         for tc in message.tool_calls:
             specs.append(
-                ("tool", _render_tool_call_content(tc["name"], tc["args"]), tc["name"])
+                ("tool", _render_tool_call_content(tc["name"], tc["args"]), tc["name"], None)
             )
 
     elif isinstance(message, ToolMessage):
         content = _stringify_content(message.content)
 
         if content.strip():
-            specs.append(("action", content, None))
+            # artifact is populated for tools using response_format=
+            # "content_and_artifact" (run/new_session/switch_session, see
+            # agent_tools.py) - None for every other tool, and never sent
+            # back to the model either way (LangChain only resends
+            # .content/.tool_calls, not .artifact).
+            raw_output = getattr(message, "artifact", None)
+            specs.append(("action", content, None, raw_output))
 
     return specs
 
@@ -227,11 +236,13 @@ async def _persist_and_broadcast(
     log_type: AgentLogType,
     content: str,
     tool_name: Optional[str] = None,
+    raw_output: Optional[str] = None,
 ) -> AgentLog:
     log = AgentLog(
         type=log_type,
         content=content,
         tool_name=tool_name,
+        raw_output=raw_output,
         project_id=project_id,
         target_id=target_id,
     )
@@ -278,6 +289,23 @@ class AgentService:
                 f"Agent is already running for target {target_id}", target_id
             )
 
+        # One KaliManger (and its prepare_nftables firewall scope) is shared
+        # across every target in a project (kali_registry.get_manager is
+        # keyed by project_id only) - prepare_nftables unconditionally tears
+        # down and rebuilds that shared scope for whichever single target is
+        # starting, so a second concurrent target in the same project would
+        # silently cut off the first's traffic rather than actually running
+        # side by side. Enforce exclusivity at the project level instead of
+        # letting that race happen.
+        if AgentService.is_project_running(project_id):
+            raise AgentAlreadyRunningException(
+                f"Another target in project {project_id} is already running "
+                "an agent - only one target per project can run at a time "
+                "(the Kali container and its firewall scope are shared "
+                "across the whole project).",
+                target_id,
+            )
+
         if target.task_duration is None or target.task_duration == 0:
             raise DurationNotDefinedInTarget(
                 f"Target {target_id} does not have defined scan duration"
@@ -286,12 +314,27 @@ class AgentService:
         # Resume from a paused run's remaining time, if one exists - otherwise
         # start fresh with the target's full configured duration.
         existing_run = db_manager.get_agent_run(target_id)
+        resuming_paused_run = (
+            existing_run is not None and existing_run.status == AgentRunState.PAUSED
+        )
+        duration_seconds = (
+            existing_run.remaining_seconds if resuming_paused_run else target.task_duration
+        )
 
-        if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
-            duration_seconds = existing_run.remaining_seconds
-        else:
-            duration_seconds = target.task_duration
+        # Claim the target (and so, via is_project_running, the whole
+        # project) immediately - everything above this point is a plain
+        # synchronous check with no `await`, so no other coroutine can have
+        # interleaved since this call started; claiming here, before the
+        # `await adelete_thread(...)` below (the only await left in this
+        # function), closes a real race the two exclusivity checks above
+        # would otherwise still have: two concurrent start_agent() calls
+        # for two different, fresh targets in the same project could both
+        # pass is_project_running before either claimed anything, letting
+        # both proceed to build/rebuild the shared Kali container and
+        # firewall scope at once.
+        _running_targets[target_id] = project_id
 
+        if not resuming_paused_run:
             # Not resuming a paused run - clear any leftover LangGraph
             # checkpoint for this thread (from a prior finished/errored run).
             # The checkpointer persists state per thread_id independently of
@@ -303,11 +346,6 @@ class AgentService:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
         project_settings = db_manager.get_project_settings(project_id)
-
-        # Claim the target immediately, before the (possibly multi-minute)
-        # container build even starts, so a second start_agent() call can't
-        # slip in while it's still being prepared.
-        _running_targets[target_id] = project_id
 
         asyncio.create_task(
             AgentService._prepare_and_run(target, project_settings, duration_seconds)
@@ -348,7 +386,15 @@ class AgentService:
                 project_settings.base_model_name
             )
             reasoning = capabilities["thinking"]
-            context_window = capabilities["context_window"]
+            # Clamp the model's own detected max context to this project's
+            # override (if set) or the system-wide default ceiling - this
+            # is the exact value Agent.changeModel later requests from
+            # Ollama via num_ctx, so it must already reflect whatever cap
+            # the operator/project owner wants, not just the raw detected
+            # maximum (which can be very large - e.g. 256k for qwen3:8b -
+            # and force an allocation the host can't actually afford).
+            ceiling = project_settings.max_context_window or settings.DEFAULT_MAX_CONTEXT_WINDOW
+            context_window = min(capabilities["context_window"], ceiling)
         except Exception as e:
             print(
                 f"Could not fetch capabilities for model "
@@ -414,15 +460,26 @@ class AgentService:
 
         stop_event = asyncio.Event()
         run_state: dict = {}
-        _stop_events[target_id] = stop_event
-        _run_states[target_id] = run_state
-
-        await _set_running(project_id, target_id, True)
-        await _persist_run_state(
-            project_id, target_id, AgentRunState.RUNNING, duration_seconds
-        )
 
         try:
+            # Registration/initial persistence moved inside this try (was
+            # previously before it) - a failure in _set_running/
+            # _persist_run_state here used to propagate uncaught out of
+            # _run_agent with no wrapping try/except, skipping the finally
+            # block below entirely and leaving _running_targets[target_id]
+            # (already claimed in start_agent, before this task was even
+            # scheduled) permanently stuck - every subsequent start_agent()
+            # call for that target would then raise
+            # AgentAlreadyRunningException with no recovery short of a
+            # backend restart.
+            _stop_events[target_id] = stop_event
+            _run_states[target_id] = run_state
+
+            await _set_running(project_id, target_id, True)
+            await _persist_run_state(
+                project_id, target_id, AgentRunState.RUNNING, duration_seconds
+            )
+
             await _persist_and_broadcast(
                 project_id,
                 target_id,
@@ -465,7 +522,7 @@ class AgentService:
                     )
                     continue
 
-                for log_type, content, tool_name in _message_to_log_specs(event):
+                for log_type, content, tool_name, raw_output in _message_to_log_specs(event):
                     # Log content is shown as-is now, no summarization pass -
                     # in testing, running the agent's own deliberate
                     # reasoning (from the two-phase _call_model split) back
@@ -475,7 +532,7 @@ class AgentService:
                     # (see agent_tools.py) before it ever reaches here.
 
                     await _persist_and_broadcast(
-                        project_id, target_id, log_type, content, tool_name
+                        project_id, target_id, log_type, content, tool_name, raw_output
                     )
 
             if agent.finish_summary:
@@ -500,7 +557,18 @@ class AgentService:
             await _persist_and_broadcast(
                 project_id, target_id, "action", f"Agent run failed: {e}"
             )
-            await _persist_run_state(project_id, target_id, AgentRunState.FINISHED, 0)
+            # FAILED (not FINISHED) so a crash is distinguishable in the UI
+            # from a run that completed/paused/ran out of time normally,
+            # and the real time_left already tracked in run_state (not a
+            # hardcoded 0) - run_state defaults to {} if the failure
+            # happened before the agent loop itself ever started, so
+            # .get(...) still falls back to 0 sensibly in that case.
+            await _persist_run_state(
+                project_id,
+                target_id,
+                AgentRunState.FAILED,
+                run_state.get("time_left", 0),
+            )
         finally:
             manager = await kali_registry.get_manager_if_exists(project_id)
             if manager is not None:

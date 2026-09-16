@@ -31,6 +31,17 @@ class DatabaseManager:
 
         SQLModel.metadata.create_all(self.engine)
 
+        # There is no migration tool (e.g. Alembic) in this project -
+        # create_all above only creates tables that don't exist yet, it
+        # never alters an existing one. New nullable columns on an
+        # already-existing table (like agentlog.raw_output) need an
+        # explicit, idempotent ALTER here instead - a no-op on a brand-new
+        # database (create_all already includes the column there), a real
+        # patch on an existing one.
+        with self.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS raw_output TEXT"))
+            conn.commit()
+
     def get_session(self):
         with Session(self.engine) as session:
             yield session

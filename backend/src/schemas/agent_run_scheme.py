@@ -10,6 +10,13 @@ class AgentRunState(str, Enum):
     PAUSED = "paused"
     INTERRUPTED = "interrupted"
     FINISHED = "finished"
+    # A run that ended because something actually went wrong (an unhandled
+    # exception in agent_service.py's _run_agent), as opposed to FINISHED,
+    # which means the run completed/paused/ran out of time normally.
+    # Without this distinction, a crash used to persist as FINISHED with
+    # remaining_seconds hardcoded to 0 - indistinguishable in the UI from a
+    # real run that used its full duration.
+    FAILED = "failed"
 
 
 class AgentRunBase(SQLModel):

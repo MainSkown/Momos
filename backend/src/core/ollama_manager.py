@@ -71,22 +71,34 @@ class OllamaManager:
 def capabilities_from_show_info(model_name: str, show_info) -> dict:
     """Pure detection logic behind OllamaManager.get_model_capabilities -
     Ollama doesn't expose a clean boolean capability for "does this model
-    support reasoning", hence the name/modelfile heuristic rather than a
-    real capability flag.
+    support reasoning" on every server version, hence the name/modelfile
+    heuristic as a fallback alongside the real capability flag.
 
     Returns {"thinking": bool, "context_window": int} - context_window
     falls back to 2048 (a conservative floor, not a real default any
     current model actually ships with) if model_info has no
     "*.context_length" key to read it from."""
-    model_info = getattr(show_info, "model_info", {}) or {}
+    # NOTE: the installed `ollama` client's ShowResponse declares this field
+    # as `modelinfo: ... = Field(alias='model_info')` - "model_info" is only
+    # the Pydantic *alias* (used for (de)serialization), never a real
+    # attribute name, so `getattr(show_info, "model_info", {})` always
+    # misses and silently returns {}. Read the real attribute instead.
+    model_info = getattr(show_info, "modelinfo", {}) or {}
     context_window = next(
         (v for k, v in model_info.items() if k.endswith(".context_length")),
         2048,
     )
 
-    model_file = getattr(show_info, "modelfile", "").lower()
+    # `modelfile` is a declared-but-nullable field - present-but-None (not
+    # merely absent) for some models, which crashes a bare `.lower()`.
+    model_file = (getattr(show_info, "modelfile", None) or "").lower()
+    # Prefer Ollama's own reported capability list when the server provides
+    # one; the name/modelfile substring checks remain as a fallback for
+    # servers/models that don't populate `capabilities`.
+    capabilities = getattr(show_info, "capabilities", None) or []
     thinking = any(
         [
+            "thinking" in capabilities,
             "deepseek-r1" in model_name.lower(),
             "qwq" in model_name.lower(),
             "thinking" in model_file,
