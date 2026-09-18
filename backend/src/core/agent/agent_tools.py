@@ -58,6 +58,16 @@ _CREDENTIAL_PROMPT_PATTERN = re.compile(
     r"(username|login|password|passphrase)\s*:\s*$", re.IGNORECASE
 )
 
+# The Kali session's own local username - appears in the shell prompt
+# ("momos@<container>:~$") and in clients' own default-username prompts
+# (ftp's "Name (host:momos):"), and the parsing model has repeatedly
+# (confirmed in production, more than once) misread either as a discovered
+# TARGET credential. Scrubbing it out of the text the parser actually sees
+# (see _parse_output) is more reliable than a prompt instruction alone,
+# which the parsing model can and does ignore.
+_LOCAL_USERNAME_PATTERN = re.compile(r"\bmomos\b")
+_LOCAL_USERNAME_PLACEHOLDER = "<local-shell-account>"
+
 # A junior model - especially at 8B scale - regularly gets a real CLI
 # tool's own flag/argument syntax wrong (wrong flag spelling, wrong
 # argument order, a flag that doesn't exist in this tool's version, ...).
@@ -368,9 +378,11 @@ async def _suggest_command_fix(
 
 PARSER_SYSTEM_PROMPT = (
     "You are a data-extraction assistant supporting an autonomous "
-    "penetration-testing agent. You are given one command the agent itself "
-    "just ran directly in its own Kali Linux terminal session, and that "
-    "command's raw output.\n\n"
+    "penetration-testing agent. You are given ONLY the raw output from one "
+    "command the agent just ran directly in its own Kali Linux terminal "
+    "session - not the command itself, and no other context. You have no "
+    "way to know what was attempted or intended - describe only what the "
+    "output itself actually shows, never guess or infer intent from it.\n\n"
     "In 'summary', condense the output to only the information it actually "
     "contains that's relevant to a security assessment: open ports, service "
     "names/versions, discovered hosts, vulnerabilities, file paths, "
@@ -393,7 +405,15 @@ PARSER_SYSTEM_PROMPT = (
     "(host:momos):') is your OWN local username, never a credential found "
     "on the target; never report it as one. A program asking for a "
     "username/password is not itself evidence of a credential - only an "
-    "actual authentication result (success or failure) is. If the command "
+    "actual authentication result (success or failure) is. A bare network/"
+    "transport-level connection succeeding (e.g. netcat's own \"Connection "
+    "to <host> <port> succeeded!\", or a TCP port simply being open/"
+    "reachable) is NOT evidence of anything at the application layer - "
+    "never report a login, authentication, or exploit as successful unless "
+    "the output itself contains an explicit application-level response "
+    "from the actual service (a protocol status code such as FTP 230/530, "
+    "an explicit success/failure message from the service, an actual "
+    "returned result). If the command "
     "failed or produced an error, clearly "
     "state the failure and its cause. There is no separate human 'user' "
     "here - never write 'the user ran/attempted/tried ...'; state what the "
@@ -512,15 +532,20 @@ async def _parse_output(
         "those are network information."
     )
 
+    # Scrub the local shell account's own name out of the copy the parsing
+    # model sees - it has repeatedly misread it (from the shell prompt or a
+    # client's own default-username suggestion) as a discovered TARGET
+    # credential. The real raw_output (returned to the caller/persisted as
+    # the tool's artifact) is left untouched - this only affects what goes
+    # into this specific model call.
+    scrubbed_output = _LOCAL_USERNAME_PATTERN.sub(_LOCAL_USERNAME_PLACEHOLDER, raw_output)
+
     try:
         result = await structured_llm.ainvoke(
             [
                 SystemMessage(content=PARSER_SYSTEM_PROMPT),
                 HumanMessage(
-                    content=(
-                        f"Command: {command}\n\n{classification_note}\n\n"
-                        f"Output:\n{raw_output}"
-                    )
+                    content=f"{classification_note}\n\nOutput:\n{scrubbed_output}"
                 ),
             ]
         )
@@ -558,6 +583,108 @@ async def _parse_output(
             on_enumeration(entries)
 
     return result.summary or raw_output
+
+
+class _ClaimVerification(BaseModel):
+    supported: bool
+    reason: str
+
+
+# System prompt for _verify_claim_against_evidence below - deliberately
+# separate from PARSER_SYSTEM_PROMPT (a different job: PARSER_SYSTEM_PROMPT
+# condenses one command's output on its own; this checks a CLAIM the agent
+# wants to record against whatever its last real tool output actually
+# showed, at the moment the claim is made).
+_CLAIM_VERIFICATION_SYSTEM_PROMPT = (
+    "You are a skeptical fact-checker for an autonomous penetration-testing "
+    "agent. You are given the agent's most recent real tool output, and a "
+    "claim it wants to record based on it. Decide whether the claim is "
+    "actually supported by that output.\n\n"
+    "An unanswered username/password prompt, a login prompt the agent "
+    "never actually completed, or text that only echoes what the agent "
+    "itself typed or attempted are NOT evidence of success - only an "
+    "explicit result in the output counts: an explicit success/failure "
+    "indicator (e.g. an FTP 230 vs 530 reply code), an actual returned "
+    "file listing or command result, or a clear stated error. A bare "
+    "network/transport-level connection succeeding (e.g. netcat's own "
+    "\"Connection to <host> <port> succeeded!\", or a TCP port simply "
+    "being open/reachable) is NOT evidence of anything at the "
+    "application layer - a login, authentication, or exploit claim needs "
+    "an explicit application-level response from the actual service "
+    "itself, not just a successful network connection to it. A username "
+    "or password appearing only in the ATTEMPTED command (not echoed back "
+    "with a server confirmation) is not a discovered credential - the "
+    "agent's own local shell account is also never a target credential, "
+    "even if it appears in the output (e.g. as a shell prompt or a "
+    "client's own default-username suggestion).\n\n"
+    "Set 'supported' to true only if the output clearly backs the claim. "
+    "If the output is ambiguous, incomplete, or silent on the specific "
+    "claim, set 'supported' to false - the agent should re-verify rather "
+    "than record something uncertain. 'reason' should be one short "
+    "sentence explaining your verdict, quoting the relevant part of the "
+    "output where possible."
+)
+
+
+async def _verify_claim_against_evidence(
+    project_id: str, claim_label: str, claim_text: str, raw_evidence: Optional[str]
+) -> Optional[str]:
+    """Best-effort second opinion at the moment a "vulnerable"/formal
+    finding claim is made, checking it against the agent's own most recent
+    real tool output (see Agent._last_raw_output). Returns None if the
+    claim looks supported (or verification itself couldn't be attempted -
+    this is a safety net, not something that should be able to break the
+    tool entirely), or a rejection message to hand back to the model.
+
+    Exists because the pre-existing proof-of-testing gate (_require_tested)
+    only checks THAT a run() happened since the last claim, never WHAT it
+    showed - confirmed in production to let a claim built on a misread
+    prompt, or on the command's own attempted-but-unconfirmed input, sail
+    straight through untouched."""
+    if not raw_evidence or not raw_evidence.strip():
+        return (
+            "No recent real tool output is available to verify this "
+            f"{claim_label} against - make a real run() call against the "
+            "target first, then try again."
+        )
+
+    project_settings = await _get_project_settings(project_id)
+    parsing_model_name = project_settings.parsing_model_name if project_settings else None
+    if not parsing_model_name:
+        # No parsing model configured for this project - nothing to check
+        # against, so don't block on a feature that isn't set up.
+        return None
+
+    try:
+        num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
+        verifier_llm = ChatOllama(
+            model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
+        )
+        structured_verifier = verifier_llm.with_structured_output(_ClaimVerification)
+        result = await structured_verifier.ainvoke(
+            [
+                SystemMessage(content=_CLAIM_VERIFICATION_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=(
+                        f"Most recent real tool output:\n{raw_evidence}\n\n"
+                        f"Claim to check ({claim_label}): {claim_text}"
+                    )
+                ),
+            ]
+        )
+    except Exception as e:
+        print(f"Claim verification failed, allowing the claim through: {e}")
+        return None
+
+    if result.supported:
+        return None
+
+    return (
+        f"A check against your last real tool output could not confirm "
+        f"this {claim_label}: {result.reason} Re-verify with a real "
+        "run() call before recording this, or revise it to match what you "
+        "actually observed."
+    )
 
 
 # Hard safety cap on any raw tool output returned to the agent, applied
@@ -842,12 +969,13 @@ def create_vulnerability_tool(
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
     on_reported: Callable[[], None],
+    get_last_raw_output: Callable[[], Optional[str]],
 ):
     """Builds a report_vulnerability tool bound to a specific project/target."""
 
     @tool(REPORT_VULNERABILITY_TOOL_NAME)
     async def report_vulnerability(
-        name: str, severity: str, proof_of_concept: str, cvss4_vector: str = ""
+        name: str, severity: str = "", proof_of_concept: str = "", cvss4_vector: str = ""
     ) -> str:
         """Records a confirmed vulnerability found on the current target. Only
         call this once a finding has actually been verified - not for suspected
@@ -878,6 +1006,12 @@ def create_vulnerability_tool(
         gate_error = _require_tested(get_mode, has_tested, REPORT_VULNERABILITY_TOOL_NAME)
         if gate_error:
             return gate_error
+
+        verification_error = await _verify_claim_against_evidence(
+            project_id, "vulnerability report", proof_of_concept, get_last_raw_output()
+        )
+        if verification_error:
+            return verification_error
 
         try:
             # SQLModel table models don't run Pydantic validators on
@@ -942,7 +1076,10 @@ def create_vulnerability_tool(
     return report_vulnerability
 
 
-def create_finish_task_tool(on_finish: Callable[[str], None]):
+def create_finish_task_tool(
+    on_finish: Callable[[str], None],
+    get_unresolved_vulnerable_claims_count: Callable[[], int],
+):
     """Builds a finish_task tool that lets the agent end its own run early,
     once it considers the assessment complete."""
 
@@ -957,6 +1094,23 @@ def create_finish_task_tool(on_finish: Callable[[str], None]):
             summary: A short summary of what was accomplished and why the
                 task is considered complete.
         """
+        # Observed in production: the run ended with 2 of 3 logged
+        # "vulnerable" claims never escalated to a real report_vulnerability
+        # call, despite the per-turn reminder saying so on that exact turn -
+        # a reminder alone wasn't enough to stop it. This makes it a real
+        # gate, matching _require_tested's pattern elsewhere.
+        unresolved = get_unresolved_vulnerable_claims_count()
+        if unresolved > 0:
+            return (
+                f"Cannot finish yet - you have {unresolved} 'vulnerable' "
+                "attack-log entry(ies) with no matching report_vulnerability "
+                "call. For each: call report_vulnerability with a real "
+                "proof_of_concept, or if it doesn't actually hold up, "
+                "log_attack_attempt the same target/vector again with "
+                "outcome=\"not_vulnerable\" or \"inconclusive\" to retract "
+                "it. Then call finish_task again."
+            )
+
         on_finish(summary)
         return "Task marked as finished. Ending the run now."
 
@@ -964,10 +1118,12 @@ def create_finish_task_tool(on_finish: Callable[[str], None]):
 
 
 def create_attack_log_tool(
+    project_id: str,
     on_attempt: Callable[[dict], None],
     get_mode: Callable[[], str],
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
+    get_last_raw_output: Callable[[], Optional[str]],
 ):
     """Builds a log_attack_attempt tool - the agent's own working-memory
     audit trail of what it has tried against the target and whether it
@@ -1016,6 +1172,13 @@ def create_attack_log_tool(
                 f"Invalid outcome '{outcome}'. Use one of: "
                 f"{', '.join(sorted(ATTACK_OUTCOMES))}."
             )
+
+        if normalized == "vulnerable":
+            verification_error = await _verify_claim_against_evidence(
+                project_id, "attack attempt", vector, get_last_raw_output()
+            )
+            if verification_error:
+                return verification_error
 
         on_attempt(
             {"target": target, "vector": vector, "outcome": normalized, "notes": notes}
@@ -1084,6 +1247,7 @@ def create_terminal_tools(
     mark_tested: Callable[[], None],
     on_session_change: Callable[[Optional[str], Optional[str]], None],
     on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
 ) -> list:
     """Builds the terminal-style tool set (run/new_session/switch_session/
     list_sessions/close_session/interrupt_session), bound to a project's
@@ -1288,6 +1452,24 @@ def create_terminal_tools(
         on_prompt_state_change(
             current_session.at_shell_prompt if current_session else True
         )
+        on_raw_output(raw_output)
+
+        # Mechanical recovery, not just a reminder - confirmed in
+        # production that the "you may still be inside another program"
+        # reminder alone gets ignored for many turns in a row. Gated on
+        # confusion_streak (2+ turns of the current program's own "I don't
+        # understand that" rejection), not merely "not at shell prompt" -
+        # the latter is also the correct, persistent state for a
+        # genuinely productive interactive session and was confirmed to
+        # sever one prematurely (see promote_stuck_session's docstring).
+        promoted_name = None
+        if current_session is not None and current_session.confusion_streak >= 2:
+            promoted_name = await manager.promote_stuck_session(
+                target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
+            )
+            if promoted_name:
+                on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+                on_prompt_state_change(True)
 
         # Only counts as "tested" when input was actually sent - a bare
         # poll (no input) doesn't itself constitute an attempt against the
@@ -1326,6 +1508,18 @@ def create_terminal_tools(
                 "is lost; you're at a fresh shell prompt now.]\n\n" + condensed
             )
 
+        if promoted_name:
+            condensed = (
+                "[Your session's last output didn't look like your plain "
+                f"shell prompt, so it's been automatically split off as a "
+                f"separate session named '{promoted_name}' - its "
+                f"connection is untouched, switch_session('{promoted_name}') "
+                "to go back to it (useful if you were mid-login to "
+                "something like ftp/telnet, or if this was actually a "
+                "slow command like a long scan still working). You are "
+                "now in a fresh 'default' plain shell.]\n\n" + condensed
+            )
+
         return condensed, raw_output
 
     @tool(NEW_SESSION_TOOL_NAME, response_format="content_and_artifact")
@@ -1352,6 +1546,23 @@ def create_terminal_tools(
         typed at their prompt afterward; when unsure, send one command per
         run() call.
 
+        Some interactive programs' own prompts ask for a bare VALUE, not a
+        protocol command - ftp is the clearest example: its "Name
+        (host:...):" prompt wants just the username itself (e.g.
+        "anonymous"), and its "Password:" prompt wants just the password
+        itself (which can be empty - just send nothing after the prompt,
+        or a dummy value like an email address), NOT the literal words
+        "USER anonymous" or "PASS" - the client already constructs those
+        actual protocol commands itself from what you type. Typing "USER
+        anonymous" at the Name prompt sends a literal username of "USER
+        anonymous" to the server, not "anonymous" - a real, observed cause
+        of an anonymous-login test failing that had nothing to do with the
+        target actually blocking it. If you want to send the raw protocol
+        commands yourself instead (e.g. against a plain socket via
+        telnet/nc), that's a different situation - there, typing "USER
+        anonymous" IS correct, because there's no client wrapping your
+        input.
+
         Only open a second session when you specifically need two terminals
         active at once - for one thing at a time, just use run() in your
         current session instead of opening a new one.
@@ -1377,6 +1588,7 @@ def create_terminal_tools(
         # new_session() call") - this was previously never implemented.
         mark_tested()
         on_session_change(name, command)
+        on_raw_output(initial_output)
 
         condensed = await _maybe_condense(
             project_id,
@@ -1415,6 +1627,7 @@ def create_terminal_tools(
             )
         except KaliSessionError as e:
             return f"Switched to session '{name}'.\n\n{e}", None
+        on_raw_output(initial_output)
         condensed = await _maybe_condense(
             project_id,
             f"(switched to session '{name}')",
@@ -1494,6 +1707,9 @@ def build_agent_tools(
     on_session_change: Callable[[Optional[str], Optional[str]], None],
     on_prompt_state_change: Callable[[bool], None],
     on_reported: Callable[[], None],
+    on_raw_output: Callable[[str], None],
+    get_last_raw_output: Callable[[], Optional[str]],
+    get_unresolved_vulnerable_claims_count: Callable[[], int],
 ) -> list:
     return [
         # create_kali_tool(project_id, on_enumeration),  # commented out, not
@@ -1507,11 +1723,20 @@ def build_agent_tools(
             mark_tested,
             on_session_change,
             on_prompt_state_change,
+            on_raw_output,
         ),
         create_switch_mode_tool(on_mode_change),
         create_vulnerability_tool(
-            project_id, target_id, get_mode, has_tested, clear_tested, on_reported
+            project_id,
+            target_id,
+            get_mode,
+            has_tested,
+            clear_tested,
+            on_reported,
+            get_last_raw_output,
         ),
-        create_attack_log_tool(on_attempt, get_mode, has_tested, clear_tested),
-        create_finish_task_tool(on_finish),
+        create_attack_log_tool(
+            project_id, on_attempt, get_mode, has_tested, clear_tested, get_last_raw_output
+        ),
+        create_finish_task_tool(on_finish, get_unresolved_vulnerable_claims_count),
     ]

@@ -128,9 +128,12 @@ class AgentState(TypedDict):
     # _record_attack_attempt/_mark_vulnerability_reported. Same pause/resume
     # reasoning as tested_since_mode_switch above: without this, resuming a
     # paused run with a real outstanding "vulnerable" claim would come back
-    # on a fresh Agent instance defaulting to 0, silently dropping the
-    # reminder to actually report it.
-    unresolved_vulnerable_claims: int
+    # on a fresh Agent instance defaulting to empty, silently dropping the
+    # reminder to actually report it. Checkpointed as a plain list of
+    # [target, vector] pairs (not a Python set) since the Postgres
+    # checkpointer needs a JSON-friendly type - converted to/from the live
+    # set at the two mirror points below (_call_model / start_agent resume).
+    unresolved_vulnerable_claims: List[List[str]]
     # Mirrors Agent.finish_summary - see _mark_finished. Checkpointed for
     # the same reason as the two fields above, even though in the normal
     # flow this is largely masked: AgentService.start_agent deletes the
@@ -228,18 +231,26 @@ class Agent:
         # _call_model flush.
         self._tested_since_mode_switch: bool = False
 
-        # Count of log_attack_attempt calls logged with outcome="vulnerable"
-        # that have no matching report_vulnerability call yet - incremented
-        # in _record_attack_attempt, decremented in
-        # _mark_vulnerability_reported. report_vulnerability requires a real
-        # proof_of_concept, which is the actual artifact a human reviews;
-        # log_attack_attempt does not, so without this a fabricated
-        # "vulnerable" claim could sit forever as an informal note that
-        # nothing ever prompts a human to look at. Mirrored into
-        # AgentState.unresolved_vulnerable_claims every turn, same pattern
-        # as tested_since_mode_switch above, for the same pause/resume
-        # reason.
-        self._unresolved_vulnerable_claims: int = 0
+        # (target, vector) pairs (normalized: stripped/lowercased) logged
+        # with outcome="vulnerable" that have no matching
+        # report_vulnerability call yet - added in _record_attack_attempt,
+        # removed by either _mark_vulnerability_reported (a report
+        # succeeded) or by re-logging the SAME (target, vector) with
+        # outcome="not_vulnerable"/"inconclusive" (an explicit retraction -
+        # see _record_attack_attempt). A set, not a counter, so retrying the
+        # exact same claim doesn't inflate the count - observed in
+        # production: three identical "FTP Anonymous Login Test" attempts
+        # against the same target counted as 3 outstanding claims instead
+        # of 1. report_vulnerability requires a real proof_of_concept,
+        # which is the actual artifact a human reviews; log_attack_attempt
+        # does not, so without this a fabricated "vulnerable" claim could
+        # sit forever as an informal note that nothing ever prompts a human
+        # to look at - see also finish_task's gate in agent_tools.py, which
+        # reads this via _get_unresolved_vulnerable_claims_count. Mirrored
+        # into AgentState.unresolved_vulnerable_claims every turn (as a
+        # plain list of pairs - see that field's comment), same pattern as
+        # tested_since_mode_switch above, for the same pause/resume reason.
+        self._unresolved_vulnerable_claims: set[tuple[str, str]] = set()
 
         # Written to by tool calls (log_attack_attempt, run()'s FACTS
         # extraction) as they happen inside the "tools" node - tools have no
@@ -278,6 +289,17 @@ class Agent:
         # above, it's cheaply recomputed on the very next run() call.
         self._at_shell_prompt: bool = True
 
+        # Most recent real tool output (run()/new_session()/switch_session()),
+        # used to sanity-check a report_vulnerability/log_attack_attempt
+        # claim against actual evidence at the moment it's made - see
+        # _verify_claim_against_evidence in agent_tools.py. Observed in
+        # production: the existing proof-of-testing gate (_require_tested)
+        # only checks THAT a run() happened, never what it showed, so a
+        # claim built on a misread prompt or an unrelated command sailed
+        # straight through it. Not checkpointed, same reasoning as
+        # _at_shell_prompt above.
+        self._last_raw_output: Optional[str] = None
+
         self.tools = agent_tools.build_agent_tools(
             project_id,
             target_id,
@@ -292,6 +314,9 @@ class Agent:
             self._set_current_session,
             self._set_at_shell_prompt,
             self._mark_vulnerability_reported,
+            self._set_last_raw_output,
+            self._get_last_raw_output,
+            self._get_unresolved_vulnerable_claims_count,
         )
 
         self.changeModel(model_name=model_name, reasoning=reasoning)
@@ -306,14 +331,41 @@ class Agent:
 
     def _record_attack_attempt(self, entry: dict):
         self._pending_attack_log.append(entry)
-        if entry.get("outcome") == "vulnerable":
-            self._unresolved_vulnerable_claims += 1
+        outcome = entry.get("outcome")
+        key = (
+            str(entry.get("target", "")).strip().lower(),
+            str(entry.get("vector", "")).strip().lower(),
+        )
+        if outcome == "vulnerable":
+            self._unresolved_vulnerable_claims.add(key)
+        elif outcome in ("not_vulnerable", "inconclusive"):
+            # Explicit retraction: re-logging the SAME (target, vector)
+            # with a downgraded outcome supersedes an earlier "vulnerable"
+            # claim for it - the only way to clear one short of an actual
+            # report_vulnerability, needed now that finish_task refuses to
+            # end the run while any remain outstanding.
+            self._unresolved_vulnerable_claims.discard(key)
 
     def _mark_vulnerability_reported(self):
-        self._unresolved_vulnerable_claims = max(0, self._unresolved_vulnerable_claims - 1)
+        # No shared key between report_vulnerability's args and an
+        # attack-log entry to resolve the exact matching claim - popping an
+        # arbitrary one is an accepted, scoped imprecision, still strictly
+        # better than the previous plain counter (which never deduped
+        # retries of the identical claim at all).
+        if self._unresolved_vulnerable_claims:
+            self._unresolved_vulnerable_claims.pop()
+
+    def _get_unresolved_vulnerable_claims_count(self) -> int:
+        return len(self._unresolved_vulnerable_claims)
 
     def _set_at_shell_prompt(self, value: bool):
         self._at_shell_prompt = value
+
+    def _set_last_raw_output(self, raw_output: Optional[str]):
+        self._last_raw_output = raw_output
+
+    def _get_last_raw_output(self) -> Optional[str]:
+        return self._last_raw_output
 
     def _get_mode(self) -> str:
         return self.mode
@@ -488,16 +540,21 @@ class Agent:
                     "Make the real attempt first."
                 )
 
-        if self._unresolved_vulnerable_claims > 0:
+        unresolved_count = len(self._unresolved_vulnerable_claims)
+        if unresolved_count > 0:
             lines.append(
-                f"You have {self._unresolved_vulnerable_claims} 'vulnerable' "
+                f"You have {unresolved_count} 'vulnerable' "
                 "attack-log entry(ies) with no matching report_vulnerability "
                 "call yet - report_vulnerability requires a fresh run() "
                 "since your last claim (log_attack_attempt/"
                 "report_vulnerability itself consumes proof-of-testing), so "
                 "run() again first if you haven't since, then call "
                 "report_vulnerability with a real proof_of_concept for "
-                "each, or the finding will not be recorded."
+                "each, or the finding will not be recorded. finish_task "
+                "will be refused while any remain unresolved - if one turns "
+                "out not to hold up, log_attack_attempt the same target/"
+                "vector again with outcome=\"not_vulnerable\" or "
+                "\"inconclusive\" to retract it."
             )
 
         if self._current_session_name is not None:
@@ -823,7 +880,9 @@ class Agent:
             "attack_log": attack_log,
             "mode": self.mode,
             "tested_since_mode_switch": self._tested_since_mode_switch,
-            "unresolved_vulnerable_claims": self._unresolved_vulnerable_claims,
+            "unresolved_vulnerable_claims": [
+                list(pair) for pair in self._unresolved_vulnerable_claims
+            ],
             "finish_summary": self.finish_summary,
         }
 
@@ -907,9 +966,11 @@ class Agent:
             self._tested_since_mode_switch = existing_state.values.get(
                 "tested_since_mode_switch", self._tested_since_mode_switch
             )
-            self._unresolved_vulnerable_claims = existing_state.values.get(
-                "unresolved_vulnerable_claims", self._unresolved_vulnerable_claims
-            )
+            checkpointed_claims = existing_state.values.get("unresolved_vulnerable_claims")
+            if checkpointed_claims is not None:
+                self._unresolved_vulnerable_claims = {
+                    tuple(pair) for pair in checkpointed_claims
+                }
             self.finish_summary = existing_state.values.get(
                 "finish_summary", self.finish_summary
             )

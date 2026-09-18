@@ -1,5 +1,6 @@
 import docker
 import asyncio
+import os
 import re
 import socket as socket_module
 import time
@@ -48,6 +49,71 @@ _SHELL_PROMPT_PATTERN: Final = re.compile(rf"{re.escape(str(MOMOS_USER))}@\S+:.*
 def _looks_like_shell_prompt(output: str) -> bool:
     cleaned = _ANSI_ESCAPE_PATTERN.sub("", output)
     return bool(_SHELL_PROMPT_PATTERN.search(cleaned.strip()))
+
+
+def _leading_token(text: str) -> str:
+    """First whitespace-separated word of `text`, path-stripped and
+    lowercased - e.g. "/usr/bin/msfconsole -q" -> "msfconsole". Used both
+    to tag which program a session just launched (KaliSession.
+    active_program) and to correlate a dynamic rejection message back to
+    what was actually sent this turn (see _check_confusion)."""
+    first = text.strip().split(None, 1)
+    return os.path.basename(first[0]).lower() if first else ""
+
+
+# Program name (as produced by _leading_token on the command that launched
+# it) -> regexes matching THAT program's own "I don't understand that"
+# rejection of unrecognized input. A pattern with a capture group is
+# dynamic - see _check_confusion - it only counts as confusion if the
+# captured token matches what was actually sent this turn, not just
+# because rejection-shaped text appears somewhere in the output.
+#
+# Deliberately closed/curated, with NO generic fallback for an unknown/
+# uncurated program (this includes every real reverse or foreign shell,
+# since those are launched the same way - plain input to run() - and so
+# are otherwise indistinguishable from "some program we don't recognize").
+# A generic "command not found"/"No such file or directory" fallback was
+# designed, then deliberately rejected: it collides with completely
+# ordinary, on-topic environment facts a real shell legitimately reports -
+# a missing binary during a routine TTY-upgrade attempt
+# (`python3 -c '...'` -> "bash: python3: command not found" is a true,
+# useful answer, not confusion), or literal log content containing the
+# phrase "No such file" from a target's own web server logs. Only
+# programs with a genuinely foreign grammar (ftp/mysql/msfconsole/a REPL)
+# can produce an unambiguous "that wasn't valid input to me" signal by
+# construction - a real shell command line is always valid input to a
+# shell, so a shell can never produce this signal in the first place.
+_CONFUSION_SIGNATURES: Final[Dict[str, List["re.Pattern"]]] = {
+    "ftp": [
+        re.compile(r"\?Invalid command", re.IGNORECASE),
+        re.compile(r"\?Ambiguous command", re.IGNORECASE),
+    ],
+    "mysql": [
+        re.compile(r"ERROR 1064"),
+        re.compile(r"You have an error in your SQL syntax"),
+    ],
+    "msfconsole": [re.compile(r"\[-\]\s*Unknown command:\s*(\S+)")],
+    "python3": [
+        re.compile(r"SyntaxError"),
+        re.compile(r"NameError: name '([^']+)' is not defined"),
+    ],
+    "python": [
+        re.compile(r"SyntaxError"),
+        re.compile(r"NameError: name '([^']+)' is not defined"),
+    ],
+}
+
+
+def _check_confusion(active_program: Optional[str], output: str, sent_token: str) -> bool:
+    for pattern in _CONFUSION_SIGNATURES.get(active_program or "", []):
+        match = pattern.search(output)
+        if not match:
+            continue
+        if pattern.groups == 0:
+            return True
+        if os.path.basename(match.group(1)).lower() == sent_token:
+            return True
+    return False
 
 
 # Only the last few dozen characters of a (possibly huge, e.g. full-port
@@ -497,6 +563,12 @@ class KaliManger:
             exec_id=exec_id,
             sock=raw_sock,
             user=str(user),
+            # Tagged from the launch command itself, not just inferred later
+            # from typed input - new_session's own first read is a bare poll
+            # (data=None), which the _session_io transition logic can't tag
+            # from. Harmless for the default "/bin/bash" launch: "bash" is
+            # never a key in _CONFUSION_SIGNATURES.
+            active_program=_leading_token(command),
         )
 
         async with self.sessions_lock:
@@ -696,10 +768,128 @@ class KaliManger:
             # e.g. "msfconsole", simply never matches this pattern either -
             # harmless, since callers only ever check at_shell_prompt
             # alongside session.command == DEFAULT_SESSION_COMMAND anyway).
+            prev_at_shell_prompt = session.at_shell_prompt
             session.at_shell_prompt = _looks_like_shell_prompt(output)
+            sent_text = data.decode(errors="replace") if data is not None else None
+
+            if session.at_shell_prompt:
+                # Back home - nothing left to track.
+                session.confusion_streak = 0
+                session.active_program = None
+            elif prev_at_shell_prompt:
+                # Fresh transition (just launched ftp/telnet/nc/msfconsole/
+                # ...) - never punish the launch turn itself, only what
+                # happens after (see _CONFUSION_SIGNATURES's own comment).
+                if sent_text:
+                    session.active_program = _leading_token(sent_text)
+                # else: a bare poll caused/observed this transition (e.g.
+                # new_session's own initial read, right after open_session
+                # already tagged active_program from the launch command) -
+                # nothing new to retag from, so don't clobber it to None.
+                session.confusion_streak = 0
+            elif sent_text is not None and session.active_program in _CONFUSION_SIGNATURES:
+                # Already inside a KNOWN, curated program and still not
+                # home - only these have a real foreign grammar distinct
+                # from a genuine on-topic answer (even a rejection like
+                # "530 Login incorrect" is on-topic and must never count).
+                if _check_confusion(session.active_program, output, _leading_token(sent_text)):
+                    session.confusion_streak += 1
+                else:
+                    session.confusion_streak = 0
+            # else: a bare poll (sent_text is None) while already stuck, or
+            # an UNCURATED active_program (includes any real reverse/
+            # foreign shell) - leave confusion_streak unchanged. Uncurated
+            # programs deliberately never accumulate a streak from output
+            # content at all - see _CONFUSION_SIGNATURES's own comment for
+            # why a generic fallback was tried and rejected. These rely
+            # solely on the existing SESSION_IDLE_TIMEOUT_SECONDS sweep
+            # instead - a known, accepted gap, not a silent new one.
 
         session.last_activity = time.monotonic()
         return output if output else NO_OUTPUT_MESSAGE
+
+    async def promote_stuck_session(
+        self, target_id: str, default_name: str, default_command: str
+    ) -> Optional[str]:
+        """If target_id's CURRENT session - whatever it's named, whether
+        that's the plain default one or one opened via new_session (e.g.
+        "ftptest") - has racked up 2+ consecutive turns of its own active
+        program rejecting input as unrecognized (session.confusion_streak
+        >= 2 - see _check_confusion/_session_io), gets target_id back onto
+        a working "default" shell session. If the stuck session IS the
+        default one, it's renamed to a fresh, uniquely named session first -
+        its live connection/socket is untouched, so switch_session can
+        still reach it - and a brand-new plain "default" session is opened
+        in its place. If the stuck session has its own distinct name, it's
+        left exactly where it is (already reachable via switch_session/
+        list_sessions) and "default" is simply made current instead -
+        reusing an existing separate "default" session if target_id already
+        has one, or opening a fresh one if not. Returns the name of the
+        session that was left/renamed as stuck, or None if there was
+        nothing to promote.
+
+        Exists because a purely textual reminder telling the agent it might
+        still be stuck inside another program (ftp, telnet, ...) turned out
+        to be easy to ignore in practice - confirmed in production, an
+        agent spent ~20 of a 30-minute run retrying unrelated shell
+        commands against a session it never escaped, despite that reminder
+        firing every single turn. This fixes it mechanically instead:
+        whatever the next run() call is, it lands in a working shell
+        either way.
+
+        Deliberately gated on confusion_streak, NOT merely
+        "not at shell prompt" - that first version was tried and reverted:
+        "not at shell prompt" is also the correct, persistent state for a
+        genuinely productive multi-turn interactive session (a real ftp
+        login flow, a msfconsole module being driven, ...), and confirmed
+        in production to sever a session the agent was about to correctly
+        continue (a plain nc connect got promoted away before the agent
+        could send its natural follow-up). confusion_streak instead only
+        counts turns where the CURRENT program's own output said it didn't
+        understand the input - see _CONFUSION_SIGNATURES's own comment for
+        the full reasoning (including why an unrecognized/uncurated
+        program, e.g. any real reverse shell, gets none of this and relies
+        on the existing idle-timeout sweep instead)."""
+        async with self.sessions_lock:
+            current_name = self.current_session.get(target_id)
+            if current_name is None:
+                return None
+            session = self.sessions.get(self._session_key(target_id, current_name))
+            if session is None or session.closed or session.confusion_streak < 2:
+                return None
+
+            stuck_name = current_name
+            if current_name == default_name:
+                # Renaming "default" out from under itself, so the fresh
+                # replacement below has a clear name to occupy.
+                n = 1
+                while self._session_key(target_id, f"recovered-{n}") in self.sessions:
+                    n += 1
+                stuck_name = f"recovered-{n}"
+                session.name = stuck_name
+                del self.sessions[self._session_key(target_id, current_name)]
+                self.sessions[self._session_key(target_id, stuck_name)] = session
+            # else: already has its own distinct name (e.g. "ftptest") -
+            # leave it exactly where it is, just stop it being current.
+
+            session.confusion_streak = 0
+
+            existing_default = self.sessions.get(
+                self._session_key(target_id, default_name)
+            )
+            reuse_existing_default = (
+                existing_default is not None and not existing_default.closed
+            )
+            if reuse_existing_default:
+                self.current_session[target_id] = default_name
+
+        if not reuse_existing_default:
+            # Outside the lock - open_session's own slow exec_create needs
+            # to run unlocked (see its own comments), and it re-acquires
+            # sessions_lock itself for the actual registration.
+            await self.open_session(target_id, default_name, default_command)
+
+        return stuck_name
 
     async def switch_session(self, target_id: str, name: str) -> None:
         # Raises KaliSessionError if unknown/closed - validated before

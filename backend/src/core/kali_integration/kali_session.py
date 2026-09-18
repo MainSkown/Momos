@@ -73,3 +73,22 @@ class KaliSession:
     # agent_tools.py's _looks_like_shell_prompt. Defaults True since a
     # freshly opened session starts at its own shell/program prompt.
     at_shell_prompt: bool = True
+    # Consecutive turns the CURRENT program (active_program) has responded
+    # with its own "I don't understand that" rejection to input that
+    # doesn't belong there - see KaliManger._check_confusion/_session_io.
+    # Deliberately NOT just "at_shell_prompt is False": that's also the
+    # correct, expected, persistent state for a genuinely productive
+    # multi-turn interactive session (a real ftp login flow, a msfconsole
+    # module being driven, ...) and promoting on that alone was confirmed
+    # in production to sever a session the agent was about to correctly
+    # continue. Reset to 0 whenever at_shell_prompt becomes True again, or
+    # on a fresh shell->program transition (the launch turn itself is
+    # never punished).
+    confusion_streak: int = 0
+    # Leading token (lowercased, path-stripped) of whatever command caused
+    # the most recent shell->non-shell transition, e.g. "ftp", "mysql",
+    # "msfconsole" - used to look up which rejection signatures in
+    # KaliManger._CONFUSION_SIGNATURES apply. None for an uncurated/unknown
+    # program (including any real reverse or foreign shell) - these
+    # deliberately get no content-based confusion detection at all.
+    active_program: Optional[str] = None
