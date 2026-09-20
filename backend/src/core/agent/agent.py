@@ -10,6 +10,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     TypedDict,
 )
@@ -92,11 +93,36 @@ _MODE_GATE_WRITER_TOOL_NAMES = {
     agent_tools.RUN_TOOL_NAME,
     agent_tools.NEW_SESSION_TOOL_NAME,
     agent_tools.SWITCH_MODE_TOOL_NAME,
+    # Tier 1/2 tools (create_pentest_tools/create_guided_session_tools) -
+    # every one of these calls mark_tested()/updates _last_raw_output just
+    # like run() does, so the same batched-with-a-reader race applies to
+    # them too.
+    agent_tools.NMAP_SCAN_TOOL_NAME,
+    agent_tools.HYDRA_BRUTEFORCE_TOOL_NAME,
+    agent_tools.GOBUSTER_SCAN_TOOL_NAME,
+    agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
+    agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
+    agent_tools.SEARCHSPLOIT_RUN_TOOL_NAME,
+    agent_tools.FTP_CONNECT_TOOL_NAME,
+    agent_tools.FTP_COMMAND_TOOL_NAME,
+    agent_tools.SSH_CHECK_LOGIN_TOOL_NAME,
+    agent_tools.SSH_RUN_TOOL_NAME,
+    agent_tools.TELNET_PROBE_TOOL_NAME,
 }
 _MODE_GATE_READER_TOOL_NAMES = {
     agent_tools.REPORT_VULNERABILITY_TOOL_NAME,
     agent_tools.ATTACK_LOG_TOOL_NAME,
 }
+
+# What should_interrupt (start_agent's optional pause-for-human-approval
+# gate) actually pauses before - everything that executes something for
+# real, in the container or against the target, as opposed to pure
+# bookkeeping (switch_mode, switch_session/close_session/list_sessions,
+# report_vulnerability/log_attack_attempt/finish_task). Tier 1/2 tools
+# belong here for the same reason run()/new_session() do: an operator who
+# turned this on to review every real action before it fires would
+# otherwise have Tier 1/2 tool calls slip through unreviewed.
+_INTERRUPT_GATED_TOOL_NAMES = _MODE_GATE_WRITER_TOOL_NAMES - {agent_tools.SWITCH_MODE_TOOL_NAME}
 
 
 class AgentState(TypedDict):
@@ -144,8 +170,22 @@ class AgentState(TypedDict):
 
 
 class AgentInterruptAction(TypedDict):
+    kind: Literal["interrupt"]
     accept: Callable[[bool], None]
     tool_calls: list[Any]
+
+
+class AgentContextUsageEvent(TypedDict):
+    """Yielded once per real LLM turn (see start_agent's event loop) when
+    Ollama reported real token-usage numbers for it - see
+    ChatOllama._get_usage_metadata_from_generation_info (langchain_ollama),
+    which populates AIMessage.usage_metadata straight from Ollama's own
+    prompt_eval_count. Surfaced to the frontend as an AgentContextUsage
+    websocket message (agent_service.py) to drive a live "how full is the
+    context window" indicator."""
+    kind: Literal["context_usage"]
+    used_tokens: int
+    context_window: int
 
 
 # Previously this graph made two LLM calls per turn - a plain reasoning-only
@@ -184,6 +224,8 @@ class Agent:
         target_id: str,
         reasoning: Optional[bool] = None,
         context_window: Optional[int] = None,
+        allow_shell: bool = True,
+        allow_install_packages: bool = True,
     ):
         self.project_id = project_id
         self.target_id = target_id
@@ -230,6 +272,14 @@ class Agent:
         # need to observe this immediately, not just after the next
         # _call_model flush.
         self._tested_since_mode_switch: bool = False
+
+        # Consecutive switch_mode calls rejected by the has_tested() gate
+        # above with nothing productive in between - see
+        # _note_switch_mode_rejected/_note_switch_mode_allowed and
+        # create_switch_mode_tool. Not checkpointed, same reasoning as
+        # KaliSession.confusion_streak: a live in-memory streak, not state
+        # worth persisting across a pause/resume.
+        self._consecutive_rejected_switch_mode: int = 0
 
         # (target, vector) pairs (normalized: stripped/lowercased) logged
         # with outcome="vulnerable" that have no matching
@@ -309,6 +359,8 @@ class Agent:
             self._get_mode,
             self._set_mode,
             self._get_tested_since_mode_switch,
+            self._note_switch_mode_rejected,
+            self._note_switch_mode_allowed,
             self._mark_tested,
             self._clear_tested,
             self._set_current_session,
@@ -317,6 +369,8 @@ class Agent:
             self._set_last_raw_output,
             self._get_last_raw_output,
             self._get_unresolved_vulnerable_claims_count,
+            allow_shell,
+            allow_install_packages,
         )
 
         self.changeModel(model_name=model_name, reasoning=reasoning)
@@ -383,6 +437,17 @@ class Agent:
 
     def _mark_tested(self):
         self._tested_since_mode_switch = True
+        # Any real tool call clears the rejected-switch_mode streak too -
+        # it only grows across consecutive switch_mode calls with nothing
+        # productive in between (see _note_switch_mode_rejected).
+        self._consecutive_rejected_switch_mode = 0
+
+    def _note_switch_mode_rejected(self) -> int:
+        self._consecutive_rejected_switch_mode += 1
+        return self._consecutive_rejected_switch_mode
+
+    def _note_switch_mode_allowed(self):
+        self._consecutive_rejected_switch_mode = 0
 
     def _clear_tested(self):
         """Resets the "tested since mode switch" flag right after a
@@ -450,7 +515,35 @@ class Agent:
                 ]
             }
 
-        return await self._tool_node.ainvoke(state, config)
+        try:
+            return await self._tool_node.ainvoke(state, config)
+        except Exception as e:
+            # A malformed tool call - observed in production: a local model
+            # passed a list where a tool declares a plain str argument,
+            # raising a raw TypeError ("unexpected keyword argument") during
+            # argument binding, before the tool's own body ever runs. This
+            # happens outside what LangGraph's ToolNode treats as a normal
+            # "tool raised an exception" case (which it already converts to
+            # a ToolMessage on its own), so it propagated all the way up and
+            # ended the entire run over a single bad call. Converting it
+            # into a ToolMessage per call instead lets the model see the
+            # failure and retry with corrected argument types next turn.
+            print(f"Tool dispatch failed for {sorted(names)}: {e}")
+            return {
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            f"Tool call failed: {e}. Check that each "
+                            "argument's type matches what the tool expects "
+                            "(e.g. a plain string, not a list) and try "
+                            "again."
+                        ),
+                        tool_call_id=tc["id"],
+                        name=tc["name"],
+                    )
+                    for tc in tool_calls
+                ]
+            }
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
@@ -943,7 +1036,7 @@ class Agent:
         duration_seconds: int,
         stop_event: asyncio.Event | None = None,
         run_state: dict | None = None,
-    ) -> AsyncGenerator[BaseMessage | AgentInterruptAction, None]:
+    ) -> AsyncGenerator[BaseMessage | AgentInterruptAction | AgentContextUsageEvent, None]:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
         if stop_event is None:
@@ -1096,6 +1189,18 @@ class Agent:
                             continue
                         for message in node_update.get("messages", []):
                             yield message
+                            # Real per-turn token counts from Ollama itself
+                            # (see AgentContextUsageEvent's own comment) -
+                            # only ever present on the AIMessage _call_model
+                            # just produced, never on a ToolMessage.
+                            if isinstance(message, AIMessage) and message.usage_metadata:
+                                input_tokens = message.usage_metadata.get("input_tokens")
+                                if input_tokens is not None:
+                                    yield AgentContextUsageEvent(
+                                        kind="context_usage",
+                                        used_tokens=input_tokens,
+                                        context_window=self.context_window,
+                                    )
 
                     if self.finish_summary is not None:
                         # finish_task just ran as part of this step - stop
@@ -1119,9 +1224,10 @@ class Agent:
                 tool_calls = last_message.tool_calls
 
                 # execute_kali_command is commented out (see agent_tools.py)
-                # - run/new_session are now the tools that actually execute
-                # something in the container, so those are what
-                # should_interrupt gates on instead.
+                # - run/new_session and the Tier 1/2 tools are what actually
+                # execute something in the container/against the target, so
+                # those are what should_interrupt gates on instead (see
+                # _INTERRUPT_GATED_TOOL_NAMES).
                 tool_call_names = {tc["name"] for tc in tool_calls}
                 # _tools_node rejects this exact turn outright (see its own
                 # docstring) whenever it mixes a writer with a reader -
@@ -1138,10 +1244,7 @@ class Agent:
                 requires_interrupt = (
                     should_interrupt
                     and not batch_will_be_rejected
-                    and any(
-                        name in (agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME)
-                        for name in tool_call_names
-                    )
+                    and bool(tool_call_names & _INTERRUPT_GATED_TOOL_NAMES)
                 )
 
                 if not requires_interrupt:
@@ -1158,6 +1261,7 @@ class Agent:
                             resume_future.set_result(approved)
 
                     interrupt_action: AgentInterruptAction = {
+                        "kind": "interrupt",
                         "accept": accept,
                         "tool_calls": tool_calls,
                     }

@@ -1,5 +1,6 @@
 import docker
 import asyncio
+import base64
 import os
 import re
 import socket as socket_module
@@ -182,6 +183,23 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     # Provides setcap/getcap - needed to grant nmap raw-socket capabilities
     # for the unprivileged momos user, see _configure_container.
     "libcap2-bin",
+    # Pulled in solely for its bundled /usr/share/wordlists/dirb/common.txt
+    # (~4.6k entries) - agent_tools.py's gobuster_scan needs a small,
+    # ready-to-use wordlist by default; "wordlists" above only ships
+    # rockyou.txt.gz (needs a manual gunzip, and far too large for a
+    # bounded automated scan).
+    "dirb",
+    # Non-interactive SSH password auth from a one-shot command - needed by
+    # agent_tools.py's ssh_check_login/ssh_run. openssh-client above only
+    # provides the ssh binary itself, not this.
+    "sshpass",
+    # Provides `rev` - searchsploit's own `-p`/`-m` (path resolution/mirror)
+    # shells out to it internally and fails outright without it ("rev:
+    # command not found"), which broke agent_tools.py's searchsploit_view/
+    # searchsploit_run entirely (both resolve a path via `searchsploit -p`
+    # first). Not present in this base image by default - `rev` moved out
+    # of the base system into this package after the bsdmainutils split.
+    "bsdextrautils",
     # Large (~518MB download, pulls in a full postgresql server, ruby,
     # mingw toolchains, ...) - the same category of cost that got
     # kali-linux-headless dropped above. Added anyway despite that,
@@ -199,6 +217,117 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
 # target-scope nftables rules in prepare_nftables() are all keyed to
 # `meta skuid momos`, so root traffic would bypass that firewall entirely.
 NMAP_BINARY_PATH: Final = "/usr/bin/nmap"
+
+# Debian's python3 always has this on sys.path regardless of the exact
+# python3.X minor version installed (unlike a version-specific site-
+# packages dir) - the standard location for a hand-installed pure-Python
+# module system-wide.
+TELNETLIB_SHIM_PATH: Final = "/usr/lib/python3/dist-packages/telnetlib.py"
+
+# telnetlib was removed from Python's standard library in 3.13 (PEP 594) -
+# this image's python3 is new enough that it's simply gone, which broke
+# agent_tools.py's searchsploit_run outright on one of the most common
+# exploit-db scripts (vsftpd 2.3.4's backdoor, EDB-ID 49757, does `from
+# telnetlib import Telnet`) with "ModuleNotFoundError: No module named
+# 'telnetlib'". There is no PyPI package that actually provides this
+# (verified against a real failure: "ERROR: No matching distribution found
+# for telnetlib") - this is a minimal, from-scratch, independently-tested
+# reimplementation of the small subset of the original Telnet class
+# exploit-db scripts actually use (connect/write/read_until/read_all/
+# read_some/close), written directly over `socket` rather than
+# reproducing the original's much larger IAC option-negotiation/interact()
+# machinery - not needed for the common case (a raw shell backdoor or a
+# protocol trick over a plain control connection, neither of which
+# actually negotiate telnet options). Deployed as a real file (not paged
+# through a limited apt/pip install) via base64 (see _configure_container)
+# specifically to avoid any shell-quoting risk from embedding this much
+# Python source directly in a `bash -c` command string.
+_TELNETLIB_SHIM_SOURCE = '''"""Minimal drop-in replacement for the stdlib telnetlib module removed in
+Python 3.13 (PEP 594) - see kali_manager.py's TELNETLIB_SHIM_PATH for why
+this exists instead of an actual PyPI package."""
+import socket
+import time
+from typing import Optional
+
+DEFAULT_TIMEOUT = 30
+
+
+class Telnet:
+    def __init__(self, host: Optional[str] = None, port: int = 0, timeout: float = DEFAULT_TIMEOUT):
+        self.sock: Optional[socket.socket] = None
+        self.timeout = timeout
+        self._buffer = b""
+        if host is not None:
+            self.open(host, port, timeout)
+
+    def open(self, host: str, port: int = 0, timeout: float = DEFAULT_TIMEOUT):
+        self.timeout = timeout
+        self.sock = socket.create_connection((host, port or 23), timeout=timeout)
+        self._buffer = b""
+
+    def write(self, buffer: bytes):
+        if self.sock is None:
+            raise OSError("Telnet: not connected")
+        self.sock.sendall(buffer)
+
+    def read_some(self) -> bytes:
+        if self._buffer:
+            data, self._buffer = self._buffer, b""
+            return data
+        try:
+            data = self.sock.recv(4096)
+        except socket.timeout:
+            return b""
+        return data
+
+    def read_until(self, match: bytes, timeout: Optional[float] = None) -> bytes:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        data = self._buffer
+        self._buffer = b""
+        while match not in data:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if remaining == 0.0:
+                break
+            self.sock.settimeout(remaining if remaining is not None else self.timeout)
+            try:
+                chunk = self.sock.recv(4096)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            data += chunk
+        if match in data:
+            idx = data.index(match) + len(match)
+            data, self._buffer = data[:idx], data[idx:]
+        return data
+
+    def read_all(self) -> bytes:
+        data = self._buffer
+        self._buffer = b""
+        self.sock.settimeout(None)
+        while True:
+            try:
+                chunk = self.sock.recv(4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            data += chunk
+        return data
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            finally:
+                self.sock = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+'''
 
 # Anything else the agent needs on top of this baseline is installed on
 # demand via the install_kali_package tool (agent_tools.py) - kept this list
@@ -362,6 +491,13 @@ class KaliManger:
         # raw socket. Operation not permitted".
         self._exec_in_container(f"setcap cap_net_raw,cap_net_admin+eip {NMAP_BINARY_PATH}")
 
+        # See TELNETLIB_SHIM_PATH/_TELNETLIB_SHIM_SOURCE's own comments for
+        # why this is a hand-written file, not a package install - base64
+        # avoids any shell-quoting risk from embedding this much Python
+        # source directly in a `bash -c` command string.
+        encoded_shim = base64.b64encode(_TELNETLIB_SHIM_SOURCE.encode()).decode()
+        self._exec_in_container(f"echo {encoded_shim} | base64 -d > {TELNETLIB_SHIM_PATH}")
+
     def _is_configured_correctly(self) -> bool:
         """Checks that the container has every required package installed,
         a working nftables setup, and the momos user - used both to decide
@@ -384,6 +520,7 @@ class KaliManger:
             self._exec_in_container(f"id -u {MOMOS_USER}")
             self._exec_in_container("nft list ruleset")
             self._exec_in_container(f"getcap {NMAP_BINARY_PATH} | grep -q cap_net_raw")
+            self._exec_in_container("python3 -c 'import telnetlib'")
         except RuntimeError as e:
             print(f"Kali container configuration check failed: {e}", flush=True)
             return False

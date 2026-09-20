@@ -39,6 +39,32 @@
           </button>
         </div>
 
+        <div class="field-group">
+          <label class="text-bold">{{ $t("settings.allow_shell") }}</label>
+          <div class="row gap-low flex-center">
+            <input
+              v-model="project_settings.allow_shell"
+              class="checkbox-input"
+              type="checkbox"
+              @change="onAllowShellChanged"
+            />
+            <span class="text-gray">{{ $t("settings.enable_allow_shell") }}</span>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="text-bold">{{ $t("settings.allow_install_packages") }}</label>
+          <div class="row gap-low flex-center">
+            <input
+              v-model="project_settings.allow_install_packages"
+              class="checkbox-input"
+              type="checkbox"
+              :disabled="!project_settings.allow_shell"
+            />
+            <span class="text-gray">{{ $t("settings.enable_allow_install_packages") }}</span>
+          </div>
+        </div>
+
         <div class="column gap-low full-width">
           <button
             @click="showDeleteDialog = true"
@@ -209,6 +235,16 @@ function onBaseModelSelected(model: OllamaModelData) {
 function onParsingModelSelected(model: OllamaModelData) {
   if (project_settings.value !== null) {
     project_settings.value.parsing_model_name = model.name;
+  }
+}
+
+// Mirrors the backend's own rule (project_router.py's update_project_settings):
+// allow_install_packages only makes sense with allow_shell also on - there'd
+// be nothing to do with a newly installed package without shell access to
+// it. Uncheck it here too so a save never fails on the resulting 400.
+function onAllowShellChanged() {
+  if (project_settings.value !== null && !project_settings.value.allow_shell) {
+    project_settings.value.allow_install_packages = false;
   }
 }
 

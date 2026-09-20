@@ -40,7 +40,33 @@ class DatabaseManager:
         # patch on an existing one.
         with self.engine.connect() as conn:
             conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS raw_output TEXT"))
+            conn.execute(
+                text(
+                    "ALTER TABLE projectsettings ADD COLUMN IF NOT EXISTS "
+                    "allow_shell BOOLEAN NOT NULL DEFAULT true"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE projectsettings ADD COLUMN IF NOT EXISTS "
+                    "allow_install_packages BOOLEAN NOT NULL DEFAULT true"
+                )
+            )
             conn.commit()
+
+        # Same idea for an existing Postgres ENUM TYPE: create_all() never
+        # adds a new label to one that already exists, so AgentRunState.FAILED
+        # (agent_run_scheme.py) needs its own idempotent ALTER TYPE - without
+        # this, persisting a run as "failed" raises InvalidTextRepresentation
+        # ("invalid input value for enum agentrunstate"). SQLAlchemy stores a
+        # str Enum column by its member NAME by default (RUNNING/PAUSED/...,
+        # not "running"/"paused"), hence the uppercase value here.
+        # AUTOCOMMIT isolation is required, not a plain transaction - Postgres
+        # forbids using a brand-new enum value in the same transaction that
+        # added it, and (pre-PG12) forbids ADD VALUE inside a transaction
+        # block at all.
+        with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("ALTER TYPE agentrunstate ADD VALUE IF NOT EXISTS 'FAILED'"))
 
     def get_session(self):
         with Session(self.engine) as session:

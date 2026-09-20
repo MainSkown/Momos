@@ -63,6 +63,12 @@ def update_project_settings(project_id: str, data: ProjectSettingsBody):
             detail=f"URL project_id ({project_id}) does not match body project_id ({data.project_id})",
         )
 
+    if data.allow_install_packages and not data.allow_shell:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="allow_install_packages requires allow_shell to also be enabled.",
+        )
+
     try:
         return ProjectService.update_project_settings(data)
     except Exception as e:

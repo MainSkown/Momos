@@ -40,6 +40,20 @@ class ProjectSettingsBase(SQLModel):
     # See agent_service.py's _prepare_and_run and agent_tools.py's
     # _get_parsing_model_num_ctx for where this is actually applied.
     max_context_window: Optional[int] = None
+    # Gates the generic raw-shell tools (run/new_session/switch_session/
+    # list_sessions/close_session/interrupt_session) - see
+    # agent_tools.py's build_agent_tools. Defaults True (an opt-OUT, not an
+    # opt-in from zero) so existing projects keep today's behavior; turning
+    # it off is meant for a project running a small/unreliable model, which
+    # still has the always-on structured/guided tools (nmap_scan,
+    # ftp_connect, ...) to work with instead.
+    allow_shell: bool = True
+    # Gates install_kali_package. Only takes effect when allow_shell is
+    # ALSO true - enforced both at the API boundary (project_router.py's
+    # update_project_settings) and defensively again in agent_service.py
+    # (see effective_allow_install there) - there'd be nothing useful to do
+    # with a newly installed package without shell access to it.
+    allow_install_packages: bool = True
 
 
 class ProjectSettingsBody(ProjectSettingsBase):
@@ -53,7 +67,9 @@ class ProjectSettings(ProjectSettingsBase, table=True):
 
 
 base_starting_prompt = """
-You are Momos, an autonomous penetration testing and security assessment agent. 
+You are Momos, an autonomous penetration testing and security assessment agent.
+
+Always think and respond in English, regardless of what language any tool output, banner, or file content happens to contain.
 
 Your primary objective is to methodically enumerate, analyze, and find vulnerabilities in the authorized target specified below. You are expected to think step-by-step, plan your reconnaissance, and execute your assessment professionally.
 
@@ -119,6 +135,8 @@ def project_settings_factory(project_id: uuid.UUID) -> ProjectSettings:
         parsing_model_name="",
         starting_prompt=base_starting_prompt,
         project_id=project_id,
+        allow_shell=True,
+        allow_install_packages=True,
     )
 
     return settings

@@ -27,6 +27,7 @@ from src.websocket import (
     AgentInterruptResponseMessage,
     AgentRunStatus,
     AgentRunTimer,
+    AgentContextUsage,
     KaliCreationStageMessage,
 )
 
@@ -181,6 +182,48 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
 
     if tool_name == agent_tools.INTERRUPT_SESSION_TOOL_NAME:
         return "(Ctrl-C)"
+
+    if tool_name == agent_tools.NMAP_SCAN_TOOL_NAME:
+        extras = []
+        if args.get("run_default_scripts"):
+            extras.append("-sC")
+        if args.get("timing"):
+            extras.append(str(args["timing"]))
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        return f"ports={args.get('ports') or 'default'}{suffix}"
+
+    if tool_name == agent_tools.HYDRA_BRUTEFORCE_TOOL_NAME:
+        user = args.get("username") or args.get("username_list", "")
+        return f"{args.get('service', '')}: {user}"
+
+    if tool_name == agent_tools.GOBUSTER_SCAN_TOOL_NAME:
+        scheme = "https" if args.get("use_tls") else "http"
+        return f"{scheme} port {args.get('port', 80)}"
+
+    if tool_name in (
+        agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
+        agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
+    ):
+        return str(args.get("query") or args.get("edb_id", ""))
+
+    if tool_name == agent_tools.SEARCHSPLOIT_RUN_TOOL_NAME:
+        edb_id = args.get("edb_id", "")
+        run_args = args.get("exploit_args", "")
+        return f"EDB-ID {edb_id} {run_args}".strip()
+
+    if tool_name == agent_tools.FTP_CONNECT_TOOL_NAME:
+        return str(args.get("username", ""))
+
+    if tool_name == agent_tools.FTP_COMMAND_TOOL_NAME:
+        return str(args.get("command", ""))
+
+    if tool_name in (agent_tools.SSH_CHECK_LOGIN_TOOL_NAME, agent_tools.SSH_RUN_TOOL_NAME):
+        username = args.get("username", "")
+        command = args.get("command")
+        return f"{username}: {command}" if command is not None else username
+
+    if tool_name == agent_tools.TELNET_PROBE_TOOL_NAME:
+        return f"port {args.get('port', '')}"
 
     return ", ".join(f"{k}={v}" for k, v in args.items())
 
@@ -405,6 +448,14 @@ class AgentService:
             kali_manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
             await kali_manager.prepare_nftables(target)
 
+            # ANDed here as defense-in-depth against a settings row saved
+            # before project_router.py's update_project_settings validation
+            # existed - install_kali_package must never be reachable
+            # without shell access to actually use whatever gets installed.
+            effective_allow_install = (
+                project_settings.allow_shell and project_settings.allow_install_packages
+            )
+
             agent = Agent(
                 model_name=project_settings.base_model_name,
                 checkpointer=agent_checkpointer.checkpointer,
@@ -412,6 +463,8 @@ class AgentService:
                 target_id=target_id,
                 reasoning=reasoning,
                 context_window=context_window,
+                allow_shell=project_settings.allow_shell,
+                allow_install_packages=effective_allow_install,
             )
         except Exception as e:
             # Without this, a failure preparing the container would leave the
@@ -498,6 +551,18 @@ class AgentService:
                 stop_event=stop_event,
                 run_state=run_state,
             ):
+                if isinstance(event, dict) and event.get("kind") == "context_usage":
+                    await ws_registry.send_message(
+                        AgentContextUsage(
+                            type=WsTypes.AgentContextUsage,
+                            project_id=project_id,
+                            target_id=target_id,
+                            used_tokens=event["used_tokens"],
+                            context_window=event["context_window"],
+                        )
+                    )
+                    continue
+
                 if isinstance(event, dict):
                     # AgentInterruptAction - pause and wait for approval
                     _pending_interrupts[target_id] = event["accept"]

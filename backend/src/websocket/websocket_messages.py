@@ -25,7 +25,8 @@ class WsTypes(str, Enum):
     AgentInterruptResponse = "AgentInterruptResponse"
     AgentRunStatus = "AgentRunStatus"
     AgentRunTimer = "AgentRunTimer"
-    
+    AgentContextUsage = "AgentContextUsage"
+
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
 
@@ -115,6 +116,13 @@ class AgentRunStatus(OutboundMessage):
 class AgentRunTimer(OutboundMessage):
     type: Literal[WsTypes.AgentRunTimer]
     run: AgentRunResponse
+
+class AgentContextUsage(OutboundMessage):
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AgentContextUsage]
+    used_tokens: int
+    context_window: int
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

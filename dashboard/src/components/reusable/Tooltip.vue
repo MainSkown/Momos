@@ -32,11 +32,28 @@ const props = withDefaults(
 const triggerRef = ref<HTMLElement | null>(null);
 const visible = ref(false);
 const position = ref({ x: 0, y: 0 });
+// How far the box's own center had to shift from the trigger's center to
+// stay on-screen (see updateTooltipPosition) - applied to the arrow so it
+// still points at the trigger even when the box itself is off-center.
+const arrowOffset = ref(0);
+
+// Keep the box at least this far from the viewport edge - a trigger
+// closer to the edge than this pushes the box inward instead of letting
+// it (or its centered arrow) run past the edge. Comfortably more than
+// the box's own box-shadow bleed (--shadow-red-subtle), so the glow
+// never reads as the box itself touching the edge.
+const VIEWPORT_MARGIN = 24;
+
+function parsePixels(value: string): number {
+  const parsed = parseFloat(value);
+  return Number.isNaN(parsed) ? 280 : parsed;
+}
 
 const tooltipStyle = computed(() => ({
   left: `${position.value.x}px`,
   top: `${position.value.y}px`,
-  maxWidth: `min(${props.maxWidth}, calc(100vw - 32px))`,
+  maxWidth: `min(${props.maxWidth}, calc(100vw - ${2 * VIEWPORT_MARGIN}px))`,
+  "--tooltip-arrow-offset": `${arrowOffset.value}px`,
 }));
 
 const updateTooltipPosition = () => {
@@ -44,8 +61,30 @@ const updateTooltipPosition = () => {
   if (!trigger) return;
 
   const rect = trigger.getBoundingClientRect();
-  position.value.x = rect.left + rect.width / 2;
+  const desiredX = rect.left + rect.width / 2;
+
+  // The box's actual rendered width is content-dependent (see the
+  // `width: max-content` comment below) and isn't known until after it's
+  // in the DOM, so clamp against the worst case (its configured max
+  // width) - this can never let it overflow, even if the real box ends
+  // up narrower and so isn't perfectly centered on the trigger.
+  const effectiveMaxWidth = Math.min(
+    parsePixels(props.maxWidth),
+    window.innerWidth - 2 * VIEWPORT_MARGIN,
+  );
+  const halfWidth = effectiveMaxWidth / 2;
+  const minX = halfWidth + VIEWPORT_MARGIN;
+  const maxX = window.innerWidth - halfWidth - VIEWPORT_MARGIN;
+  const clampedX = Math.min(Math.max(desiredX, minX), maxX);
+
+  position.value.x = clampedX;
   position.value.y = rect.top - props.offset;
+
+  const maxArrowOffset = Math.max(0, halfWidth - 12);
+  arrowOffset.value = Math.min(
+    Math.max(desiredX - clampedX, -maxArrowOffset),
+    maxArrowOffset,
+  );
 };
 
 const showTooltip = () => {
@@ -81,6 +120,15 @@ const hideTooltip = () => {
   font-size: 0.75rem;
   line-height: 1.3;
   letter-spacing: 0.5px;
+  /* A fixed-position element with only `left` set (no `right`) and no
+     explicit width should shrink-to-fit its content, but `width: auto`
+     can instead collapse to a minimum-content width in this positioning
+     context - each word (even each character, with overflow-wrap:
+     anywhere) then wraps onto its own line, rendering as a single-
+     character-wide vertical column. `width: max-content` forces sizing
+     to the content's natural (unwrapped) width, still capped by the
+     inline max-width style below it. */
+  width: max-content;
   white-space: normal;
   overflow-wrap: anywhere;
   text-align: center;
@@ -94,7 +142,10 @@ const hideTooltip = () => {
   content: "";
   position: absolute;
   top: 100%;
-  left: 50%;
+  /* Offset by how far the box itself had to shift to stay on-screen (see
+     updateTooltipPosition), so the arrow keeps pointing at the trigger
+     instead of just the box's own (possibly off-center) midpoint. */
+  left: calc(50% + var(--tooltip-arrow-offset, 0px));
   margin-left: -6px;
   border-width: 6px;
   border-style: solid;

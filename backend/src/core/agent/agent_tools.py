@@ -1,8 +1,9 @@
 import asyncio
+import json
 import os
 import re
 import shlex
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,7 +12,7 @@ from src.core import db_manager, ollama_manager, settings
 from src.core.kali_integration import kali_registry
 from src.core.kali_integration.kali_manager import KaliManger, KALI_USERS
 from src.core.kali_integration.kali_session import KaliSessionError, NO_OUTPUT_MESSAGE
-from src.schemas import Vulnerability, VulnerabilityBase, SEVERITY_LEVELS
+from src.schemas import Vulnerability, VulnerabilityBase, SEVERITY_LEVELS, Target
 
 KALI_COMMAND_TOOL_NAME = "execute_kali_command"
 REPORT_VULNERABILITY_TOOL_NAME = "report_vulnerability"
@@ -25,6 +26,22 @@ INTERRUPT_SESSION_TOOL_NAME = "interrupt_session"
 INSTALL_PACKAGE_TOOL_NAME = "install_kali_package"
 ATTACK_LOG_TOOL_NAME = "log_attack_attempt"
 SWITCH_MODE_TOOL_NAME = "switch_mode"
+
+# Tier 1 (one-shot structured tools) and Tier 2 (guided session tools) - see
+# create_pentest_tools/create_guided_session_tools. Always registered
+# regardless of allow_shell (build_agent_tools) - the constrained/guided
+# alternative to the raw shell, not something gated behind it.
+NMAP_SCAN_TOOL_NAME = "nmap_scan"
+HYDRA_BRUTEFORCE_TOOL_NAME = "hydra_bruteforce"
+GOBUSTER_SCAN_TOOL_NAME = "gobuster_scan"
+SEARCHSPLOIT_SEARCH_TOOL_NAME = "searchsploit_search"
+SEARCHSPLOIT_VIEW_TOOL_NAME = "searchsploit_view"
+SEARCHSPLOIT_RUN_TOOL_NAME = "searchsploit_run"
+FTP_CONNECT_TOOL_NAME = "ftp_connect"
+FTP_COMMAND_TOOL_NAME = "ftp_command"
+SSH_CHECK_LOGIN_TOOL_NAME = "ssh_check_login"
+SSH_RUN_TOOL_NAME = "ssh_run"
+TELNET_PROBE_TOOL_NAME = "telnet_probe"
 
 ATTACK_OUTCOMES = {"vulnerable", "not_vulnerable", "inconclusive"}
 VALID_MODES = {"scouting", "exploiting"}
@@ -233,6 +250,49 @@ _NETWORK_FACING_BINARIES = {
 # still gets a (more neutral) generic no-output note rather than the bare
 # NO_OUTPUT_MESSAGE placeholder.
 _SILENT_ON_CONNECT_BINARIES = {"nc", "ncat", "netcat"}
+
+# Extra, command-specific guidance appended to _parse_output's classification
+# note for whatever's left going through the LLM parser (nmap/hydra/gobuster/
+# searchsploit's most common uses now have their own dedicated tools with
+# deterministic parsing - see create_pentest_tools - and never reach this
+# dict at all). Each entry captures a real, observed misreading risk for
+# that specific tool's output format, the same way the generic
+# classification_note below already does for exploit-db IDs vs port
+# numbers - this just extends that idea per-binary instead of one-size-
+# fits-all.
+_PARSER_COMMAND_HINTS: Dict[str, str] = {
+    "searchsploit": (
+        "This is a local exploit-database search - titles and Exploit-DB "
+        "IDs are never live ports, hosts, or credentials."
+    ),
+    "nikto": (
+        "Findings are prefixed with '+' and reference OSVDB/CVE IDs and "
+        "paths - report the web server's own version banner as the "
+        "service version, not an OSVDB number."
+    ),
+    "whatweb": (
+        "Output lists detected web technologies/versions as "
+        "'Plugin[version]' pairs - treat these as the service's software "
+        "stack, not open ports."
+    ),
+    "smbclient": (
+        "Share/listing output describes filesystem contents, not network "
+        "services - only report port/service facts from the initial "
+        "connection banner, if any."
+    ),
+    "sqlmap": (
+        "Narrative injection-testing output - only report a "
+        "vulnerability-relevant fact if sqlmap explicitly confirms an "
+        "injection point, never from a parameter name or URL alone."
+    ),
+    "dig": "DNS record output - record types (A/MX/TXT/...) and TTLs are not port numbers.",
+    "nslookup": "DNS record output - record types are not port numbers.",
+    "host": "DNS record output - record types are not port numbers.",
+    "whois": (
+        "Registration metadata (dates, registrar, name servers) - not "
+        "live port/service state."
+    ),
+}
 
 
 def _is_network_facing(command: str) -> bool:
@@ -531,6 +591,10 @@ async def _parse_output(
         "numbers (file IDs, version numbers, line counts, ...) - none of "
         "those are network information."
     )
+    binary = _extract_binary_name(command)
+    hint = _PARSER_COMMAND_HINTS.get(binary or "")
+    if hint:
+        classification_note = f"{classification_note}\n\n{hint}"
 
     # Scrub the local shell account's own name out of the copy the parsing
     # model sees - it has repeatedly misread it (from the shell prompt or a
@@ -786,7 +850,18 @@ async def _maybe_condense(
     explicit, tool-aware note instead of surfaced verbatim (see
     _render_activation_no_output_note/F4). Callers that don't have a
     session command handy (or genuinely don't know it) keep the old bare
-    placeholder - still a valid, if less informative, result."""
+    placeholder - still a valid, if less informative, result.
+
+    A third exclusion: `label` (the command whose output this is - see each
+    caller in create_terminal_tools) not being one of _NETWORK_FACING_
+    BINARIES at all. Previously every non-empty result was still sent to
+    the parsing model "to summarize," and only the returned `facts` were
+    discarded for a non-network-facing command - so a plain shell builtin
+    (cd/ls/cat/whoami/...) was still a full LLM call, and a fresh chance
+    for a small local model to hallucinate a "summary" out of it for
+    nothing. Skipping the call entirely for these is both safer and
+    cheaper - this is meant to condense enumeration output, not narrate
+    shell noise."""
     if raw_output == NO_OUTPUT_MESSAGE and session_command:
         return _render_activation_no_output_note(session_command)
 
@@ -802,9 +877,132 @@ async def _maybe_condense(
     # of this cap (see RAW_OUTPUT_MAX_CHARS's comment) is defeated if it
     # only trims what's shown to the agent afterward while the parsing
     # model call still receives the full, uncapped output.
-    return await _parse_output(
-        project_id, label, _cap_raw_output(raw_output), on_enumeration
+    capped = _cap_raw_output(raw_output)
+    if not _is_network_facing(label):
+        return capped
+
+    return await _parse_output(project_id, label, capped, on_enumeration)
+
+
+async def _resolve_current_session(manager: KaliManger, target_id: str, on_session_change):
+    """Ensures target_id has a current session, opening a fresh default one
+    if every session somehow ended up closed (idle timeout, process exit,
+    ...) - start_agent() already opens "default" before the first turn, so
+    this is only a defensive fallback. Returns (session, was_replaced) -
+    was_replaced is True exactly when this call itself had to silently open
+    the replacement, so the caller can tell the model its previous session
+    is gone. Raises KaliSessionError if even opening a fresh one fails."""
+    was_replaced = not manager.has_current_session(target_id)
+    if was_replaced:
+        await manager.open_session(target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+        on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+    return manager.get_current_session(target_id), was_replaced
+
+
+async def _send_and_condense(
+    manager: KaliManger,
+    project_id: str,
+    target_id: str,
+    current_session,
+    input: Optional[str],
+    wait_seconds: int,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
+    session_was_replaced: bool = False,
+) -> tuple:
+    """Shared core of run() and the guided session tools (ftp_connect/
+    ftp_command - see create_guided_session_tools): sends `input` (or just
+    polls, if None) to `current_session` (already resolved by the caller -
+    see _resolve_current_session), handles stuck-session auto-promotion
+    exactly like run() always has, marks the turn tested, and condenses the
+    result. Returns (condensed_text, raw_output) - raw_output is None only
+    when a KaliSessionError happened before anything could run.
+
+    Deliberately does NOT include run()'s own nmap -Pn auto-injection or
+    its post-hoc usage-error suggestion - both are specific to a model-
+    typed raw shell command line, meaningless for a guided tool's own
+    internally-constructed input."""
+    try:
+        raw_output = await manager.run_in_current_session(
+            target_id, input, wait_seconds=wait_seconds
+        )
+    except KaliSessionError as e:
+        return str(e), None
+
+    # current_session is the same live object kali_manager mutates
+    # in-place during the call above, so its at_shell_prompt now reflects
+    # what just happened - surface it so Agent's per-turn reminder can tell
+    # the model when it may still be stuck inside another program's prompt
+    # (see _looks_like_shell_prompt).
+    on_prompt_state_change(current_session.at_shell_prompt if current_session else True)
+    on_raw_output(raw_output)
+
+    # Mechanical recovery, not just a reminder - confirmed in production
+    # that the "you may still be inside another program" reminder alone
+    # gets ignored for many turns in a row. Gated on confusion_streak (2+
+    # turns of the current program's own "I don't understand that"
+    # rejection), not merely "not at shell prompt" - the latter is also the
+    # correct, persistent state for a genuinely productive interactive
+    # session and was confirmed to sever one prematurely (see
+    # promote_stuck_session's docstring).
+    promoted_name = None
+    if current_session is not None and current_session.confusion_streak >= 2:
+        promoted_name = await manager.promote_stuck_session(
+            target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
+        )
+        if promoted_name:
+            on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+            on_prompt_state_change(True)
+
+    # Only counts as "tested" when input was actually sent - a bare poll
+    # (no input) doesn't itself constitute an attempt against the target,
+    # and shouldn't be enough to unlock report_vulnerability/
+    # log_attack_attempt on its own.
+    if input is not None:
+        mark_tested()
+
+    # The real command whose output this is, used only for
+    # _is_network_facing classification (see _maybe_condense/_parse_output
+    # - its text is never shown to the parsing model itself) - a bare poll
+    # (input is None) didn't send anything of its own, so classify by
+    # whatever program the session is actually running instead of a
+    # placeholder that would never match any known binary.
+    classify_as = input if input is not None else (
+        current_session.command if current_session else None
     )
+    condensed = await _maybe_condense(
+        project_id,
+        classify_as or "",
+        raw_output,
+        on_enumeration,
+        session_command=current_session.command if current_session else None,
+    )
+
+    if session_was_replaced:
+        condensed = (
+            "[Your previous session was gone (closed, idle-timed-out, "
+            "or its process exited) - a brand-new plain shell session "
+            "was opened for you. Any prior state - working directory, "
+            "environment variables, an interactive program's prompt - "
+            "is lost; you're at a fresh shell prompt now.]\n\n" + condensed
+        )
+
+    if promoted_name:
+        condensed = (
+            "[Your session's last output didn't look like your plain "
+            f"shell prompt, so it's been automatically split off as a "
+            f"separate session named '{promoted_name}' - its "
+            f"connection is untouched, switch_session('{promoted_name}') "
+            "to go back to it (useful if you were mid-login to "
+            "something like ftp/telnet, or if this was actually a "
+            "slow command like a long scan still working). You are "
+            "now in a fresh 'default' plain shell.]\n\n" + condensed
+        )
+
+    return condensed, raw_output
 
 
 async def _install_kali_package(project_id: str, package: str) -> str:
@@ -906,6 +1104,881 @@ def create_kali_tool(project_id: str, on_enumeration: Callable[[dict], None]):
         return await _run_kali_command(project_id, command, on_enumeration)
 
     return execute_kali_command
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 (one-shot structured tools) and Tier 2 (guided session tools) - see
+# create_pentest_tools/create_guided_session_tools below. Always registered
+# by build_agent_tools regardless of allow_shell: these are the constrained,
+# structured/guided alternative to the raw shell, not something gated behind
+# it - a project with allow_shell=False still has real, working access to
+# the highest-value pentesting commands and to ftp/ssh/telnet.
+# ---------------------------------------------------------------------------
+
+async def _get_target_info(target_id: str) -> Tuple[Optional[Target], Optional[str]]:
+    """Returns (target, error_message) - the full Target row, for a tool
+    that needs more than just the host (e.g. nmap_scan validating `ports`
+    against target.ports)."""
+    loop = asyncio.get_running_loop()
+    target = await loop.run_in_executor(None, db_manager.get_target, target_id)
+    if target is None:
+        return None, "Could not resolve this run's target - internal error."
+    return target, None
+
+
+async def _get_target_host(target_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Returns (host, error_message) for a Tier 1/2 tool's target - host is
+    target.ipv4 or target.ipv6 (preferring v4); error_message is set (and
+    host is None) whenever the target can't be resolved or has no address
+    configured at all."""
+    target, error = await _get_target_info(target_id)
+    if error:
+        return None, error
+    host = target.ipv4 or target.ipv6
+    if not host:
+        return None, "This target has no IPv4/IPv6 address configured - cannot proceed."
+    return host, None
+
+
+# Every free-text argument accepted by the tools below is either restricted
+# to one of these narrow structural patterns (for things that genuinely
+# have a fixed format - ports, file paths, an Exploit-DB ID) or passed
+# through _safe_shell_word/_safe_join_args (shlex-quoting - the actual
+# injection defense for arbitrary text like a password or a search query)
+# before being interpolated into a shell command string - these still run
+# via `bash -c` inside the container (KaliManger.execute/_exec_in_container),
+# the same reasoning as PACKAGE_NAME_PATTERN's for install_kali_package, not
+# a formality.
+_SAFE_PORT_SPEC_PATTERN = re.compile(r"^[\d,-]+$")
+_SAFE_PATH_PATTERN = re.compile(r"^[\w./-]+$")
+_SAFE_EXTENSIONS_PATTERN = re.compile(r"^[\w,]*$")
+_SAFE_EDB_ID_PATTERN = re.compile(r"^\d+$")
+
+
+def _expand_port_spec(spec: str) -> set:
+    """Expands an already-_SAFE_PORT_SPEC_PATTERN-validated port spec like
+    "21,25,53" or "1-100" into the concrete set of port numbers it names -
+    used to validate a requested scan against the target's own authorized
+    ports before ever invoking nmap (see nmap_scan)."""
+    ports = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            ports.update(range(int(lo), int(hi) + 1))
+        else:
+            ports.add(int(part))
+    return ports
+
+
+def _safe_shell_word(value: str) -> str:
+    return shlex.quote(value)
+
+
+def _safe_join_args(args: str) -> Optional[str]:
+    """Splits `args` into words the way a user typing them at a prompt
+    would (shlex), then re-quotes each resulting token individually - so a
+    multi-argument string like "192.168.0.235 21" reaches the eventual
+    command as two separate argv words, exactly as intended, while
+    anything that looks like a shell metacharacter inside one token is
+    neutralized as literal text rather than interpreted. Returns None if
+    `args` can't even be tokenized (unbalanced quotes, ...)."""
+    try:
+        tokens = shlex.split(args)
+    except ValueError:
+        return None
+    return " ".join(shlex.quote(t) for t in tokens)
+
+
+async def _execute_one_shot(
+    project_id: str, command: str, timeout_seconds: int
+) -> Tuple[bool, str]:
+    """Runs `command` as a one-shot exec (KaliManger.execute, unprivileged
+    momos user, no session involved) - shared by every Tier 1 tool below.
+    Returns (ok, output); ok is False on a non-zero exit or a timeout, in
+    which case `output` is already a clear message ready to return
+    straight to the agent (see KaliManger._exec_in_container - it raises
+    RuntimeError for both cases, with the command's own output embedded in
+    the message)."""
+    manager = await kali_registry.get_manager(project_id)
+    try:
+        output = await manager.execute(command, timeout_seconds=timeout_seconds)
+    except RuntimeError as e:
+        return False, str(e)
+    return True, output
+
+
+async def _file_exists_in_container(project_id: str, path: str) -> bool:
+    ok, _ = await _execute_one_shot(project_id, f"test -f {shlex.quote(path)}", 10)
+    return ok
+
+
+NMAP_SCAN_TIMEOUT_SECONDS = 240
+HYDRA_BRUTEFORCE_TIMEOUT_SECONDS = 300
+GOBUSTER_SCAN_TIMEOUT_SECONDS = 300
+SEARCHSPLOIT_LOOKUP_TIMEOUT_SECONDS = 30
+SEARCHSPLOIT_RUN_TIMEOUT_SECONDS = 120
+SSH_CHECK_LOGIN_TIMEOUT_SECONDS = 20
+SSH_RUN_TIMEOUT_SECONDS = 60
+TELNET_PROBE_TIMEOUT_SECONDS = 15
+
+_NMAP_TIMING_FLAGS = {
+    "paranoid": "-T0", "sneaky": "-T1", "polite": "-T2",
+    "normal": "-T3", "aggressive": "-T4", "insane": "-T5",
+}
+# Matches nmap's normal port-table row, e.g.
+# "21/tcp   open  ftp     vsftpd 2.3.4".
+_NMAP_PORT_LINE = re.compile(r"^(\d+)/(tcp|udp)\s+(\S+)\s+(\S+)(?:\s+(.*))?$", re.MULTILINE)
+
+
+def _parse_nmap_output(raw_output: str) -> Dict[str, dict]:
+    """Deterministic, LLM-free extraction of nmap's own port table -
+    including, when -sC was used, the indented '|'-prefixed NSE script
+    lines directly beneath each port (appended to that port's notes), so
+    script findings reach the enumeration table too, not just the bare
+    version string. Only ever reads what nmap itself printed - see
+    PARSER_SYSTEM_PROMPT's history for why this bypasses the LLM parser
+    entirely rather than trusting it with the same output."""
+    entries: Dict[str, dict] = {}
+    current_port: Optional[str] = None
+    for line in raw_output.splitlines():
+        match = _NMAP_PORT_LINE.match(line)
+        if match:
+            port, _proto, state, service, version = match.groups()
+            if not state.startswith("open"):
+                current_port = None
+                continue
+            current_port = port
+            entries[port] = {"service": service, "version": (version or "").strip(), "notes": ""}
+            continue
+        if current_port is not None and line.startswith("|"):
+            entries[current_port]["notes"] = (
+                f"{entries[current_port]['notes']}\n{line.strip()}"
+                if entries[current_port]["notes"]
+                else line.strip()
+            )
+        elif not line.strip():
+            current_port = None
+    return entries
+
+
+_HYDRA_DEFAULT_PORTS = {"ftp": 21, "ssh": 22, "telnet": 23, "mysql": 3306, "smtp": 25, "pop3": 110}
+# Matches hydra's own success-line format, e.g.
+# "[21][ftp] host: 192.168.0.235   login: anonymous   password: "
+_HYDRA_SUCCESS_LINE = re.compile(
+    # [ \t] rather than \s for the separators - \s also matches a newline,
+    # and a blank password (the anonymous-FTP case) leaves nothing but a
+    # trailing space before end-of-line for the final \s+ to greedily
+    # consume ACROSS into the next line, capturing garbage from whatever
+    # follows instead of the intended empty string.
+    r"^\[(\d+)\]\[(\S+)\][ \t]+host:[ \t]+(\S+)[ \t]+login:[ \t]+(\S*)[ \t]+password:[ \t]*(.*)$",
+    re.MULTILINE,
+)
+
+# Matches gobuster dir mode's own output line, e.g.
+# "/admin (Status: 301) [Size: 315]".
+_GOBUSTER_LINE = re.compile(r"^(\S+)\s+\(Status:\s+(\d+)\)(?:\s+\[Size:\s+(\d+)\])?", re.MULTILINE)
+DEFAULT_GOBUSTER_WORDLIST = "/usr/share/wordlists/dirb/common.txt"
+
+SEARCHSPLOIT_EXPLOITDB_PREFIX = "/usr/share/exploitdb/"
+_SEARCHSPLOIT_PATH_LINE = re.compile(r"^\s*Path:\s*(\S+)", re.MULTILINE)
+_SEARCHSPLOIT_INTERPRETER_BY_EXTENSION = {".py": "python3", ".pl": "perl", ".rb": "ruby", ".sh": "bash"}
+
+
+async def _resolve_exploit_path(project_id: str, edb_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Returns (path, error) - resolves an Exploit-DB ID to its mirrored
+    file path via `searchsploit -p`, deterministically (a regex on
+    searchsploit's own fixed "Path: ..." line, not the LLM parser), and
+    defensively rejects anything outside exploitdb's own directory (not
+    expected to ever actually trigger)."""
+    ok, output = await _execute_one_shot(
+        project_id, f"searchsploit -p {edb_id}", SEARCHSPLOIT_LOOKUP_TIMEOUT_SECONDS
+    )
+    if not ok:
+        return None, output
+    match = _SEARCHSPLOIT_PATH_LINE.search(output)
+    if not match:
+        return None, f"Could not resolve EDB-ID {edb_id} to a file.\n\n{output}"
+    path = match.group(1)
+    if not path.startswith(SEARCHSPLOIT_EXPLOITDB_PREFIX):
+        return None, f"Resolved path '{path}' is outside the exploit-db directory - refusing."
+    return path, None
+
+
+# Exploit-db mirrors both standalone scripts and Metasploit-framework
+# modules as plain .rb files in the same directories - path alone can't
+# tell them apart. A Metasploit module (require 'msf/core', include
+# Msf::Exploit, ...) isn't a standalone script; it only runs inside
+# msfconsole, and trying to run one via a bare `ruby` interpreter fails
+# with a confusing RubyGems/framework-loading traceback (observed in
+# production: EDB-ID 17491). Checked by content instead.
+_METASPLOIT_MODULE_MARKERS = ("msf/core", "Msf::Exploit", "MetasploitModule", "class Metasploit")
+
+
+async def _looks_like_metasploit_module(project_id: str, path: str) -> bool:
+    ok, head = await _execute_one_shot(project_id, f"head -c 4000 {shlex.quote(path)}", 10)
+    return ok and any(marker in head for marker in _METASPLOIT_MODULE_MARKERS)
+
+
+def create_pentest_tools(
+    project_id: str,
+    target_id: str,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    on_raw_output: Callable[[str], None],
+) -> list:
+    """Tier 1: one-shot, typed-argument tools for the highest-value
+    pentesting commands - no free-text host/command, no session involved
+    (KaliManger.execute, not run_in_current_session), and deterministic
+    parsing straight into the enumeration table instead of the LLM parser
+    (nmap/hydra/gobuster via regex, searchsploit via its own --json output)
+    - the small local parsing model has repeatedly hallucinated facts from
+    exactly this kind of output (see PARSER_SYSTEM_PROMPT's history), so
+    these bypass it entirely."""
+
+    @tool(NMAP_SCAN_TOOL_NAME, response_format="content_and_artifact")
+    async def nmap_scan(
+        ports: Optional[str] = None,
+        run_default_scripts: bool = False,
+        timing: Optional[
+            Literal["paranoid", "sneaky", "polite", "normal", "aggressive", "insane"]
+        ] = None,
+    ) -> str:
+        """Runs nmap -Pn -sV against this run's target and returns its
+        parsed port table - no host to type, and no way to point it at
+        anything outside this run's own target.
+
+        Args:
+            ports: Port(s)/range to scan, e.g. "21" or "21,80,443" or
+                "1-1000". Omit to use nmap's own default port set.
+            run_default_scripts: Also run nmap's default NSE script set
+                (-sC) - often finds far more than a bare version scan
+                (e.g. anonymous-FTP/vuln-check scripts), at the cost of a
+                slower scan.
+            timing: Timing/aggressiveness template - "paranoid"/"sneaky"
+                are slower and quieter, "aggressive"/"insane" are faster
+                and noisier. Omit for nmap's normal default.
+        """
+        target, error = await _get_target_info(target_id)
+        if error:
+            return error, None
+        host = target.ipv4 or target.ipv6
+        if not host:
+            return "This target has no IPv4/IPv6 address configured - cannot proceed.", None
+
+        if ports is not None:
+            if not _SAFE_PORT_SPEC_PATTERN.match(ports):
+                return (
+                    "Invalid `ports` - use digits, commas, and hyphens only "
+                    '(e.g. "21,80" or "1-1000").',
+                    None,
+                )
+            if target.ports:
+                requested = _expand_port_spec(ports)
+                out_of_scope = sorted(requested - set(target.ports))
+                if out_of_scope:
+                    return (
+                        f"Port(s) {', '.join(map(str, out_of_scope))} are "
+                        "outside this target's authorized scope "
+                        f"({', '.join(map(str, sorted(target.ports)))}) - "
+                        "refusing to scan them. Use only authorized ports.",
+                        None,
+                    )
+
+        flags = ["nmap", "-Pn", "-sV"]
+        if run_default_scripts:
+            flags.append("-sC")
+        if timing:
+            flags.append(_NMAP_TIMING_FLAGS[timing])
+        if ports:
+            flags += ["-p", ports]
+        flags.append(host)
+
+        ok, output = await _execute_one_shot(
+            project_id, " ".join(flags), NMAP_SCAN_TIMEOUT_SECONDS
+        )
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+
+        entries = _parse_nmap_output(output)
+        if entries:
+            on_enumeration(entries)
+            ports_found = ", ".join(sorted(entries, key=int))
+            return f"Found {len(entries)} open port(s): {ports_found}.\n\n{output}", output
+        return output, output
+
+    @tool(HYDRA_BRUTEFORCE_TOOL_NAME, response_format="content_and_artifact")
+    async def hydra_bruteforce(
+        service: Literal["ftp", "ssh", "telnet", "mysql", "smtp", "pop3"],
+        port: Optional[int] = None,
+        username: Optional[str] = None,
+        username_list: Optional[str] = None,
+        password: Optional[str] = None,
+        password_list: Optional[str] = None,
+    ) -> str:
+        """Tries username/password combinations against this run's
+        target's `service`. Give either a single `username` or a
+        `username_list` file path (not both), and either a single
+        `password` or a `password_list` file path (not both). For an
+        anonymous-FTP check, omit all four credential args - defaults to
+        username "anonymous" with a blank password.
+
+        Args:
+            service: Which service to attack.
+            port: Port to connect to. Omit to use the service's standard
+                port.
+            username: A single username to try.
+            username_list: Path to an existing file of usernames (one per
+                line) inside the Kali container.
+            password: A single password to try.
+            password_list: Path to an existing file of passwords inside
+                the Kali container.
+        """
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        if (
+            service == "ftp"
+            and username is None
+            and username_list is None
+            and password is None
+            and password_list is None
+        ):
+            username, password = "anonymous", ""
+
+        if username is None and username_list is None:
+            return "Provide either `username` or `username_list`.", None
+        if password is None and password_list is None:
+            return "Provide either `password` or `password_list`.", None
+        if username is not None and username_list is not None:
+            return "Provide only one of `username`/`username_list`, not both.", None
+        if password is not None and password_list is not None:
+            return "Provide only one of `password`/`password_list`, not both.", None
+
+        for path in (username_list, password_list):
+            if path is None:
+                continue
+            if not _SAFE_PATH_PATTERN.match(path):
+                return f"Invalid file path '{path}'.", None
+            if not await _file_exists_in_container(project_id, path):
+                return f"File '{path}' does not exist in the Kali container.", None
+
+        flags = ["hydra"]
+        if username is not None:
+            flags += ["-l", _safe_shell_word(username)]
+        else:
+            flags += ["-L", username_list]
+        if password is not None:
+            flags += ["-p", _safe_shell_word(password)]
+        else:
+            flags += ["-P", password_list]
+        flags.append(f"{service}://{host}:{port or _HYDRA_DEFAULT_PORTS[service]}")
+
+        ok, output = await _execute_one_shot(
+            project_id, " ".join(flags), HYDRA_BRUTEFORCE_TIMEOUT_SECONDS
+        )
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+
+        matches = list(_HYDRA_SUCCESS_LINE.finditer(output))
+        if not matches:
+            return f"No valid credentials found.\n\n{output}", output
+
+        entries: Dict[str, dict] = {}
+        for m in matches:
+            found_port, found_service, _found_host, login, pw = m.groups()
+            entries[found_port] = {
+                "service": found_service,
+                "version": "",
+                "notes": f"hydra: valid credentials login={login!r} password={pw!r}",
+            }
+        on_enumeration(entries)
+        return f"Valid credentials found!\n\n{output}", output
+
+    @tool(GOBUSTER_SCAN_TOOL_NAME, response_format="content_and_artifact")
+    async def gobuster_scan(
+        port: int = 80,
+        use_tls: bool = False,
+        wordlist: Optional[str] = None,
+        extensions: Optional[str] = None,
+    ) -> str:
+        """Directory/file brute-forces this run's target's web server on
+        `port` using gobuster.
+
+        Args:
+            port: Web server port to scan. Defaults to 80.
+            use_tls: Use https instead of http.
+            wordlist: Path to an existing wordlist file inside the Kali
+                container. Defaults to a small, fast built-in list.
+            extensions: Comma-separated file extensions to also try, e.g.
+                "php,txt,html". Omit for none.
+        """
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        wordlist = wordlist or DEFAULT_GOBUSTER_WORDLIST
+        if not _SAFE_PATH_PATTERN.match(wordlist):
+            return f"Invalid wordlist path '{wordlist}'.", None
+        if not await _file_exists_in_container(project_id, wordlist):
+            return f"Wordlist '{wordlist}' does not exist in the Kali container.", None
+        if extensions is not None and not _SAFE_EXTENSIONS_PATTERN.match(extensions):
+            return (
+                "Invalid `extensions` - comma-separated alphanumeric "
+                'extensions only, e.g. "php,txt".',
+                None,
+            )
+
+        scheme = "https" if use_tls else "http"
+        flags = ["gobuster", "dir", "-u", f"{scheme}://{host}:{port}/", "-w", wordlist, "-q"]
+        if extensions:
+            flags += ["-x", extensions]
+
+        ok, output = await _execute_one_shot(
+            project_id, " ".join(flags), GOBUSTER_SCAN_TIMEOUT_SECONDS
+        )
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+
+        matches = list(_GOBUSTER_LINE.finditer(output))
+        if not matches:
+            return output, output
+
+        findings = "; ".join(f"{m.group(1)} (Status: {m.group(2)})" for m in matches)
+        on_enumeration({str(port): {"service": scheme, "version": "", "notes": findings}})
+        return f"Found {len(matches)} path(s).\n\n{output}", output
+
+    @tool(SEARCHSPLOIT_SEARCH_TOOL_NAME, response_format="content_and_artifact")
+    async def searchsploit_search(query: str) -> str:
+        """Searches the local exploit-database (exploit-db) mirror for
+        `query` (e.g. a service name and version, like "vsftpd 2.3.4")
+        and returns matching Exploit-DB IDs and titles. Use
+        searchsploit_view to read a candidate's source, then
+        searchsploit_run to actually run it.
+
+        Args:
+            query: Search terms, e.g. "vsftpd 2.3.4".
+        """
+        ok, output = await _execute_one_shot(
+            project_id,
+            f"searchsploit --json {_safe_shell_word(query)}",
+            SEARCHSPLOIT_LOOKUP_TIMEOUT_SECONDS,
+        )
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+
+        try:
+            data = json.loads(output)
+        except ValueError:
+            return output, output
+
+        results = data.get("RESULTS_EXPLOIT", [])
+        if not results:
+            return "No matching exploits found.", output
+
+        lines = [f"{r.get('EDB-ID', '?')}: {r.get('Title', '')}" for r in results]
+        return "\n".join(lines), output
+
+    @tool(SEARCHSPLOIT_VIEW_TOOL_NAME, response_format="content_and_artifact")
+    async def searchsploit_view(edb_id: str) -> str:
+        """Reads the source of exploit-db entry `edb_id` (from
+        searchsploit_search) - use this to see what language it's in and
+        what arguments/target format it expects before running it.
+
+        Args:
+            edb_id: The numeric Exploit-DB ID, e.g. "49757".
+        """
+        if not _SAFE_EDB_ID_PATTERN.match(edb_id):
+            return "Invalid edb_id - digits only.", None
+        path, error = await _resolve_exploit_path(project_id, edb_id)
+        mark_tested()
+        if error:
+            return error, None
+
+        ok, output = await _execute_one_shot(
+            project_id, f"cat {shlex.quote(path)}", SEARCHSPLOIT_LOOKUP_TIMEOUT_SECONDS
+        )
+        if not ok:
+            return output, None
+        on_raw_output(output)
+        return output, output
+
+    @tool(SEARCHSPLOIT_RUN_TOOL_NAME, response_format="content_and_artifact")
+    async def searchsploit_run(edb_id: str, exploit_args: str = "") -> str:
+        """Runs exploit-db entry `edb_id` (from searchsploit_search)
+        against whatever it's given in `exploit_args` - read it first with
+        searchsploit_view to see what it expects (target/port/etc. as its
+        own arguments; you already know this run's target's address).
+        Only works for a plain Python/Perl/Ruby/shell script - a script
+        needing further interactive back-and-forth of its own isn't a
+        good fit for this one-shot tool.
+
+        Args:
+            edb_id: The numeric Exploit-DB ID, e.g. "49757".
+            exploit_args: Arguments to pass to the exploit script,
+                space-separated exactly as you would type them, e.g.
+                "192.168.0.235 21".
+        """
+        if not _SAFE_EDB_ID_PATTERN.match(edb_id):
+            return "Invalid edb_id - digits only.", None
+        path, error = await _resolve_exploit_path(project_id, edb_id)
+        if error:
+            mark_tested()
+            return error, None
+
+        _, ext = os.path.splitext(path)
+        if ext == ".rb" and await _looks_like_metasploit_module(project_id, path):
+            mark_tested()
+            return (
+                "This is a Metasploit-framework module, not a standalone "
+                "script - it needs the full msfconsole runtime (`require "
+                "'msf/core'`), not a bare `ruby` interpreter. If "
+                "allow_shell is enabled, drive msfconsole yourself via "
+                "run() instead (e.g. search for the right module name "
+                'with `msfconsole -q -x "search <name>"`).',
+                None,
+            )
+
+        interpreter = _SEARCHSPLOIT_INTERPRETER_BY_EXTENSION.get(ext)
+        if interpreter is None:
+            mark_tested()
+            return (
+                f"Don't know how to run a '{ext}' file - use "
+                "searchsploit_view to read it, and run() it yourself if "
+                "allow_shell is enabled.",
+                None,
+            )
+
+        safe_args = _safe_join_args(exploit_args) if exploit_args else ""
+        if exploit_args and safe_args is None:
+            return "Could not parse `exploit_args` - check for unbalanced quotes.", None
+
+        command = f"{interpreter} {shlex.quote(path)} {safe_args}".strip()
+        ok, output = await _execute_one_shot(project_id, command, SEARCHSPLOIT_RUN_TIMEOUT_SECONDS)
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+        return output, output
+
+    return [
+        nmap_scan,
+        hydra_bruteforce,
+        gobuster_scan,
+        searchsploit_search,
+        searchsploit_view,
+        searchsploit_run,
+    ]
+
+
+FTP_SESSION_NAME = "ftp"
+
+
+async def _ensure_ftp_session(manager: KaliManger, target_id: str, host: str, on_session_change):
+    """Opens target_id's 'ftp' session if it doesn't exist yet (running
+    `ftp -n {host}` - -n suppresses ftp's own immediate auto-login prompt,
+    since login is driven explicitly via the `user` command in
+    ftp_connect below, not the interactive Name:/Password: exchange), or
+    switches to it if it already exists - either way, returns the
+    now-current KaliSession for it, plus whether this call itself opened a
+    brand-new session (vs. reusing an already-open, possibly already-
+    authenticated one - see ftp_connect's _ftp_logged_in tracking)."""
+    command = f"ftp -n {host}"
+    sessions = await manager.list_sessions(target_id)
+    existing = next((s for s in sessions if s.name == FTP_SESSION_NAME and not s.closed), None)
+    freshly_opened = existing is None
+    if existing is None:
+        await manager.open_session(target_id, FTP_SESSION_NAME, command)
+    elif manager.get_current_session_name(target_id) != FTP_SESSION_NAME:
+        await manager.switch_session(target_id, FTP_SESSION_NAME)
+    on_session_change(FTP_SESSION_NAME, command)
+    return manager.get_current_session(target_id), freshly_opened
+
+
+def create_guided_session_tools(
+    project_id: str,
+    target_id: str,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
+) -> list:
+    """Tier 2: guided wrappers around the three interactive protocols the
+    agent needs most often (ftp/ssh/telnet), for when it doesn't know -
+    or keeps getting wrong - the underlying client's own syntax (observed
+    in production: typing the raw USER/PASS wire-protocol commands into
+    ftp's interactive Name:/Password: prompts, which want bare values).
+    Unlike Tier 1, ftp_connect/ftp_command use the real session machinery
+    (_resolve_current_session/_send_and_condense - the same helpers run()
+    itself uses), so they get the exact same stuck-session confusion
+    detection and auto-recovery for free."""
+
+    # Per-target FTP login state, closure-scoped (fresh per Agent/run, so
+    # it can never leak across independent test runs the way a module-level
+    # dict would). Lets ftp_connect tell "already logged in, this re-auth
+    # attempt is pointless" apart from "actually failed" - see ftp_connect's
+    # own comment for the production bug this fixes.
+    _ftp_logged_in: Dict[str, bool] = {}
+
+    @tool(FTP_CONNECT_TOOL_NAME, response_format="content_and_artifact")
+    async def ftp_connect(username: str = "anonymous", password: str = "") -> str:
+        """Connects (or reconnects) to this run's target's FTP service and
+        logs in - handles ftp's own login sequence for you, so there's no
+        need to figure out its interactive Name:/Password: prompts or
+        type raw protocol commands (USER/PASS) yourself; just give the
+        credentials to try. Safe to call again to retry with different
+        credentials - reuses the same session rather than erroring if one
+        is already open. Once logged in, use ftp_command for anything
+        else (ls, get, pwd, cd, ...).
+
+        Args:
+            username: FTP username to try. Defaults to "anonymous".
+            password: Password to try. Defaults to blank (the
+                anonymous-FTP convention).
+        """
+        if "\n" in username or "\r" in username or "\n" in password or "\r" in password:
+            return "Username/password cannot contain newlines.", None
+
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        manager = await kali_registry.get_manager(project_id)
+        try:
+            current_session, freshly_opened = await _ensure_ftp_session(
+                manager, target_id, host, on_session_change
+            )
+        except KaliSessionError as e:
+            return str(e), None
+
+        if freshly_opened:
+            _ftp_logged_in[target_id] = False
+        elif _ftp_logged_in.get(target_id):
+            # Observed in production: re-sending `user` into an already-
+            # authenticated session gets a real but misleading "530 Can't
+            # change from guest user" - vsftpd correctly refusing
+            # re-authentication mid-session, which the (correct) reply-code
+            # regex below reads as "Login failed", even though the session
+            # was in fact already logged in and working.
+            return (
+                "Already connected and logged in on this FTP session - no "
+                "need to reconnect. Use ftp_command for anything else "
+                "(ls, get, pwd, cd, ...).",
+                None,
+            )
+
+        # Sent as two separate lines, mirroring exactly what a human typing
+        # at ftp's own interactive Name:/Password: prompts would send - NOT
+        # "user <name> <password>" on one line. A blank password
+        # interpolated into one line contributes no second token at all
+        # (observed in production: the anonymous-FTP case left the session
+        # sitting unanswered at its own "Password:" sub-prompt, since
+        # nothing was ever sent for it).
+        condensed, raw_output = await _send_and_condense(
+            manager,
+            project_id,
+            target_id,
+            current_session,
+            f"user {username}",
+            SESSION_OPEN_READ_SECONDS,
+            on_enumeration,
+            mark_tested,
+            on_session_change,
+            on_prompt_state_change,
+            on_raw_output,
+        )
+        if raw_output is None:
+            return condensed, None
+
+        # Only sent if the ftp session is still the current one - a
+        # confusion-streak promotion triggered by the line above (unlikely
+        # this early, but possible if the session was already stuck from an
+        # earlier attempt) would otherwise send the password into whatever
+        # session became current instead.
+        if manager.get_current_session_name(target_id) == FTP_SESSION_NAME:
+            current_session = manager.get_current_session(target_id)
+            condensed2, raw_output2 = await _send_and_condense(
+                manager,
+                project_id,
+                target_id,
+                current_session,
+                password,
+                SESSION_OPEN_READ_SECONDS,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+            if raw_output2 is not None:
+                condensed = f"{condensed}\n{condensed2}"
+                raw_output = f"{raw_output}\n{raw_output2}"
+
+        # Line-anchored, real FTP reply-code format ("CODE text" or
+        # "CODE-text" at the START of a line) - NOT a bare \b23\d\b
+        # anywhere in the text. Observed in production: that looser form
+        # matched "235" inside the target's own IP address
+        # (192.168.0.235, echoed back in "Connected to ...") and reported
+        # a successful login before the password had even been sent.
+        if re.search(r"(?m)^230[ -]", raw_output):
+            prefix = "Login successful."
+            _ftp_logged_in[target_id] = True
+        elif re.search(r"(?m)^5\d\d[ -]", raw_output):
+            prefix = "Login failed."
+            _ftp_logged_in[target_id] = False
+        else:
+            prefix = "Login outcome unclear from the response - check the raw output below."
+
+        return f"{prefix}\n\n{condensed}", raw_output
+
+    @tool(FTP_COMMAND_TOOL_NAME, response_format="content_and_artifact")
+    async def ftp_command(command: str) -> str:
+        """Sends one command to your already-open FTP session (ls, get,
+        pwd, cd, binary, ...) - call ftp_connect first if you haven't
+        yet. Not gated by shell access: ftp's own command grammar can't
+        reach outside the already-open connection to the target.
+
+        Args:
+            command: The ftp command to send, e.g. "ls" or "get file.txt".
+        """
+        if "\n" in command or "\r" in command:
+            return "Command cannot contain newlines - send one command at a time.", None
+
+        manager = await kali_registry.get_manager(project_id)
+        sessions = await manager.list_sessions(target_id)
+        existing = next((s for s in sessions if s.name == FTP_SESSION_NAME and not s.closed), None)
+        if existing is None:
+            return "No FTP session is currently open - call ftp_connect first.", None
+        if manager.get_current_session_name(target_id) != FTP_SESSION_NAME:
+            try:
+                await manager.switch_session(target_id, FTP_SESSION_NAME)
+            except KaliSessionError as e:
+                return str(e), None
+        current_session = manager.get_current_session(target_id)
+
+        return await _send_and_condense(
+            manager,
+            project_id,
+            target_id,
+            current_session,
+            command,
+            SESSION_OPEN_READ_SECONDS,
+            on_enumeration,
+            mark_tested,
+            on_session_change,
+            on_prompt_state_change,
+            on_raw_output,
+        )
+
+    @tool(SSH_CHECK_LOGIN_TOOL_NAME, response_format="content_and_artifact")
+    async def ssh_check_login(username: str, password: str) -> str:
+        """Tries exactly one username/password pair against this run's
+        target's SSH service and reports success or failure - use this to
+        confirm a single candidate credential (e.g. found elsewhere); for
+        trying many candidates at once use
+        hydra_bruteforce(service="ssh", ...) instead.
+
+        Args:
+            username: SSH username to try.
+            password: SSH password to try.
+        """
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        command = (
+            f"sshpass -p {shlex.quote(password)} ssh -o StrictHostKeyChecking=no "
+            f"-o ConnectTimeout=10 {shlex.quote(username)}@{host} exit"
+        )
+        ok, output = await _execute_one_shot(project_id, command, SSH_CHECK_LOGIN_TIMEOUT_SECONDS)
+        mark_tested()
+        on_raw_output(output)
+        if ok:
+            return f"Login successful for '{username}'.\n\n{output}", output
+        return f"Login failed for '{username}' (or a connection error).\n\n{output}", output
+
+    @tool(SSH_RUN_TOOL_NAME, response_format="content_and_artifact")
+    async def ssh_run(username: str, password: str, command: str) -> str:
+        """Logs into this run's target over SSH and runs exactly one
+        command, returning its output. If login itself fails, that shows
+        up in the output text (e.g. "Permission denied") rather than as a
+        separate error - there's no persistent shell here, just one
+        authenticated command per call.
+
+        Args:
+            username: SSH username.
+            password: SSH password.
+            command: The single command to run on the target, e.g.
+                "cat /etc/passwd".
+        """
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        # `; true` so the REMOTE command's own exit code (a normal,
+        # informative outcome - e.g. "Permission denied" from a
+        # permissions probe - not a failure of this tool) never gets
+        # mistaken for a local exec failure by _execute_one_shot.
+        shell_command = (
+            f"sshpass -p {shlex.quote(password)} ssh -o StrictHostKeyChecking=no "
+            f"-o ConnectTimeout=10 {shlex.quote(username)}@{host} "
+            f"{shlex.quote(command)} ; true"
+        )
+        ok, output = await _execute_one_shot(project_id, shell_command, SSH_RUN_TIMEOUT_SECONDS)
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+        return await _maybe_condense(project_id, f"ssh {command}", output, on_enumeration)
+
+    @tool(TELNET_PROBE_TOOL_NAME, response_format="content_and_artifact")
+    async def telnet_probe(port: int) -> str:
+        """Connects briefly to `port` on this run's target and returns
+        whatever banner/greeting it sends back - a quick "what's
+        listening here" check. For an actual interactive telnet login
+        session, use new_session/run() instead (if allow_shell is
+        enabled) - a login prompt's exact format is specific to whatever
+        service is running, with no generic shortcut this tool can offer.
+
+        Args:
+            port: Port to probe.
+        """
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        # Nested `bash -c '...'`, not a bare `(...)` subshell - _execute_one_shot
+        # (via KaliManger.execute's timeout_seconds) prepends its own
+        # `timeout --kill-after=5 {N} ` in front of this whole string before
+        # handing it to the outer bash -c, and `timeout N (subshell)` is a
+        # bash syntax error (confirmed in production: every single
+        # telnet_probe call failed with "syntax error near unexpected token
+        # '('"). Wrapping in a nested `bash -c` avoids a bare `(` at the top
+        # level entirely. `|| true` (inside the nested shell) for the same
+        # reason as ssh_run above - telnet only exits on its own once the
+        # inner `timeout 3` kills it, which otherwise looks like a local
+        # exec failure.
+        command = f"bash -c 'echo | timeout 3 telnet {host} {port} || true'"
+        ok, output = await _execute_one_shot(project_id, command, TELNET_PROBE_TIMEOUT_SECONDS)
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+        return output, output
+
+    return [ftp_connect, ftp_command, ssh_check_login, ssh_run, telnet_probe]
 
 
 async def _save_vulnerability(vulnerability: Vulnerability) -> Vulnerability:
@@ -1206,7 +2279,12 @@ def create_attack_log_tool(
     return log_attack_attempt
 
 
-def create_switch_mode_tool(on_mode_change: Callable[[str], None]):
+def create_switch_mode_tool(
+    on_mode_change: Callable[[str], None],
+    has_tested: Callable[[], bool],
+    note_rejected: Callable[[], int],
+    note_allowed: Callable[[], None],
+):
     """Builds the switch_mode tool that toggles the agent's own working
     focus between scouting and exploiting - see agent.py's
     _render_context_message for how the current mode is re-shown every
@@ -1221,7 +2299,9 @@ def create_switch_mode_tool(on_mode_change: Callable[[str], None]):
         as you like: scout broadly, switch to exploiting to test a specific
         finding, switch back to scouting if that didn't pan out, and so on.
         report_vulnerability and log_attack_attempt only work while in
-        "exploiting" mode.
+        "exploiting" mode. Requires a real tool call (nmap_scan,
+        ftp_connect, run(), ...) since your last mode switch - you can't
+        switch again on thinking alone.
 
         Args:
             mode: Either "scouting" or "exploiting".
@@ -1234,6 +2314,43 @@ def create_switch_mode_tool(on_mode_change: Callable[[str], None]):
         if normalized not in VALID_MODES:
             return f"Invalid mode '{mode}'. Use one of: {', '.join(sorted(VALID_MODES))}."
 
+        # Observed in production: after a failed tool call, the model got
+        # stuck alternating switch_mode(scouting)/switch_mode(exploiting)
+        # for several turns straight with no real tool call in between -
+        # re-deriving the same failed hypothesis each time instead of
+        # actually acting on it. has_tested() (reset by _set_mode on every
+        # switch, set by any real run()/nmap_scan/ftp_connect/...) is the
+        # same "did anything actually happen" signal report_vulnerability/
+        # log_attack_attempt already gate on - reusing it here stops a
+        # mode-flipping loop the same way.
+        if not has_tested():
+            streak = note_rejected()
+            if streak < 2:
+                return (
+                    "Rejected: you haven't run anything (a real tool call "
+                    "- nmap_scan, ftp_connect, run(), ...) since your last "
+                    "mode switch. Do something concrete first, then "
+                    "switch modes based on what it showed - switching "
+                    "back and forth without acting in between makes no "
+                    "progress."
+                )
+            # 2nd+ consecutive rejection - mechanically release instead of
+            # rejecting forever. Confirmed in production: a static
+            # rejection message repeated verbatim did not stop the model
+            # from just retrying the identical action - 18 consecutive
+            # rejections burned an entire 15-minute run. This bounds the
+            # worst case to 2 wasted turns instead, the same "mechanically
+            # resolve it, don't just keep reminding" reasoning behind
+            # promote_stuck_session (kali_manager.py).
+            note_allowed()
+            on_mode_change(normalized)
+            return (
+                f"Switched to {normalized} mode (auto-allowed after "
+                "repeated rejections - you still haven't run anything "
+                f"concrete; do that now): {reason}"
+            )
+
+        note_allowed()
         on_mode_change(normalized)
         return f"Switched to {normalized} mode: {reason}"
 
@@ -1402,21 +2519,12 @@ def create_terminal_tools(
         """
         manager = await kali_registry.get_manager(project_id)
 
-        # Should only happen if every session got closed without a new one
-        # being opened (idle timeout, the process exiting, ...) -
-        # start_agent() already opens "default" before the first turn.
-        # Tracked so the result below can tell the model its session was
-        # silently replaced, rather than returning what looks like an
-        # ordinary result from the session it thought it still had.
-        session_was_replaced = not manager.has_current_session(target_id)
-        if session_was_replaced:
-            try:
-                await manager.open_session(
-                    target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
-                )
-            except KaliSessionError as e:
-                return str(e), None
-            on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+        try:
+            current_session, session_was_replaced = await _resolve_current_session(
+                manager, target_id, on_session_change
+            )
+        except KaliSessionError as e:
+            return str(e), None
 
         # -Pn is effectively required for every nmap invocation in this
         # environment (see _maybe_inject_nmap_pn's own comment) - rather
@@ -1428,7 +2536,6 @@ def create_terminal_tools(
         # (ftp, msfconsole, ...) it's a line typed at THAT program's own
         # prompt, not a Kali shell command.
         nmap_pn_injected = False
-        current_session = manager.get_current_session(target_id)
         if (
             input is not None
             and current_session is not None
@@ -1437,55 +2544,22 @@ def create_terminal_tools(
         ):
             input, nmap_pn_injected = _maybe_inject_nmap_pn(input)
 
-        try:
-            raw_output = await manager.run_in_current_session(
-                target_id, input, wait_seconds=wait_seconds
-            )
-        except KaliSessionError as e:
-            return str(e), None
-
-        # current_session is the same live object kali_manager mutates
-        # in-place during the call above, so its at_shell_prompt now
-        # reflects what just happened - surface it so Agent's per-turn
-        # reminder can tell the model when it may still be stuck inside
-        # another program's prompt (see _looks_like_shell_prompt).
-        on_prompt_state_change(
-            current_session.at_shell_prompt if current_session else True
-        )
-        on_raw_output(raw_output)
-
-        # Mechanical recovery, not just a reminder - confirmed in
-        # production that the "you may still be inside another program"
-        # reminder alone gets ignored for many turns in a row. Gated on
-        # confusion_streak (2+ turns of the current program's own "I don't
-        # understand that" rejection), not merely "not at shell prompt" -
-        # the latter is also the correct, persistent state for a
-        # genuinely productive interactive session and was confirmed to
-        # sever one prematurely (see promote_stuck_session's docstring).
-        promoted_name = None
-        if current_session is not None and current_session.confusion_streak >= 2:
-            promoted_name = await manager.promote_stuck_session(
-                target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
-            )
-            if promoted_name:
-                on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
-                on_prompt_state_change(True)
-
-        # Only counts as "tested" when input was actually sent - a bare
-        # poll (no input) doesn't itself constitute an attempt against the
-        # target, and shouldn't be enough to unlock report_vulnerability/
-        # log_attack_attempt on its own.
-        if input is not None:
-            mark_tested()
-
-        label = input if input is not None else "(checking for new output)"
-        condensed = await _maybe_condense(
+        condensed, raw_output = await _send_and_condense(
+            manager,
             project_id,
-            label,
-            raw_output,
+            target_id,
+            current_session,
+            input,
+            wait_seconds,
             on_enumeration,
-            session_command=current_session.command if current_session else None,
+            mark_tested,
+            on_session_change,
+            on_prompt_state_change,
+            on_raw_output,
+            session_was_replaced=session_was_replaced,
         )
+        if raw_output is None:
+            return condensed, None
 
         # Detection runs against the RAW output, before condensation may
         # paraphrase away the exact wording the regex looks for - only
@@ -1498,27 +2572,6 @@ def create_terminal_tools(
 
         if nmap_pn_injected:
             condensed = f"{_NMAP_PN_INJECTED_NOTE}\n\n{condensed}"
-
-        if session_was_replaced:
-            condensed = (
-                "[Your previous session was gone (closed, idle-timed-out, "
-                "or its process exited) - a brand-new plain shell session "
-                "was opened for you. Any prior state - working directory, "
-                "environment variables, an interactive program's prompt - "
-                "is lost; you're at a fresh shell prompt now.]\n\n" + condensed
-            )
-
-        if promoted_name:
-            condensed = (
-                "[Your session's last output didn't look like your plain "
-                f"shell prompt, so it's been automatically split off as a "
-                f"separate session named '{promoted_name}' - its "
-                f"connection is untouched, switch_session('{promoted_name}') "
-                "to go back to it (useful if you were mid-login to "
-                "something like ftp/telnet, or if this was actually a "
-                "slow command like a long scan still working). You are "
-                "now in a fresh 'default' plain shell.]\n\n" + condensed
-            )
 
         return condensed, raw_output
 
@@ -1592,7 +2645,7 @@ def create_terminal_tools(
 
         condensed = await _maybe_condense(
             project_id,
-            f"(opening session '{name}')",
+            command,
             initial_output,
             on_enumeration,
             session_command=command,
@@ -1630,7 +2683,7 @@ def create_terminal_tools(
         on_raw_output(initial_output)
         condensed = await _maybe_condense(
             project_id,
-            f"(switched to session '{name}')",
+            current.command,
             initial_output,
             on_enumeration,
             session_command=current.command,
@@ -1702,6 +2755,8 @@ def build_agent_tools(
     get_mode: Callable[[], str],
     on_mode_change: Callable[[str], None],
     has_tested: Callable[[], bool],
+    note_switch_mode_rejected: Callable[[], int],
+    note_switch_mode_allowed: Callable[[], None],
     mark_tested: Callable[[], None],
     clear_tested: Callable[[], None],
     on_session_change: Callable[[Optional[str], Optional[str]], None],
@@ -1710,13 +2765,15 @@ def build_agent_tools(
     on_raw_output: Callable[[str], None],
     get_last_raw_output: Callable[[], Optional[str]],
     get_unresolved_vulnerable_claims_count: Callable[[], int],
+    allow_shell: bool = True,
+    allow_install_packages: bool = True,
 ) -> list:
-    return [
+    tools = [
         # create_kali_tool(project_id, on_enumeration),  # commented out, not
         # deleted - see create_kali_tool's docstring. The terminal tools
-        # below are the agent's only way to run commands now.
-        create_install_package_tool(project_id),
-        *create_terminal_tools(
+        # below are the agent's only way to run arbitrary commands now.
+        *create_pentest_tools(project_id, target_id, on_enumeration, mark_tested, on_raw_output),
+        *create_guided_session_tools(
             project_id,
             target_id,
             on_enumeration,
@@ -1725,7 +2782,27 @@ def build_agent_tools(
             on_prompt_state_change,
             on_raw_output,
         ),
-        create_switch_mode_tool(on_mode_change),
+    ]
+    if allow_install_packages:
+        tools.append(create_install_package_tool(project_id))
+    if allow_shell:
+        tools.extend(
+            create_terminal_tools(
+                project_id,
+                target_id,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+        )
+    tools.append(
+        create_switch_mode_tool(
+            on_mode_change, has_tested, note_switch_mode_rejected, note_switch_mode_allowed
+        )
+    )
+    tools.append(
         create_vulnerability_tool(
             project_id,
             target_id,
@@ -1734,9 +2811,12 @@ def build_agent_tools(
             clear_tested,
             on_reported,
             get_last_raw_output,
-        ),
+        )
+    )
+    tools.append(
         create_attack_log_tool(
             project_id, on_attempt, get_mode, has_tested, clear_tested, get_last_raw_output
-        ),
-        create_finish_task_tool(on_finish, get_unresolved_vulnerable_claims_count),
-    ]
+        )
+    )
+    tools.append(create_finish_task_tool(on_finish, get_unresolved_vulnerable_claims_count))
+    return tools

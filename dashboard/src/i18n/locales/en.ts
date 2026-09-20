@@ -101,6 +101,10 @@ export const en = {
         user_options: "User Options",
         should_interrupt: "Should Interrupt",
         enable_interruption: "Enable interruption handling",
+        allow_shell: "Allow Shell",
+        enable_allow_shell: "Allow raw terminal commands (run/new_session/...)",
+        allow_install_packages: "Allow Installing Packages",
+        enable_allow_install_packages: "Allow installing new Kali packages (requires Allow Shell)",
         starting_prompt: "Starting Prompt",
         available_placeholders: "Available placeholders"
     },

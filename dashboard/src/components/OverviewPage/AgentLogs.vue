@@ -1,8 +1,15 @@
 <template>
   <div class="border field">
-    <span class="text-red" style="padding-left: 10px">{{
-      $t("overview.agent_logs")
-    }}</span>
+    <div class="row log-header">
+      <span class="text-red" style="padding-left: 10px">{{
+        $t("overview.agent_logs")
+      }}</span>
+      <ContextUsageRing
+        v-if="contextUsage"
+        :used-tokens="contextUsage.used"
+        :context-window="contextUsage.window"
+      />
+    </div>
     <div class="separator" />
 
     <div class="column log-panel-body">
@@ -71,7 +78,9 @@ import {
   type AgentLogResponse,
   type AgentMessage as AgentLogMessage,
   type AgentRunStatus,
+  type AgentContextUsage as AgentContextUsageMessage,
 } from "@/api";
+import ContextUsageRing from "../reusable/ContextUsageRing.vue";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
@@ -93,6 +102,7 @@ type ToolName =
 const logEntries = ref<AgentLogResponse[]>([]);
 const logScreenRef = ref<HTMLElement | null>(null);
 const isRunning = ref(false);
+const contextUsage = ref<{ used: number; window: number } | null>(null);
 
 async function loadLogs(project_id: string) {
   if (!project_id) {
@@ -130,6 +140,24 @@ const onAgentRunStatus: tCallback = (message) => {
   if (statusMessage.project_id !== store.openedProject) return;
 
   isRunning.value = statusMessage.running;
+
+  // A finished/paused run shouldn't leave a stale ring showing - the next
+  // run starts with no usage data until its own first turn.
+  if (!statusMessage.running) {
+    contextUsage.value = null;
+  }
+};
+
+const onContextUsage: tCallback = (message) => {
+  const usageMessage = message as AgentContextUsageMessage;
+
+  if (usageMessage.error) return;
+  if (usageMessage.project_id !== store.openedProject) return;
+
+  contextUsage.value = {
+    used: usageMessage.used_tokens,
+    window: usageMessage.context_window,
+  };
 };
 
 onMounted(() => {
@@ -141,6 +169,9 @@ onMounted(() => {
 
   if (!ws_client.hook_exists("AgentRunStatus", onAgentRunStatus))
     ws_client.add_hook("AgentRunStatus", onAgentRunStatus);
+
+  if (!ws_client.hook_exists("AgentContextUsage", onContextUsage))
+    ws_client.add_hook("AgentContextUsage", onContextUsage);
 });
 
 watch(
@@ -148,6 +179,7 @@ watch(
   (newProject) => {
     loadLogs(newProject);
     loadRunningStatus(newProject);
+    contextUsage.value = null;
   },
 );
 
@@ -216,6 +248,12 @@ function formatTimestamp(createdAt: string): string {
 </script>
 
 <style scoped lang="css">
+.log-header {
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 10px;
+}
+
 .log-panel-body {
   flex: 1;
   min-height: 0;

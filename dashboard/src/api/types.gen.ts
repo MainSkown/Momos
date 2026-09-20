@@ -5,6 +5,33 @@ export type ClientOptions = {
 };
 
 /**
+ * AgentContextUsage
+ */
+export type AgentContextUsage = {
+    /**
+     * Type
+     */
+    type: 'AgentContextUsage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Used Tokens
+     */
+    used_tokens: number;
+    /**
+     * Context Window
+     */
+    context_window: number;
+};
+
+/**
  * AgentInterruptRequest
  */
 export type AgentInterruptRequest = {
@@ -64,6 +91,10 @@ export type AgentLogResponse = {
      * Tool Name
      */
     tool_name?: string | null;
+    /**
+     * Raw Output
+     */
+    raw_output?: string | null;
     /**
      * Id
      */
@@ -125,7 +156,7 @@ export type AgentRunResponse = {
 /**
  * AgentRunState
  */
-export type AgentRunState = 'running' | 'paused' | 'interrupted' | 'finished';
+export type AgentRunState = 'running' | 'paused' | 'interrupted' | 'finished' | 'failed';
 
 /**
  * AgentRunStatus
@@ -214,7 +245,7 @@ export type InboundTraffic = SendCommandMessage | AgentInterruptResponseMessage;
  * instead of a generic "connecting" message during the (often multi-minute)
  * package installation.
  */
-export type KaliCreationStage = 'checking_container' | 'starting_container' | 'updating_packages' | 'installing_packages' | 'creating_user';
+export type KaliCreationStage = 'checking_container' | 'starting_container' | 'updating_packages' | 'installing_packages' | 'creating_user' | 'verifying_setup';
 
 /**
  * KaliCreationStageMessage
@@ -351,7 +382,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
 
 /**
  * ProjectRequest
@@ -406,6 +437,18 @@ export type ProjectSettings = {
      */
     parsing_model_name: string;
     /**
+     * Max Context Window
+     */
+    max_context_window?: number | null;
+    /**
+     * Allow Shell
+     */
+    allow_shell?: boolean;
+    /**
+     * Allow Install Packages
+     */
+    allow_install_packages?: boolean;
+    /**
      * Project Id
      */
     project_id: string;
@@ -431,6 +474,18 @@ export type ProjectSettingsBody = {
      * Parsing Model Name
      */
     parsing_model_name: string;
+    /**
+     * Max Context Window
+     */
+    max_context_window?: number | null;
+    /**
+     * Allow Shell
+     */
+    allow_shell?: boolean;
+    /**
+     * Allow Install Packages
+     */
+    allow_install_packages?: boolean;
     /**
      * Project Id
      */
