@@ -209,6 +209,7 @@ async function load_settings(projectID: string) {
   }
 
   project_settings.value = result.data;
+  if (result.data) store.setProjectSettings(projectID, result.data);
 }
 
 async function update_settings() {
@@ -228,6 +229,7 @@ async function update_settings() {
       }
 
       toast.success(t("notify.project_settings_saved"));
+      store.setProjectSettings(store.openedProject, project_settings.value);
     } finally {
       isSaving.value = false;
     }

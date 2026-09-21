@@ -13,6 +13,7 @@ import {
   type ModelPullingUpdate,
   isProjectAgentRunning,
   type AgentRunStatus,
+  type ProjectSettings,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -37,6 +38,9 @@ interface State {
   download_queue: tDownloadObject[];
   running_targets: {
     [project_id: string]: string | null;
+  };
+  project_settings: {
+    [project_id: string]: ProjectSettings;
   };
 }
 
@@ -70,6 +74,7 @@ export const useMomosStore = defineStore("momos", {
     cmd_outputs: {},
     download_queue: [],
     running_targets: {},
+    project_settings: {},
   }),
 
   getters: {
@@ -78,6 +83,8 @@ export const useMomosStore = defineStore("momos", {
       state.targets.filter((t) => t.project_id === projectID),
     getRunningTarget: (state) => (projectID: string) =>
       state.running_targets[projectID] ?? null,
+    getProjectSettings: (state) => (projectID: string) =>
+      state.project_settings[projectID] ?? null,
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -221,6 +228,10 @@ export const useMomosStore = defineStore("momos", {
 
       const index = this.targets.findIndex((t) => t.id === target.id);
       this.targets[index] = target;
+    },
+
+    setProjectSettings(projectID: string, settings: ProjectSettings) {
+      this.project_settings[projectID] = settings;
     },
 
     async loadRunningTarget(projectID: string) {

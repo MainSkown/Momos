@@ -125,7 +125,6 @@ import {
   getProjectKaliClient,
   getProjectSettings,
   type CreatedKaliUserMessage,
-  type ProjectSettings,
 } from "@/api";
 import { useWebSocketClient, type tCallback } from "@/websockets/websocket_client";
 
@@ -234,7 +233,13 @@ const selectTool = (key: string) => {
   toolKey.value = key;
 };
 
-const project_settings = ref<ProjectSettings | null>(null);
+// Read from the shared store instead of a private local copy, so a save
+// made elsewhere (ProjectSettingsPage.vue) is reflected here immediately -
+// loadProjectSettings below still fetches once per project to prime the
+// store the first time this project's settings are seen.
+const project_settings = computed(() =>
+  store.getProjectSettings(store.openedProject),
+);
 const kaliStatus = ref<"active" | "pending" | "inactive">("inactive");
 
 const kaliStatusText = computed(() => {
@@ -250,13 +255,10 @@ const kaliStatusClass = computed(() => {
 });
 
 async function loadProjectSettings(project_id: string) {
-  if (!project_id) {
-    project_settings.value = null;
-    return;
-  }
+  if (!project_id) return;
 
   const result = await getProjectSettings({ path: { project_id } });
-  project_settings.value = result.data ?? null;
+  if (result.data) store.setProjectSettings(project_id, result.data);
 }
 
 async function loadKaliStatus(project_id: string) {
