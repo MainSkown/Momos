@@ -218,6 +218,13 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
 # `meta skuid momos`, so root traffic would bypass that firewall entirely.
 NMAP_BINARY_PATH: Final = "/usr/bin/nmap"
 
+# The "wordlists" package (see DEFAULT_KALI_PACKAGES) only ships this
+# gzipped - unzipped once in _configure_container so agent_tools.py's
+# hydra_bruteforce/gobuster_scan can point straight at the plain-text
+# path without the agent having to gunzip it itself first.
+ROCKYOU_WORDLIST_GZ_PATH: Final = "/usr/share/wordlists/rockyou.txt.gz"
+ROCKYOU_WORDLIST_PATH: Final = "/usr/share/wordlists/rockyou.txt"
+
 # Debian's python3 always has this on sys.path regardless of the exact
 # python3.X minor version installed (unlike a version-specific site-
 # packages dir) - the standard location for a hand-installed pure-Python
@@ -471,6 +478,11 @@ class KaliManger:
             "DEBIAN_FRONTEND=noninteractive apt-get install -y "
             + " ".join(self.packages)
         )
+        print("Unzipping rockyou.txt wordlist")
+        self._exec_in_container(
+            f"[ -f {ROCKYOU_WORDLIST_PATH} ] || gunzip -k {ROCKYOU_WORDLIST_GZ_PATH}"
+        )
+
         print("Setting up momos user")
         self._report(on_stage, KaliCreationStage.creating_user)
 
@@ -521,6 +533,7 @@ class KaliManger:
             self._exec_in_container("nft list ruleset")
             self._exec_in_container(f"getcap {NMAP_BINARY_PATH} | grep -q cap_net_raw")
             self._exec_in_container("python3 -c 'import telnetlib'")
+            self._exec_in_container(f"test -f {ROCKYOU_WORDLIST_PATH}")
         except RuntimeError as e:
             print(f"Kali container configuration check failed: {e}", flush=True)
             return False
