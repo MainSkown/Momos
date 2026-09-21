@@ -59,14 +59,22 @@
             </div>
 
             <!-- Settings button -->
-            <div class="button border small-cell" @click="showDialogFor = t.id">
+            <div
+              class="button border small-cell"
+              :class="{ disabled: isRunning(t) }"
+              @click="!isRunning(t) && (showDialogFor = t.id)"
+            >
               <span class="material-icons-outlined" data-fallback="✕">
                 settings
               </span>
             </div>
 
             <!-- Delete button-->
-            <div class="button border small-cell" @click="toDelete = t.id">
+            <div
+              class="button border small-cell"
+              :class="{ disabled: isRunning(t) }"
+              @click="!isRunning(t) && (toDelete = t.id)"
+            >
               <span class="material-icons-outlined" data-fallback="✕">
                 delete_outline
               </span>
@@ -135,7 +143,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
-import { getTarget } from "@/types";
+import { getTarget, type tTarget } from "@/types";
 import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
 import TargetSettingsDialog from "./TargetSettingsDialog.vue";
@@ -152,8 +160,13 @@ function loadTargets() {
   store.loadTargets(store.openedProject);
 }
 
+function isRunning(t: tTarget): boolean {
+  return store.getRunningTarget(store.openedProject) === t.id;
+}
+
 onMounted(() => {
   loadTargets();
+  store.loadRunningTarget(store.openedProject);
 });
 
 // Load targets when opened project changes
@@ -162,6 +175,7 @@ watch(
   (newProject, oldProject) => {
     if (newProject !== oldProject) {
       store.loadTargets(store.openedProject);
+      store.loadRunningTarget(store.openedProject);
     }
   },
 );
@@ -189,6 +203,12 @@ function deleteTarget(id: string) {
 <style scoped lang="css">
 .input-field {
   width: 100%;
+}
+
+.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 .add-button {

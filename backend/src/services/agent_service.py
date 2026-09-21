@@ -533,6 +533,14 @@ class AgentService:
         return project_id in _running_targets.values()
 
     @staticmethod
+    def get_running_target(project_id: str) -> Optional[str]:
+        """The target currently running for project_id, or None - at most
+        one, since start_agent enforces one running target per project."""
+        return next(
+            (t for t, p in _running_targets.items() if p == project_id), None
+        )
+
+    @staticmethod
     async def _run_agent(
         agent: Agent,
         target: Target,

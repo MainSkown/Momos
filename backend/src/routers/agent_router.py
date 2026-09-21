@@ -18,6 +18,7 @@ router = APIRouter()
 
 class AgentRunningResponse(BaseModel):
     running: bool
+    target_id: Optional[str] = None
 
 @router.post(
     "/project/{project_id}/target/{target_id}/agent/start", operation_id="StartAgent"
@@ -91,7 +92,10 @@ def get_project_agent_logs(project_id: str):
     operation_id="IsProjectAgentRunning",
 )
 def is_project_agent_running(project_id: str):
-    return AgentRunningResponse(running=AgentService.is_project_running(project_id))
+    return AgentRunningResponse(
+        running=AgentService.is_project_running(project_id),
+        target_id=AgentService.get_running_target(project_id),
+    )
 
 @router.get(
     "/project/{project_id}/target/{target_id}/agent/run",

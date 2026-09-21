@@ -241,6 +241,7 @@ watch(
 
     debounceTimeout = setTimeout(() => {
       if (!isFormValid(newData)) return;
+      if (store.getRunningTarget(newData.project_id) === newData.id) return;
       store.updateTarget(newData);
     }, 1000);
   },

@@ -201,6 +201,10 @@ export type AgentRunningResponse = {
      * Running
      */
     running: boolean;
+    /**
+     * Target Id
+     */
+    target_id?: string | null;
 };
 
 /**

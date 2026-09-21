@@ -11,6 +11,8 @@ import {
   type OllamaDownloadProgress,
   downloadOllamaModel,
   type ModelPullingUpdate,
+  isProjectAgentRunning,
+  type AgentRunStatus,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -33,6 +35,31 @@ interface State {
     [project_id: string]: tCmd[];
   };
   download_queue: tDownloadObject[];
+  running_targets: {
+    [project_id: string]: string | null;
+  };
+}
+
+// Registered once for the app's lifetime (not per-component-mount, unlike
+// _downloadModelHook below) - loadRunningTarget can be called repeatedly
+// (once per project switch) without stacking duplicate hooks.
+let runningTargetHookRegistered = false;
+
+function registerRunningTargetHook() {
+  if (runningTargetHookRegistered) return;
+  runningTargetHookRegistered = true;
+
+  const ws_client = useWebSocketClient();
+  ws_client.add_hook("AgentRunStatus", (message) => {
+    if (message.error) return;
+
+    const statusMessage = message as AgentRunStatus;
+    const store = useMomosStore();
+
+    store.running_targets[statusMessage.project_id] = statusMessage.running
+      ? statusMessage.target_id
+      : null;
+  });
 }
 
 export const useMomosStore = defineStore("momos", {
@@ -42,12 +69,15 @@ export const useMomosStore = defineStore("momos", {
     openedProject: "",
     cmd_outputs: {},
     download_queue: [],
+    running_targets: {},
   }),
 
   getters: {
     getProjects: (state) => state.projects,
     getProjectsTargets: (state) => (projectID: string) =>
       state.targets.filter((t) => t.project_id === projectID),
+    getRunningTarget: (state) => (projectID: string) =>
+      state.running_targets[projectID] ?? null,
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -191,6 +221,22 @@ export const useMomosStore = defineStore("momos", {
 
       const index = this.targets.findIndex((t) => t.id === target.id);
       this.targets[index] = target;
+    },
+
+    async loadRunningTarget(projectID: string) {
+      registerRunningTargetHook();
+
+      const result = await isProjectAgentRunning({
+        path: { project_id: projectID },
+      });
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load running target status: " + projectID);
+      }
+
+      this.running_targets[projectID] = result.data.running
+        ? (result.data.target_id ?? null)
+        : null;
     },
 
     /* --- Commands --- */
