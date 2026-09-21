@@ -10,6 +10,7 @@ from src.utils.exceptions import (
     DurationNotDefinedInTarget,
     AgentAlreadyRunningException,
     ModelNotSelectedException,
+    ModelNotInstalledException,
 )
 
 router = APIRouter()
@@ -34,7 +35,7 @@ async def start_agent(project_id: str, target_id: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-    except ModelNotSelectedException as e:
+    except (ModelNotSelectedException, ModelNotInstalledException) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),

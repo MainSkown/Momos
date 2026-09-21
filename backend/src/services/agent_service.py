@@ -19,6 +19,7 @@ from src.utils.exceptions import (
     DurationNotDefinedInTarget,
     AgentAlreadyRunningException,
     ModelNotSelectedException,
+    ModelNotInstalledException,
 )
 from src.websocket import (
     ws_registry,
@@ -401,6 +402,24 @@ class AgentService:
             # completion instead of actually starting the task.
             if agent_checkpointer.checkpointer is not None:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
+
+        # Blocking install check - unlike _prepare_and_run's own best-effort
+        # capabilities lookup (kept as-is, for reasoning/context_window),
+        # this one actually aborts the start if the model isn't installed/
+        # reachable, instead of silently falling back to defaults and
+        # running anyway. Done after claiming the target (claiming itself
+        # must stay await-free, see the comment above) - un-claim on
+        # failure so a rejected start doesn't leave the target/project stuck
+        # looking busy.
+        try:
+            await ollama_manager.get_model_capabilities(project_settings.base_model_name)
+        except Exception as e:
+            _running_targets.pop(target_id, None)
+            raise ModelNotInstalledException(
+                f"Model '{project_settings.base_model_name}' is not "
+                f"installed or reachable: {e}",
+                project_settings.base_model_name,
+            )
 
         asyncio.create_task(
             AgentService._prepare_and_run(target, project_settings, duration_seconds)
