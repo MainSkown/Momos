@@ -162,6 +162,7 @@ import { onMounted, ref, watch } from "vue";
 import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
 import { useI18n } from "vue-i18n";
+import { toast } from "vue3-toastify";
 import "@/assets/md-editor.css";
 
 import { MdEditor } from "md-editor-v3";
@@ -216,10 +217,11 @@ async function update_settings() {
 
       if (result.error) {
         console.error("Failed to update settings:", result.error);
+        toast.error(t("notify.project_settings_save_failed"));
         return;
       }
 
-      console.log("Settings updated successfully");
+      toast.success(t("notify.project_settings_saved"));
     } finally {
       isSaving.value = false;
     }
@@ -254,9 +256,11 @@ async function confirmDeleteProject() {
   try {
     await store.deleteProject(store.openedProject);
     showDeleteDialog.value = false;
+    toast.success(t("notify.project_deleted"));
     await load_settings(store.openedProject);
   } catch (error) {
     console.error("Failed to delete project:", error);
+    toast.error(t("notify.project_delete_failed"));
   } finally {
     isDeleting.value = false;
   }

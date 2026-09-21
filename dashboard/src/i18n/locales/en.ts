@@ -52,7 +52,11 @@ export const en = {
         could_not_create_project: 'Could not create project',
         model_download_failed: 'Failed to download model "{name}"',
         model_downloading: 'Downloading "{name}" in the background...',
-        model_downloaded: '"{name}" downloaded and selected'
+        model_downloaded: '"{name}" downloaded and selected',
+        project_settings_saved: 'Project settings saved',
+        project_settings_save_failed: 'Could not save project settings',
+        project_deleted: 'Project deleted',
+        project_delete_failed: 'Could not delete project'
     },
 
     project: {
