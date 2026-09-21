@@ -690,6 +690,17 @@ _CLAIM_VERIFICATION_SYSTEM_PROMPT = (
 )
 
 
+# Prefix of _verify_claim_against_evidence's rejection message below -
+# exported so agent.py's stall-recovery nudge (see its
+# MAX_CONSECUTIVE_NO_TOOL_CALLS handling) can detect "the last tool result
+# was a rejected finding claim" without duplicating the literal string.
+# Observed in production: granite4.1:8b, right after this exact rejection,
+# stopped producing any output at all (not even empty thinking text) for
+# every remaining nudge turn until the stall circuit breaker ended the run
+# - the generic nudge wasn't enough to get it to retry constructively.
+CLAIM_REJECTED_MARKER = "A check against your last real tool output could not confirm"
+
+
 async def _verify_claim_against_evidence(
     project_id: str, claim_label: str, claim_text: str, raw_evidence: Optional[str]
 ) -> Optional[str]:
@@ -744,7 +755,7 @@ async def _verify_claim_against_evidence(
         return None
 
     return (
-        f"A check against your last real tool output could not confirm "
+        f"{CLAIM_REJECTED_MARKER} "
         f"this {claim_label}: {result.reason} Re-verify with a real "
         "run() call before recording this, or revise it to match what you "
         "actually observed."
@@ -1264,6 +1275,30 @@ def _parse_nmap_output(raw_output: str) -> Dict[str, dict]:
     return entries
 
 
+def _summarize_nmap_entries(entries: Dict[str, dict]) -> str:
+    """Builds a human-readable digest from _parse_nmap_output's result for
+    nmap_scan's returned content - one port/service/version header per
+    port, each followed by that port's full NSE script notes, structured
+    per-port instead of dumping the entire raw scan as one undifferentiated
+    blob (the previous behavior - the only tool result that wasn't actually
+    condensed, unlike everything else in this module)."""
+    sections = []
+    for port in sorted(entries, key=int):
+        info = entries[port]
+        service = info.get("service", "")
+        version = info.get("version", "")
+        header = f"{port}/tcp {service}" + (f" {version}" if version else "")
+
+        notes = (info.get("notes") or "").strip()
+        if not notes:
+            sections.append(header)
+            continue
+
+        indented = "\n".join(f"  {line}" for line in notes.splitlines())
+        sections.append(f"{header}\n{indented}")
+    return "\n\n".join(sections)
+
+
 _HYDRA_DEFAULT_PORTS = {"ftp": 21, "ssh": 22, "telnet": 23, "mysql": 3306, "smtp": 25, "pop3": 110}
 # Matches hydra's own success-line format, e.g.
 # "[21][ftp] host: 192.168.0.235   login: anonymous   password: "
@@ -1408,7 +1443,8 @@ def create_pentest_tools(
         if entries:
             on_enumeration(entries)
             ports_found = ", ".join(sorted(entries, key=int))
-            return f"Found {len(entries)} open port(s): {ports_found}.\n\n{output}", output
+            summary = _summarize_nmap_entries(entries)
+            return f"Found {len(entries)} open port(s): {ports_found}.\n\n{summary}", output
         return output, output
 
     @tool(HYDRA_BRUTEFORCE_TOOL_NAME, response_format="content_and_artifact")
@@ -1801,6 +1837,49 @@ def create_guided_session_tools(
         )
         if raw_output is None:
             return condensed, None
+
+        # "Not connected." is ftp's own client-side reply to `user` when
+        # there is no actual control connection to send it over - observed
+        # in production on a session _ensure_ftp_session reused that had
+        # gone dead (sessions aren't closed between agent runs, only
+        # "default" is touched at run start - see Agent.start_agent), which
+        # then stayed broken for the rest of every subsequent run against
+        # this target, since nothing else ever re-opens it. One automatic
+        # close+reopen+retry here, rather than reporting a dead session as
+        # just another "unclear" login outcome.
+        if "Not connected." in raw_output:
+            await manager.close_session(target_id, FTP_SESSION_NAME)
+            try:
+                current_session, _ = await _ensure_ftp_session(
+                    manager, target_id, host, on_session_change
+                )
+            except KaliSessionError as e:
+                return str(e), None
+            _ftp_logged_in[target_id] = False
+            condensed, raw_output = await _send_and_condense(
+                manager,
+                project_id,
+                target_id,
+                current_session,
+                f"user {username}",
+                SESSION_OPEN_READ_SECONDS,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+            if raw_output is None:
+                return condensed, None
+            if "Not connected." in raw_output:
+                return (
+                    "Could not establish an FTP control connection to this "
+                    "target even after reopening the session - the service "
+                    "may be down or unreachable right now rather than a "
+                    "stale-session issue. Re-check with nmap_scan before "
+                    "retrying.",
+                    raw_output,
+                )
 
         # Only sent if the ftp session is still the current one - a
         # confusion-streak promotion triggered by the line above (unlikely

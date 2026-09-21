@@ -16,6 +16,7 @@ from typing import (
 )
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_ollama import ChatOllama
+from ollama import ResponseError as OllamaResponseError
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -949,7 +950,31 @@ class Agent:
         context_message = self._render_context_message(state)
 
         trimmed_messages = self._trim_messages_for_model(messages)
-        response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
+        try:
+            response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
+        except OllamaResponseError as e:
+            # Observed in production: a model detected as reasoning-capable
+            # (via Ollama's own reported capabilities list, or the name/
+            # modelfile heuristic in capabilities_from_show_info) can still
+            # have Ollama itself reject the `think` parameter outright at
+            # the first real chat call - e.g. "granite4.1:8b" does not
+            # support thinking (status code: 400) - a genuine mismatch
+            # between what's advertised and what the loaded template
+            # actually accepts, not something detectable up front without
+            # just trying it. Rather than crash the whole run over a wrong
+            # capability guess, permanently disable reasoning for this
+            # Agent instance (changeModel rebuilds self.llm_with_tools in
+            # place, so every later turn already uses the corrected model)
+            # and retry this exact turn once.
+            if e.status_code == 400 and "does not support thinking" in (e.error or ""):
+                print(
+                    f"Model {self.model_name} rejected reasoning=True "
+                    f"({e.error}) - retrying with reasoning=False"
+                )
+                self.changeModel(self.model_name, reasoning=False)
+                response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
+            else:
+                raise
         response = self._recover_leaked_tool_calls(response)
 
         # Fold whatever tool calls buffered since the last turn (see
@@ -986,14 +1011,29 @@ class Agent:
         return END
 
     def changeModel(self, model_name: str, reasoning: Optional[bool] = None):
-        # repeat_penalty/repeat_last_n: raised above Ollama's own defaults
-        # (~1.1 / 64) because a reasoning-heavy model was observed getting
-        # stuck oscillating within a single reasoning generation ("it's A -
-        # no, maybe B - no, it's A" repeated many times) rather than
-        # converging. These are universal anti-repetition sampling knobs,
-        # not conditioned on model name/family - unlike a per-model prompt
-        # branch, this is expected to help any model prone to the same
-        # failure mode, not just one specific one.
+        # Stored so _call_model can rebuild this on the fly (same model,
+        # reasoning forced off) if Ollama itself rejects `think` for this
+        # model at the first real chat call - see _call_model's own
+        # handling of ollama.ResponseError below.
+        self.model_name = model_name
+        # repeat_penalty/repeat_last_n: previously raised to 1.3/256 (above
+        # Ollama's own defaults of ~1.1/64) because qwen3:8b was observed
+        # getting stuck oscillating within a single reasoning generation
+        # ("it's A - no, maybe B - no, it's A" repeated many times) rather
+        # than converging - reasoned at the time to be a "universal"
+        # anti-repetition knob, not conditioned on model name/family.
+        # That assumption didn't hold: the same 1.3/256 tuning, tried
+        # against qwen3.5:9b, produced the opposite failure mode instead -
+        # forced to avoid any token used in the last 256, it ran out of
+        # normal vocabulary and spiraled into emoji/symbol noise within two
+        # turns, never once reaching a tool call. Reverted to Ollama's own
+        # defaults (omitted here entirely rather than re-hardcoded, so a
+        # future Ollama default change is inherited automatically) - well-
+        # tested across model families generally, unlike a one-off value
+        # tuned against a single model's single observed failure. If
+        # qwen3:8b's oscillation resurfaces, that's a model-specific
+        # problem to solve for that model specifically, not by pushing a
+        # global sampling knob further for everyone.
         #
         # reasoning, by contrast, IS model-specific and was previously
         # hardcoded True for every model regardless of whether its own
@@ -1011,8 +1051,9 @@ class Agent:
             model=model_name,
             base_url=self.ollama_url,
             reasoning=use_reasoning,
-            repeat_penalty=1.3,
-            repeat_last_n=256,
+            # repeat_penalty/repeat_last_n deliberately left unset - see
+            # this method's opening comment for why they're no longer
+            # overridden here.
             # Force Ollama to actually allocate this model's real (or
             # project-/globally-capped) context window - self.context_window
             # is set in __init__ from ollama_manager.get_model_capabilities,
@@ -1127,6 +1168,26 @@ class Agent:
             "to send input to your current session, call run(input=...) "
             "now. Continue the assessment with a tool call, or call "
             "finish_task if it is genuinely complete."
+        )
+        # A rejected report_vulnerability/log_attack_attempt claim (see
+        # agent_tools.CLAIM_REJECTED_MARKER) is a special case of the above:
+        # observed in production (granite4.1:8b) going completely silent -
+        # not even thinking text, an actually empty completion - for every
+        # remaining nudge turn after this specific rejection, until the
+        # stall circuit breaker below ended the run. The generic nudge
+        # doesn't name a concrete next step for "your finding wasn't
+        # believed"; this one does.
+        NUDGE_MESSAGE_AFTER_CLAIM_REJECTED = (
+            "You did not call a tool on your last turn. Your last finding "
+            "claim was rejected because the evidence didn't support it - "
+            "that does not mean the assessment is over, and going silent "
+            "is not a valid response. Pick one concrete action right now: "
+            "(1) make the real run() call you were claiming credit for and "
+            "report only what it actually shows, (2) try a different "
+            "vector against the same service, (3) move on to a different "
+            "port/service you haven't fully tested yet, or (4) call "
+            "finish_task if you're confident there is genuinely nothing "
+            "left worth trying. Make a real tool call now."
         )
 
         while (
@@ -1333,7 +1394,23 @@ class Agent:
                     )
                     break
 
-                input_data = {"messages": [SystemMessage(content=NUDGE_MESSAGE)]}
+                # The most recent ToolMessage stays fixed for the whole
+                # no-tool-call streak (nothing produces a new one until a
+                # real tool call succeeds again), so this reliably reflects
+                # what triggered THIS stall, however many nudge turns deep
+                # into it we already are.
+                nudge_message = NUDGE_MESSAGE
+                messages = state.values.get("messages", [])
+                last_tool_message = next(
+                    (m for m in reversed(messages) if isinstance(m, ToolMessage)),
+                    None,
+                )
+                if last_tool_message is not None and agent_tools.CLAIM_REJECTED_MARKER in str(
+                    last_tool_message.content
+                ):
+                    nudge_message = NUDGE_MESSAGE_AFTER_CLAIM_REJECTED
+
+                input_data = {"messages": [SystemMessage(content=nudge_message)]}
 
             time_left -= (time.monotonic() - loop_start)
             run_state["time_left"] = time_left

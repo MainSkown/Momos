@@ -310,6 +310,12 @@ function formatTimestamp(createdAt: string): string {
   color: var(--text-gray-light);
   font-size: 0.9rem;
   line-height: 1.4;
+  /* Tool/thinking content often has real newlines (e.g. nmap_scan's
+     per-port digest) - the default `white-space: normal` silently
+     collapses them into spaces, squashing multi-line output onto one
+     line. Match .tool-content's handling below. */
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .log-text--thinking {
