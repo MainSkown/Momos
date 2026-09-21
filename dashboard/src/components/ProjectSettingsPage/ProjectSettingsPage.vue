@@ -22,6 +22,7 @@
           <button
             type="button"
             class="button border full-width model-select-button"
+            :disabled="isScanRunning"
             @click="showBaseModelDialog = true"
           >
             {{ project_settings.base_model_name || $t("models.select_model") }}
@@ -33,6 +34,7 @@
           <button
             type="button"
             class="button border full-width model-select-button"
+            :disabled="isScanRunning"
             @click="showParsingModelDialog = true"
           >
             {{ project_settings.parsing_model_name || $t("models.select_model") }}
@@ -158,7 +160,7 @@
 
 <script setup lang="ts">
 import { getProjectSettings, updateProjectSettings } from "@/api";
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
 import { useI18n } from "vue-i18n";
@@ -177,6 +179,10 @@ const isDeleting = ref(false);
 const showDeleteDialog = ref(false);
 const showBaseModelDialog = ref(false);
 const showParsingModelDialog = ref(false);
+
+const isScanRunning = computed(
+  () => store.getRunningTarget(store.openedProject) !== null,
+);
 
 const promptPlaceholders = [
   { placeholder: "{{name}}", description: t("project.placeholder_name") },
@@ -268,12 +274,14 @@ async function confirmDeleteProject() {
 
 onMounted(async () => {
   await load_settings(store.openedProject);
+  store.loadRunningTarget(store.openedProject);
 });
 
 watch(
   () => store.openedProject,
   async (projectID) => {
     await load_settings(projectID);
+    store.loadRunningTarget(projectID);
   },
 );
 </script>
