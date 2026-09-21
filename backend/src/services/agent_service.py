@@ -18,6 +18,7 @@ from src.utils.exceptions import (
     TargetDoesNotExistException,
     DurationNotDefinedInTarget,
     AgentAlreadyRunningException,
+    ModelNotSelectedException,
 )
 from src.websocket import (
     ws_registry,
@@ -354,6 +355,19 @@ class AgentService:
                 f"Target {target_id} does not have defined scan duration"
             )
 
+        # Loaded here (a synchronous db call, no await) rather than after the
+        # claim below, so an unselected model can be rejected before either
+        # the target is claimed or the Kali container is provisioned -
+        # parsing_model_name is intentionally allowed to be empty (see
+        # project_settings_factory/agent_tools.py's own handling of it), only
+        # base_model_name is actually required to run the agent at all.
+        project_settings = db_manager.get_project_settings(project_id)
+        if not project_settings.base_model_name:
+            raise ModelNotSelectedException(
+                f"Project {project_id} has no AI model selected - choose a "
+                "model in project settings before starting a scan."
+            )
+
         # Resume from a paused run's remaining time, if one exists - otherwise
         # start fresh with the target's full configured duration.
         existing_run = db_manager.get_agent_run(target_id)
@@ -387,8 +401,6 @@ class AgentService:
             # completion instead of actually starting the task.
             if agent_checkpointer.checkpointer is not None:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
-
-        project_settings = db_manager.get_project_settings(project_id)
 
         asyncio.create_task(
             AgentService._prepare_and_run(target, project_settings, duration_seconds)

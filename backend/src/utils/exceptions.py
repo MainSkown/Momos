@@ -16,3 +16,7 @@ class AgentAlreadyRunningException(Exception):
     def __init__(self, message, target_id: str):
         super().__init__(message)
         self.target_id = target_id
+
+class ModelNotSelectedException(Exception):
+    def __init__(self, message):
+        super().__init__(message)
