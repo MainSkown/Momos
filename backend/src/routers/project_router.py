@@ -1,7 +1,7 @@
 from typing import List
 
 from fastapi import APIRouter, HTTPException, status
-from src.services import ProjectService
+from src.services import ProjectService, OllamaService
 from src.schemas import (
     ProjectResponse,
     ProjectRequest,
@@ -56,7 +56,7 @@ def get_project_settings(project_id: str):
 
 
 @router.put("/project/{project_id}/settings", operation_id="UpdateProjectSettings")
-def update_project_settings(project_id: str, data: ProjectSettingsBody):
+async def update_project_settings(project_id: str, data: ProjectSettingsBody):
     if str(data.project_id) != project_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -68,6 +68,34 @@ def update_project_settings(project_id: str, data: ProjectSettingsBody):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="allow_install_packages requires allow_shell to also be enabled.",
         )
+
+    # Reject settings that point at a model that isn't actually installed -
+    # without this, selecting a model and then deleting it left the project
+    # silently referencing a model that no longer exists. Empty is still
+    # allowed for both fields (base_model_name is enforced at run-start time
+    # instead - see AgentService.start_agent - and parsing_model_name is
+    # intentionally optional).
+    if data.base_model_name or data.parsing_model_name:
+        try:
+            installed = await OllamaService.get_models_list()
+        except Exception as e:
+            print(f"Could not verify installed models: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not verify installed models",
+            )
+        installed_names = {model.name for model in installed.models}
+
+        if data.base_model_name and data.base_model_name not in installed_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{data.base_model_name}' is not installed.",
+            )
+        if data.parsing_model_name and data.parsing_model_name not in installed_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{data.parsing_model_name}' is not installed.",
+            )
 
     try:
         return ProjectService.update_project_settings(data)

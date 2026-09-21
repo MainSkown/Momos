@@ -132,6 +132,24 @@ class DatabaseManager:
             session.refresh(merged_settings)
             return merged_settings
 
+    def clear_model_references(self, model_name: str) -> None:
+        """Nulls out base_model_name/parsing_model_name on any project's
+        settings that reference model_name - called right before the model
+        itself is deleted from Ollama, so a project can never keep pointing
+        at a model that no longer exists."""
+        with Session(self.engine) as session:
+            statement = select(ProjectSettings).where(
+                (ProjectSettings.base_model_name == model_name)
+                | (ProjectSettings.parsing_model_name == model_name)
+            )
+            for settings in session.exec(statement).all():
+                if settings.base_model_name == model_name:
+                    settings.base_model_name = ""
+                if settings.parsing_model_name == model_name:
+                    settings.parsing_model_name = ""
+                session.add(settings)
+            session.commit()
+
     def delete_project(self, project_id: str | uuid.UUID):
         parsed_uuid = self._parse_uuid(project_id)
 

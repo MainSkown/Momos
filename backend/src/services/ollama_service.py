@@ -1,4 +1,4 @@
-from src.core import ollama_manager
+from src.core import ollama_manager, db_manager
 from src.core.ollama_manager import capabilities_from_show_info
 from src.websocket import ws_registry, ModelPullingUpdate, WsTypes
 from src.schemas import (
@@ -105,3 +105,7 @@ class OllamaService:
     @staticmethod
     async def delete_model(model_name: str):
         await ollama_manager.delete_model(model_name)
+        # Without this, a project's settings could keep pointing at a model
+        # that no longer exists, silently, with nothing to catch it - see
+        # database_manager.py's clear_model_references for details.
+        db_manager.clear_model_references(model_name)
