@@ -22,3 +22,16 @@ class KaliCreationStage(str, Enum):
 
     def __str__(self) -> str:
         return self.value
+
+
+class KaliStatusResponse(BaseModel):
+    """Current Kali container state for a project - active reflects the
+    real container-level registry (KaliRegistry), not just the client/
+    session-level concept KaliUser/GetProjectKaliClient track, so it stays
+    accurate regardless of whether the container was started by an
+    explicit console connect or by an agent run."""
+
+    active: bool
+    building: bool
+    stage: Optional[KaliCreationStage] = None
+    target_id: Optional[str] = None

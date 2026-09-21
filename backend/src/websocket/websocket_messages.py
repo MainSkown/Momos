@@ -18,6 +18,7 @@ class WsTypes(str, Enum):
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
     KaliCreationStage = "KaliCreationStage"
+    KaliContainerActive = "KaliContainerActive"
     ModelPullingUpdate = "ModelPullingUpdate"
     OllamaDownloadProgress = "OllamaDownloadProgress"
     AgentMessage = "AgentMessage"
@@ -92,6 +93,15 @@ class KaliCreationStageMessage(OutboundMessage):
     project_id: str
     type: Literal[WsTypes.KaliCreationStage]
     stage: KaliCreationStage
+
+class KaliContainerActiveMessage(OutboundMessage):
+    """Broadcast once a Kali container actually becomes active for a
+    project - unlike CreatedKaliUserMessage (only sent for the explicit
+    "connect" flow in kali_user.py), this fires from KaliRegistry's own
+    get_manager, the single chokepoint every trigger (an agent run, a
+    console connect, or any Kali-using tool) goes through."""
+    project_id: str
+    type: Literal[WsTypes.KaliContainerActive]
 
 class ModelPullingUpdate(OutboundMessage):
     type: Literal[WsTypes.ModelPullingUpdate]

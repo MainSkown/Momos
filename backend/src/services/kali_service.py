@@ -1,5 +1,5 @@
-from src.schemas import KaliUser
-from src.core.kali_integration import kali_user_registry
+from src.schemas import KaliUser, KaliStatusResponse
+from src.core.kali_integration import kali_user_registry, kali_registry
 
 
 class KaliService:
@@ -38,3 +38,13 @@ class KaliService:
     async def create_client(project_id: str) -> KaliUser:
         client_id = await kali_user_registry.create_user(project_id)
         return KaliUser(client_id=client_id)
+
+    @staticmethod
+    def get_status(project_id: str) -> KaliStatusResponse:
+        build_status = kali_registry.get_build_status(project_id)
+        return KaliStatusResponse(
+            active=kali_registry.has_manager(project_id),
+            building=build_status is not None,
+            stage=build_status.stage if build_status else None,
+            target_id=build_status.target_id if build_status else None,
+        )

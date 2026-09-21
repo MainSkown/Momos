@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
-from src.schemas import KaliUser
+from src.schemas import KaliUser, KaliStatusResponse
 from src.services import KaliService
 router = APIRouter()
 
@@ -55,4 +55,19 @@ async def post_kali_user(project_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not create client",
+        )
+
+@router.get(
+    "/project/{project_id}/kali/status",
+    response_model=KaliStatusResponse,
+    operation_id="GetProjectKaliStatus",
+)
+def get_project_kali_status(project_id: str):
+    try:
+        return KaliService.get_status(project_id)
+    except Exception as e:
+        print(f"Kali registry error: {e}", flush=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not get Kali status",
         )

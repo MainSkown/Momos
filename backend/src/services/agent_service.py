@@ -434,6 +434,13 @@ class AgentService:
         loop = asyncio.get_running_loop()
 
         def on_stage(stage):
+            # A plain dict write, safe to call directly from this executor
+            # thread - see kali_user.py's identical on_stage for why. Lets a
+            # client that missed the live KaliCreationStageMessage below
+            # (e.g. Targets.vue refreshed mid-build) recover current
+            # progress via kali_registry.get_build_status.
+            kali_registry.set_build_stage(project_id, stage, target_id=target_id)
+
             # Called from the executor thread running the container's
             # (synchronous) Docker setup - hop back onto the event loop.
             asyncio.run_coroutine_threadsafe(
@@ -477,6 +484,7 @@ class AgentService:
 
         try:
             kali_manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
+            kali_registry.clear_build_status(project_id)
             await kali_manager.prepare_nftables(target)
 
             # ANDed here as defense-in-depth against a settings row saved
@@ -503,6 +511,7 @@ class AgentService:
             # the UI would just show "starting" indefinitely.
             print(f"Could not prepare agent run for target {target_id}: {e}")
             _running_targets.pop(target_id, None)
+            kali_registry.clear_build_status(project_id)
             await _persist_and_broadcast(
                 project_id, target_id, "action", f"Could not start agent: {e}"
             )

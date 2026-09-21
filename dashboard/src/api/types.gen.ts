@@ -242,6 +242,27 @@ export type HttpValidationError = {
 export type InboundTraffic = SendCommandMessage | AgentInterruptResponseMessage;
 
 /**
+ * KaliContainerActiveMessage
+ *
+ * Broadcast once a Kali container actually becomes active for a
+ * project - unlike CreatedKaliUserMessage (only sent for the explicit
+ * "connect" flow in kali_user.py), this fires from KaliRegistry's own
+ * get_manager, the single chokepoint every trigger (an agent run, a
+ * console connect, or any Kali-using tool) goes through.
+ */
+export type KaliContainerActiveMessage = {
+    /**
+     * Type
+     */
+    type: 'KaliContainerActive';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
  * KaliCreationStage
  *
  * Stages the Kali worker container goes through on first creation for a
@@ -265,6 +286,31 @@ export type KaliCreationStageMessage = {
      */
     project_id: string;
     stage: KaliCreationStage;
+};
+
+/**
+ * KaliStatusResponse
+ *
+ * Current Kali container state for a project - active reflects the
+ * real container-level registry (KaliRegistry), not just the client/
+ * session-level concept KaliUser/GetProjectKaliClient track, so it stays
+ * accurate regardless of whether the container was started by an
+ * explicit console connect or by an agent run.
+ */
+export type KaliStatusResponse = {
+    /**
+     * Active
+     */
+    active: boolean;
+    /**
+     * Building
+     */
+    building: boolean;
+    stage?: KaliCreationStage | null;
+    /**
+     * Target Id
+     */
+    target_id?: string | null;
 };
 
 /**
@@ -386,7 +432,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
+export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
 
 /**
  * ProjectRequest
@@ -995,6 +1041,36 @@ export type CreateKaliUserResponses = {
 };
 
 export type CreateKaliUserResponse = CreateKaliUserResponses[keyof CreateKaliUserResponses];
+
+export type GetProjectKaliStatusData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/kali/status';
+};
+
+export type GetProjectKaliStatusErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectKaliStatusError = GetProjectKaliStatusErrors[keyof GetProjectKaliStatusErrors];
+
+export type GetProjectKaliStatusResponses = {
+    /**
+     * Successful Response
+     */
+    200: KaliStatusResponse;
+};
+
+export type GetProjectKaliStatusResponse = GetProjectKaliStatusResponses[keyof GetProjectKaliStatusResponses];
 
 export type GetModelsListData = {
     body?: never;

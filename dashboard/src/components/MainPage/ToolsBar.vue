@@ -122,9 +122,10 @@ import { tools } from "../tools";
 import { useMomosStore } from "@/store/momos_store.ts";
 import { useI18n } from "vue-i18n";
 import {
-  getProjectKaliClient,
+  getProjectKaliStatus,
   getProjectSettings,
-  type CreatedKaliUserMessage,
+  type KaliContainerActiveMessage,
+  type KaliCreationStageMessage,
 } from "@/api";
 import { useWebSocketClient, type tCallback } from "@/websockets/websocket_client";
 
@@ -267,29 +268,49 @@ async function loadKaliStatus(project_id: string) {
     return;
   }
 
-  const result = await getProjectKaliClient({ path: { project_id } });
+  const result = await getProjectKaliStatus({ path: { project_id } });
 
-  if (result.data) {
-    kaliStatus.value = result.data.pending ? "pending" : "active";
-  } else {
+  if (!result.data) {
     kaliStatus.value = "inactive";
+    return;
   }
+
+  kaliStatus.value = result.data.building
+    ? "pending"
+    : result.data.active
+      ? "active"
+      : "inactive";
 }
 
-const onKaliCreated: tCallback = (message) => {
-  const created = message as CreatedKaliUserMessage;
+// Reflects the container-level KaliRegistry (via KaliContainerActive/
+// KaliCreationStage), not just the client/session-level concept
+// CreatedKaliUserMessage tracks - so this stays accurate whether the
+// container was started by an explicit console connect or by an agent run.
+const onKaliContainerActive: tCallback = (message) => {
+  const active = message as KaliContainerActiveMessage;
 
-  if (created.error || created.project_id !== store.openedProject) return;
+  if (active.error || active.project_id !== store.openedProject) return;
 
   kaliStatus.value = "active";
+};
+
+const onKaliCreationStage: tCallback = (message) => {
+  const stageMessage = message as KaliCreationStageMessage;
+
+  if (stageMessage.error || stageMessage.project_id !== store.openedProject) return;
+
+  kaliStatus.value = "pending";
 };
 
 onMounted(() => {
   loadProjectSettings(store.openedProject);
   loadKaliStatus(store.openedProject);
 
-  if (!ws_client.hook_exists("CreatedKaliUserMessage", onKaliCreated))
-    ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated);
+  if (!ws_client.hook_exists("KaliContainerActive", onKaliContainerActive))
+    ws_client.add_hook("KaliContainerActive", onKaliContainerActive);
+
+  if (!ws_client.hook_exists("KaliCreationStage", onKaliCreationStage))
+    ws_client.add_hook("KaliCreationStage", onKaliCreationStage);
 });
 
 watch(

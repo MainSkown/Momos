@@ -42,6 +42,7 @@ class KaliUserRegistry:
             # arrives.
             logger.error(f"Failed to create Kali client for project {project_id}: {e}")
             self.pending_users.pop(client_id, None)
+            kali_registry.clear_build_status(project_id)
 
             await ws_registry.send_message(
                 CreatedKaliUserMessage(
@@ -98,6 +99,15 @@ class KaliUser:
         loop = asyncio.get_running_loop()
 
         def on_stage(stage: KaliCreationStage):
+            # A plain dict write, safe to call directly from this executor
+            # thread (protected by the GIL like any other CPython dict
+            # mutation) - unlike the websocket send below, it doesn't need
+            # the event loop. Persisted so a client that missed the live
+            # KaliCreationStageMessage below (e.g. a page refresh mid-build)
+            # can still recover current progress via
+            # kali_registry.get_build_status.
+            kali_registry.set_build_stage(project_id, stage, target_id=None)
+
             # Called from the executor thread running the (synchronous) Docker
             # setup - hop back onto the event loop to actually send it.
             asyncio.run_coroutine_threadsafe(
@@ -113,6 +123,7 @@ class KaliUser:
 
         # Check/Get the manager async
         manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
+        kali_registry.clear_build_status(project_id)
         if not manager:
             raise RuntimeError(
                 f"Could not create Kali Manager for project: {project_id}"

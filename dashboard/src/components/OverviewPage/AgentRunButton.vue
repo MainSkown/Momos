@@ -74,6 +74,7 @@ import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import {
   getTargetAgentRun,
+  getProjectKaliStatus,
   startAgent,
   pauseAgent,
   type AgentRunResponse,
@@ -148,6 +149,23 @@ async function loadRun() {
     path: { project_id: props.target.project_id, target_id: props.target.id },
   });
   run.value = result.data ?? null;
+}
+
+// Recovers the "container is being built for this target" indicator after
+// a page refresh - isBuilding is otherwise only ever set by this session's
+// own handleStart() call, so a refresh mid-build previously lost it
+// entirely (the only sign anything was happening was Agent Logs' "running"
+// state, once the run itself actually started).
+async function loadBuildStatus() {
+  const result = await getProjectKaliStatus({
+    path: { project_id: props.target.project_id },
+  });
+
+  if (!result.data?.building) return;
+  if (result.data.target_id !== props.target.id) return;
+
+  isBuilding.value = true;
+  buildingStage.value = result.data.stage ?? null;
 }
 
 async function handleStart() {
@@ -251,6 +269,7 @@ let tickInterval: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
   loadRun();
+  loadBuildStatus();
 
   if (!ws_client.hook_exists("AgentRunTimer", onRunTimer))
     ws_client.add_hook("AgentRunTimer", onRunTimer);
