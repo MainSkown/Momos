@@ -1770,14 +1770,16 @@ def create_guided_session_tools(
 
     @tool(FTP_CONNECT_TOOL_NAME, response_format="content_and_artifact")
     async def ftp_connect(username: str = "anonymous", password: str = "") -> str:
-        """Connects (or reconnects) to this run's target's FTP service and
-        logs in - handles ftp's own login sequence for you, so there's no
-        need to figure out its interactive Name:/Password: prompts or
-        type raw protocol commands (USER/PASS) yourself; just give the
-        credentials to try. Safe to call again to retry with different
-        credentials - reuses the same session rather than erroring if one
-        is already open. Once logged in, use ftp_command for anything
-        else (ls, get, pwd, cd, ...).
+        """Connects to this run's target's FTP service and logs in -
+        handles ftp's own login sequence for you, so there's no need to
+        figure out its interactive Name:/Password: prompts or type raw
+        protocol commands (USER/PASS) yourself; just give the credentials
+        to try. Only call this once per set of credentials - once it
+        reports a successful login, the session is already open and
+        authenticated, so use ftp_command for everything else (ls, get,
+        pwd, cd, ...) instead of calling this again. Only retry this tool
+        if the previous call actually failed (login failed, connection
+        dropped) or you need to try different credentials.
 
         Args:
             username: FTP username to try. Defaults to "anonymous".
@@ -1924,10 +1926,13 @@ def create_guided_session_tools(
 
     @tool(FTP_COMMAND_TOOL_NAME, response_format="content_and_artifact")
     async def ftp_command(command: str) -> str:
-        """Sends one command to your already-open FTP session (ls, get,
-        pwd, cd, binary, ...) - call ftp_connect first if you haven't
-        yet. Not gated by shell access: ftp's own command grammar can't
-        reach outside the already-open connection to the target.
+        """Sends one command to your already-open, already-authenticated
+        FTP session (ls, get, pwd, cd, binary, ...) - call ftp_connect
+        first if you haven't yet, but once it reports a successful login
+        you are already logged in and should use this tool for every
+        further command instead of calling ftp_connect again. Not gated
+        by shell access: ftp's own command grammar can't reach outside
+        the already-open connection to the target.
 
         Args:
             command: The ftp command to send, e.g. "ls" or "get file.txt".
