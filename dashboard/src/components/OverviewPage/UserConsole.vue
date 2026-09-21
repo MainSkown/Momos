@@ -127,7 +127,7 @@ import {
   useWebSocketClient,
   type tCallback,
 } from "@/websockets/websocket_client";
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import {
@@ -233,16 +233,28 @@ const onConsoleOutput: tCallback = (message) => {
   store.pushCmdLine(project_id, message.output, "cmd");
 };
 
+// Hook callbacks are fresh closures every time this component's <script
+// setup> runs (i.e. every mount) - without capturing and removing them on
+// unmount, ws_client's hook_exists (a reference-equality check) never
+// matches a previous mount's closure, so remounting stacks additional
+// handlers that each independently re-append the same message, producing
+// duplicate console output until the next full page reload.
+const hook_handles: Array<{ delete: () => void } | undefined> = [];
+
 const add_hooks = (project_id: string) => {
   if (!ws_client.hook_exists("CreatedKaliUserMessage", onKaliCreated))
-    ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated);
+    hook_handles.push(ws_client.add_hook("CreatedKaliUserMessage", onKaliCreated));
 
   if (!ws_client.hook_exists("KaliCreationStage", onKaliCreationStage))
-    ws_client.add_hook("KaliCreationStage", onKaliCreationStage);
+    hook_handles.push(ws_client.add_hook("KaliCreationStage", onKaliCreationStage));
 
   if (!ws_client.hook_exists("ReceiveCommandOutputMessage", onConsoleOutput))
-    ws_client.add_hook("ReceiveCommandOutputMessage", onConsoleOutput);
+    hook_handles.push(ws_client.add_hook("ReceiveCommandOutputMessage", onConsoleOutput));
 };
+
+onUnmounted(() => {
+  hook_handles.forEach((handle) => handle?.delete());
+});
 
 function set_ws(project_id: string) {
   add_hooks(project_id);
