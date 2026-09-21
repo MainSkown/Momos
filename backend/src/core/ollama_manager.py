@@ -89,19 +89,19 @@ def capabilities_from_show_info(model_name: str, show_info) -> dict:
         2048,
     )
 
-    # `modelfile` is a declared-but-nullable field - present-but-None (not
-    # merely absent) for some models, which crashes a bare `.lower()`.
-    model_file = (getattr(show_info, "modelfile", None) or "").lower()
     # Prefer Ollama's own reported capability list when the server provides
-    # one; the name/modelfile substring checks remain as a fallback for
-    # servers/models that don't populate `capabilities`.
+    # one; the model-name allowlist remains as a fallback for servers/models
+    # that don't populate `capabilities`. Deliberately NOT a substring check
+    # against the model's Modelfile text - that previously false-positived
+    # on any model whose system prompt/template merely mentioned the word
+    # "thinking" (e.g. "think step by step") without actually supporting
+    # reasoning mode.
     capabilities = getattr(show_info, "capabilities", None) or []
     thinking = any(
         [
             "thinking" in capabilities,
             "deepseek-r1" in model_name.lower(),
             "qwq" in model_name.lower(),
-            "thinking" in model_file,
         ]
     )
 
