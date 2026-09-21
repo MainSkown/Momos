@@ -1472,7 +1472,11 @@ def create_pentest_tools(
                 line) inside the Kali container.
             password: A single password to try.
             password_list: Path to an existing file of passwords inside
-                the Kali container.
+                the Kali container. Two wordlists are available by
+                default: "/usr/share/wordlists/dirb/common.txt" (small,
+                general-purpose) and "/usr/share/wordlists/rockyou.txt"
+                (large, password-focused - better suited to this arg than
+                to username_list).
         """
         host, error = await _get_target_host(target_id)
         if error:
@@ -1552,7 +1556,9 @@ def create_pentest_tools(
             port: Web server port to scan. Defaults to 80.
             use_tls: Use https instead of http.
             wordlist: Path to an existing wordlist file inside the Kali
-                container. Defaults to a small, fast built-in list.
+                container. Defaults to "/usr/share/wordlists/dirb/common.txt"
+                (small, fast, ~4.6k entries). For a much larger list, use
+                "/usr/share/wordlists/rockyou.txt" (large, slower).
             extensions: Comma-separated file extensions to also try, e.g.
                 "php,txt,html". Omit for none.
         """
