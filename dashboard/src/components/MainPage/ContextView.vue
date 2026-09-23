@@ -1,7 +1,7 @@
 <template>
 <div class="border">
     <div class="header-text">
-        {{ $t('context_window.context_window')}}
+        {{ title }}
     </div>
 
     <div class="separator" />
@@ -9,3 +9,7 @@
     <slot></slot>
 </div>
 </template>
+
+<script setup lang="ts">
+defineProps<{ title: string }>();
+</script>

@@ -3,8 +3,9 @@
     <ProjectBar class="project-bar"/>
     <div class="row gap-low" v-if="store.getProjects.length > 0">
       <ToolsBar class="tool-bar" v-model="currentTool" />
-      <ContextView class="context-view"> 
+      <ContextView class="context-view" :title="currentToolLabel">
         <Overview v-if="currentTool == TOOLS_KEYS.OVERVIEW" />
+        <Vulnerabilities v-if="currentTool == TOOLS_KEYS.VULNERABILITIES" />
         <ProjectSettingsPage v-if="currentTool == TOOLS_KEYS.PROJECT_CONFIGURATION" />
       </ContextView>
     </div>
@@ -18,10 +19,13 @@ import ProjectBar from "./MainPage/ProjectBar.vue";
 import ToolsBar from "./MainPage/ToolsBar.vue";
 import Overview from "./OverviewPage/Overview.vue";
 import { tools, TOOLS_KEYS } from "./tools.ts";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import ProjectSettingsPage from "./ProjectSettingsPage/ProjectSettingsPage.vue";
+import Vulnerabilities from "./Vulnerabilities/Vulnerabilities.vue";
 
 const store = useMomosStore()
+const { t: $t } = useI18n();
 
 onMounted(async () => {
   try{
@@ -33,6 +37,11 @@ onMounted(async () => {
 })
 
 const currentTool = ref<string>(tools[0] !== undefined ? tools[0].key : '');
+
+const currentToolLabel = computed(() => {
+  const tool = tools.find((t) => t.key === currentTool.value);
+  return tool ? $t(tool.name) : $t("context_window.context_window");
+});
 </script>
 
 <style lang="css">

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -174,6 +174,28 @@ export const isProjectAgentRunning = <ThrowOnError extends boolean = false>(opti
  * Get Target Agent Run
  */
 export const getTargetAgentRun = <ThrowOnError extends boolean = false>(options: Options<GetTargetAgentRunData, ThrowOnError>): RequestResult<GetTargetAgentRunResponses, GetTargetAgentRunErrors, ThrowOnError> => (options.client ?? client).get<GetTargetAgentRunResponses, GetTargetAgentRunErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/run', ...options });
+
+/**
+ * Get All Vulnerabilities In Project
+ */
+export const getAllVulnerabilitiesInProject = <ThrowOnError extends boolean = false>(options: Options<GetAllVulnerabilitiesInProjectData, ThrowOnError>): RequestResult<GetAllVulnerabilitiesInProjectResponses, GetAllVulnerabilitiesInProjectErrors, ThrowOnError> => (options.client ?? client).get<GetAllVulnerabilitiesInProjectResponses, GetAllVulnerabilitiesInProjectErrors, ThrowOnError>({ url: '/api/project/{project_id}/vulnerabilities', ...options });
+
+/**
+ * Delete Vulnerability
+ */
+export const deleteVulnerability = <ThrowOnError extends boolean = false>(options: Options<DeleteVulnerabilityData, ThrowOnError>): RequestResult<DeleteVulnerabilityResponses, DeleteVulnerabilityErrors, ThrowOnError> => (options.client ?? client).delete<DeleteVulnerabilityResponses, DeleteVulnerabilityErrors, ThrowOnError>({ url: '/api/vulnerability/{vulnerability_id}', ...options });
+
+/**
+ * Update Vulnerability
+ */
+export const updateVulnerability = <ThrowOnError extends boolean = false>(options: Options<UpdateVulnerabilityData, ThrowOnError>): RequestResult<UpdateVulnerabilityResponses, UpdateVulnerabilityErrors, ThrowOnError> => (options.client ?? client).put<UpdateVulnerabilityResponses, UpdateVulnerabilityErrors, ThrowOnError>({
+    url: '/api/vulnerability/{vulnerability_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Ws Types Dummy

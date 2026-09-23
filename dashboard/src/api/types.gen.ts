@@ -600,6 +600,52 @@ export type ResponseTarget = {
 };
 
 /**
+ * ResponseVulnerability
+ */
+export type ResponseVulnerability = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Severity
+     */
+    severity: string;
+    /**
+     * Cvss4 Vector
+     */
+    cvss4_vector?: string | null;
+    /**
+     * Cvss4 Score
+     */
+    cvss4_score?: number;
+    /**
+     * Proof Of Concept
+     */
+    proof_of_concept: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Found In
+     */
+    found_in: string;
+    /**
+     * Related To Project
+     */
+    related_to_project: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Found By Model
+     */
+    found_by_model?: string | null;
+};
+
+/**
  * SendCommandMessage
  */
 export type SendCommandMessage = {
@@ -677,6 +723,32 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * VulnerabilityBase
+ */
+export type VulnerabilityBase = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Severity
+     */
+    severity: string;
+    /**
+     * Cvss4 Vector
+     */
+    cvss4_vector?: string | null;
+    /**
+     * Cvss4 Score
+     */
+    cvss4_score?: number;
+    /**
+     * Proof Of Concept
+     */
+    proof_of_concept: string;
 };
 
 /**
@@ -1327,6 +1399,98 @@ export type GetTargetAgentRunResponses = {
 };
 
 export type GetTargetAgentRunResponse = GetTargetAgentRunResponses[keyof GetTargetAgentRunResponses];
+
+export type GetAllVulnerabilitiesInProjectData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/vulnerabilities';
+};
+
+export type GetAllVulnerabilitiesInProjectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAllVulnerabilitiesInProjectError = GetAllVulnerabilitiesInProjectErrors[keyof GetAllVulnerabilitiesInProjectErrors];
+
+export type GetAllVulnerabilitiesInProjectResponses = {
+    /**
+     * Response Getallvulnerabilitiesinproject
+     *
+     * Successful Response
+     */
+    200: Array<ResponseVulnerability>;
+};
+
+export type GetAllVulnerabilitiesInProjectResponse = GetAllVulnerabilitiesInProjectResponses[keyof GetAllVulnerabilitiesInProjectResponses];
+
+export type DeleteVulnerabilityData = {
+    body?: never;
+    path: {
+        /**
+         * Vulnerability Id
+         */
+        vulnerability_id: string;
+    };
+    query?: never;
+    url: '/api/vulnerability/{vulnerability_id}';
+};
+
+export type DeleteVulnerabilityErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteVulnerabilityError = DeleteVulnerabilityErrors[keyof DeleteVulnerabilityErrors];
+
+export type DeleteVulnerabilityResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteVulnerabilityResponse = DeleteVulnerabilityResponses[keyof DeleteVulnerabilityResponses];
+
+export type UpdateVulnerabilityData = {
+    body: VulnerabilityBase;
+    path: {
+        /**
+         * Vulnerability Id
+         */
+        vulnerability_id: string;
+    };
+    query?: never;
+    url: '/api/vulnerability/{vulnerability_id}';
+};
+
+export type UpdateVulnerabilityErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateVulnerabilityError = UpdateVulnerabilityErrors[keyof UpdateVulnerabilityErrors];
+
+export type UpdateVulnerabilityResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResponseVulnerability;
+};
+
+export type UpdateVulnerabilityResponse = UpdateVulnerabilityResponses[keyof UpdateVulnerabilityResponses];
 
 export type WsTypesData = {
     body?: never;

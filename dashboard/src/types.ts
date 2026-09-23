@@ -1,4 +1,4 @@
-import type { ProjectResponse, ResponseTarget } from "./api";
+import type { ProjectResponse, ResponseTarget, ResponseVulnerability } from "./api";
 
 export type tTool = {
   key: string;
@@ -15,6 +15,14 @@ export type tAddresses = {
 };
 
 export type tTarget = ResponseTarget
+
+export type tVulnerability = ResponseVulnerability
+
+// Ordered informational -> critical, matching backend SEVERITY_SCORES in
+// vulnerability_scheme.py - drives both the edit-dialog severity picker
+// and the severity filter dropdown.
+export const SEVERITY_LEVELS = ["informational", "low", "medium", "high", "critical"] as const;
+export type tSeverity = (typeof SEVERITY_LEVELS)[number];
 
 /* Those are not types, but still useful */
 

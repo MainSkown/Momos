@@ -34,6 +34,7 @@
   --status-critical: #db1212;
   --status-high: #ef4444;
   --status-medium: #f87171;
+  --status-low: #fca5a5;
   --status-success: #22c55e;
 
   --hover-bg: rgba(220, 38, 38, 0.1);
@@ -107,6 +108,27 @@ a:hover {
 }
 .text-inactive{
   color: var(--status-critical)
+}
+
+.severity-critical {
+  color: var(--status-critical);
+  border-color: var(--status-critical);
+}
+.severity-high {
+  color: var(--status-high);
+  border-color: var(--status-high);
+}
+.severity-medium {
+  color: var(--status-medium);
+  border-color: var(--status-medium);
+}
+.severity-low {
+  color: var(--status-low);
+  border-color: var(--status-low);
+}
+.severity-informational {
+  color: var(--text-gray);
+  border-color: var(--text-gray);
 }
 
 .text-white {
@@ -326,6 +348,16 @@ a:hover {
   color: var(--red-hover);
 }
 
+.radio-input:disabled + .radio-label {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.radio-input:disabled + .radio-label:hover {
+  background-color: inherit;
+  color: var(--text-gray);
+}
+
 .checkbox-input {
   appearance: none;
   -webkit-appearance: none;
@@ -403,7 +435,7 @@ a:hover {
 }
 
 .input-wrapper:has(.floating-label) .input-field {
-  padding-top: 15px !important; 
+  padding-top: 20px !important;
 }
 
 .floating-label {
