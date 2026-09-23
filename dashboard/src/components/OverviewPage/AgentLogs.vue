@@ -277,12 +277,14 @@ function formatTimestamp(createdAt: string): string {
 
 .log-row {
   display: flex;
-  align-items: center;
+  align-items: start ;
+  text-justify: center;
   gap: 8px;
 }
 
 .log-icon {
   font-size: 18px;
+  margin-top: 2px;
   flex-shrink: 0;
 }
 
@@ -302,7 +304,7 @@ function formatTimestamp(createdAt: string): string {
   color: var(--text-gray-darker);
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  margin-top: 2px;
+  margin-top: 5px;
   flex-shrink: 0;
 }
 
