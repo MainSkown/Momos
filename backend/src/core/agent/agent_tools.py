@@ -436,6 +436,25 @@ async def _suggest_command_fix(
     return note
 
 
+# Shared between PARSER_SYSTEM_PROMPT and _CLAIM_VERIFICATION_SYSTEM_PROMPT -
+# both independently restated this almost sentence-for-sentence (see
+# PROMPT_AUDIT.md finding 3.3); one canonical wording referenced by both
+# instead.
+_LOCAL_USERNAME_CAVEAT = (
+    "The local Kali session itself runs as user 'momos' - this string "
+    "appearing in a shell prompt (e.g. 'momos@host:~$') or as a client's "
+    "own default-username suggestion (e.g. ftp's 'Name (host:momos):') is "
+    "your OWN local username, never a credential found on the target; "
+    "never report it as one."
+)
+_APPLICATION_LAYER_EVIDENCE_CAVEAT = (
+    "A bare network/transport-level connection succeeding (e.g. netcat's "
+    "own \"Connection to <host> <port> succeeded!\", or a TCP port simply "
+    "being open/reachable) is NOT evidence of anything at the application "
+    "layer"
+)
+
+
 PARSER_SYSTEM_PROMPT = (
     "You are a data-extraction assistant supporting an autonomous "
     "penetration-testing agent. You are given ONLY the raw output from one "
@@ -459,16 +478,10 @@ PARSER_SYSTEM_PROMPT = (
     "summary with a checklist of every category this command didn't "
     "address. Remove repetitive noise, banners, and formatting clutter. "
     "Quote any credentials, paths, or flags VERBATIM - never paraphrase or "
-    "approximate them. The local Kali session itself runs as user 'momos' - "
-    "this string appearing in a shell prompt (e.g. 'momos@host:~$') or as a "
-    "client's own default-username suggestion (e.g. ftp's 'Name "
-    "(host:momos):') is your OWN local username, never a credential found "
-    "on the target; never report it as one. A program asking for a "
+    f"approximate them. {_LOCAL_USERNAME_CAVEAT} A program asking for a "
     "username/password is not itself evidence of a credential - only an "
-    "actual authentication result (success or failure) is. A bare network/"
-    "transport-level connection succeeding (e.g. netcat's own \"Connection "
-    "to <host> <port> succeeded!\", or a TCP port simply being open/"
-    "reachable) is NOT evidence of anything at the application layer - "
+    f"actual authentication result (success or failure) is. "
+    f"{_APPLICATION_LAYER_EVIDENCE_CAVEAT} - "
     "never report a login, authentication, or exploit as successful unless "
     "the output itself contains an explicit application-level response "
     "from the actual service (a protocol status code such as FTP 230/530, "
@@ -669,18 +682,13 @@ _CLAIM_VERIFICATION_SYSTEM_PROMPT = (
     "itself typed or attempted are NOT evidence of success - only an "
     "explicit result in the output counts: an explicit success/failure "
     "indicator (e.g. an FTP 230 vs 530 reply code), an actual returned "
-    "file listing or command result, or a clear stated error. A bare "
-    "network/transport-level connection succeeding (e.g. netcat's own "
-    "\"Connection to <host> <port> succeeded!\", or a TCP port simply "
-    "being open/reachable) is NOT evidence of anything at the "
-    "application layer - a login, authentication, or exploit claim needs "
-    "an explicit application-level response from the actual service "
-    "itself, not just a successful network connection to it. A username "
-    "or password appearing only in the ATTEMPTED command (not echoed back "
-    "with a server confirmation) is not a discovered credential - the "
-    "agent's own local shell account is also never a target credential, "
-    "even if it appears in the output (e.g. as a shell prompt or a "
-    "client's own default-username suggestion).\n\n"
+    f"file listing or command result, or a clear stated error. "
+    f"{_APPLICATION_LAYER_EVIDENCE_CAVEAT} - a login, authentication, or "
+    "exploit claim needs an explicit application-level response from the "
+    "actual service itself, not just a successful network connection to "
+    "it. A username or password appearing only in the ATTEMPTED command "
+    "(not echoed back with a server confirmation) is not a discovered "
+    f"credential. {_LOCAL_USERNAME_CAVEAT}\n\n"
     "Set 'supported' to true only if the output clearly backs the claim. "
     "If the output is ambiguous, incomplete, or silent on the specific "
     "claim, set 'supported' to false - the agent should re-verify rather "
@@ -1472,11 +1480,11 @@ def create_pentest_tools(
                 line) inside the Kali container.
             password: A single password to try.
             password_list: Path to an existing file of passwords inside
-                the Kali container. Two wordlists are available by
-                default: "/usr/share/wordlists/dirb/common.txt" (small,
-                general-purpose) and "/usr/share/wordlists/rockyou.txt"
-                (large, password-focused - better suited to this arg than
-                to username_list).
+                the Kali container. Two default wordlists are available in
+                this container: "/usr/share/wordlists/dirb/common.txt"
+                (small, ~4.6k entries, general-purpose) and
+                "/usr/share/wordlists/rockyou.txt" (large, password-focused
+                - better suited to this arg than to username_list).
         """
         host, error = await _get_target_host(target_id)
         if error:
@@ -1557,8 +1565,10 @@ def create_pentest_tools(
             use_tls: Use https instead of http.
             wordlist: Path to an existing wordlist file inside the Kali
                 container. Defaults to "/usr/share/wordlists/dirb/common.txt"
-                (small, fast, ~4.6k entries). For a much larger list, use
-                "/usr/share/wordlists/rockyou.txt" (large, slower).
+                (small, fast). Same two default wordlists as
+                hydra_bruteforce's password_list - see its description for
+                sizes/tradeoffs; use rockyou.txt here for a much larger,
+                slower scan.
             extensions: Comma-separated file extensions to also try, e.g.
                 "php,txt,html". Omit for none.
         """

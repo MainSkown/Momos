@@ -130,9 +130,52 @@ def _format_prompt_value(value) -> str:
     return str(value)
 
 
-def _render_start_prompt(template: str, target: Target) -> str:
+def _capability_note(project_settings: ProjectSettings) -> str:
+    """A short corrective block appended by _render_start_prompt when this
+    project's actual allow_shell/allow_install_packages settings mean some
+    tool the starting prompt's own text may describe (the default
+    base_starting_prompt does; a hand-edited one might too) isn't actually
+    available this run - see PROMPT_AUDIT.md finding 4.2. Applied
+    unconditionally on the flags themselves, not on whether the prompt is
+    still the unmodified default - starting_prompt is stored per-project and
+    only ever SEEDED from base_starting_prompt at project creation
+    (project_settings_factory), so a template-only fix would never reach an
+    already-created or hand-edited project. Empty string when both flags are
+    on (today's implicit assumption, so nothing needs correcting)."""
+    if not project_settings.allow_shell:
+        return (
+            "\n\n### Runtime Note\n"
+            "Raw terminal access is disabled for this run - `run`, "
+            "`new_session`, `switch_session`, `list_sessions`, "
+            "`close_session`, `interrupt_session`, and "
+            "`install_kali_package` are NOT available, regardless of "
+            "anything said above. Your only way to act against the target "
+            "is the structured tools (`nmap_scan`, `hydra_bruteforce`, "
+            "`gobuster_scan`, `searchsploit_search`/`searchsploit_view`/"
+            "`searchsploit_run`, `ftp_connect`/`ftp_command`, "
+            "`ssh_check_login`/`ssh_run`, `telnet_probe`) - use those for "
+            "everything."
+        )
+    if not project_settings.allow_install_packages:
+        return (
+            "\n\n### Runtime Note\n"
+            "Package installation is disabled for this run - "
+            "`install_kali_package` is NOT available, regardless of "
+            "anything said above. Work only with what's already listed as "
+            "installed; you have no way to add anything else."
+        )
+    return ""
+
+
+def _render_start_prompt(
+    template: str, target: Target, project_settings: ProjectSettings
+) -> str:
     """Replaces every {{placeholder}} in the starting prompt with the target's
-    actual values - matching the placeholders documented in ProjectSettingsPage.vue."""
+    actual values - matching the placeholders documented in
+    ProjectSettingsPage.vue - then appends a runtime capability note (see
+    _capability_note) if this project's allow_shell/allow_install_packages
+    settings mean some tool the prompt's own text may describe isn't
+    actually available this run."""
     replacements = {
         "{{name}}": _format_prompt_value(target.name),
         "{{description}}": _format_prompt_value(target.description),
@@ -146,7 +189,7 @@ def _render_start_prompt(template: str, target: Target) -> str:
     for placeholder, value in replacements.items():
         rendered = rendered.replace(placeholder, value)
 
-    return rendered
+    return rendered + _capability_note(project_settings)
 
 
 def _render_tool_call_content(tool_name: str, args: dict) -> str:
@@ -631,7 +674,7 @@ class AgentService:
             async for event in agent.start_agent(
                 target=target,
                 start_prompt=_render_start_prompt(
-                    project_settings.starting_prompt, target
+                    project_settings.starting_prompt, target, project_settings
                 ),
                 thread_id=target_id,
                 should_interrupt=project_settings.should_interrupt,
