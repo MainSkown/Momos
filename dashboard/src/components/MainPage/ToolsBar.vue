@@ -323,6 +323,9 @@ watch(
 </script>
 
 <style scoped lang="css">
+.tools-box{
+  height: 86vh;
+}
 
 .options {
   margin: 10px;
