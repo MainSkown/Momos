@@ -45,6 +45,11 @@ _stop_events: Dict[str, asyncio.Event] = {}
 # target_id -> the active run's shared time-remaining state (see Agent.start_agent)
 _run_states: Dict[str, dict] = {}
 
+# target_id -> True if the pending stop_event.set() should end the run as
+# FINISHED (not resumable) rather than PAUSED - set by finish_agent(),
+# consumed once in _run_agent's post-loop status decision.
+_finish_intents: Dict[str, bool] = {}
+
 
 async def _set_running(project_id: str, target_id: str, running: bool):
     if running:
@@ -532,6 +537,41 @@ class AgentService:
         stop_event.set()
 
     @staticmethod
+    async def finish_agent(project_id: str, target_id: str):
+        """Ends the run outright (FINISHED, not resumable), as opposed to
+        pause_agent's PAUSED/resumable stop. Reachable from two distinct
+        states, handled differently since only one of them has anything
+        actually running:
+        - RUNNING: signal the active loop's stop_event, same as pause_agent,
+          but flagged so the post-loop status decision resolves to FINISHED
+          instead of PAUSED. Only effective while the agent is actually in
+          its main loop - a run parked in _pending_interrupts (awaiting
+          interrupt approval, status INTERRUPTED) isn't waiting on
+          stop_event at all, so this has no effect until
+          _on_interrupt_response resumes it - callers should gate this the
+          same way pause_agent already is (status == "running" only).
+        - PAUSED: there is no active loop/stop_event at all (_run_agent's
+          finally already popped it) - directly flip the persisted status
+          instead. This is what lets a paused run be finished outright from
+          the UI's resume button, instead of only ever being resumed.
+        Any other state (no run, already FINISHED/FAILED) is a no-op."""
+        AgentService._get_owned_target(project_id, target_id)
+
+        stop_event = _stop_events.get(target_id)
+
+        if stop_event is not None:
+            # Must be recorded before stop_event.set() - _run_agent's
+            # post-loop status decision reads this once the loop wakes up
+            # and exhausts, immediately after the event fires.
+            _finish_intents[target_id] = True
+            stop_event.set()
+            return
+
+        existing_run = db_manager.get_agent_run(target_id)
+        if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
+            await _persist_run_state(project_id, target_id, AgentRunState.FINISHED, 0)
+
+    @staticmethod
     def get_run(project_id: str, target_id: str) -> Optional[AgentRun]:
         AgentService._get_owned_target(project_id, target_id)
 
@@ -657,13 +697,25 @@ class AgentService:
                 )
 
             # The generator exhausted normally - either the user paused it,
-            # the agent decided it was done (finish_summary is set), or it
-            # genuinely ran out of time.
+            # the user held the button to finish it outright, the agent
+            # decided it was done (finish_summary is set), or it genuinely
+            # ran out of time. finish_agent() takes priority over the plain
+            # stop_event check below - a held-to-finish stop must never be
+            # reclassified as PAUSED (which would make it resumable).
+            finished_by_request = _finish_intents.pop(target_id, False)
             final_status = (
-                AgentRunState.PAUSED if stop_event.is_set() else AgentRunState.FINISHED
+                AgentRunState.FINISHED
+                if finished_by_request
+                else (
+                    AgentRunState.PAUSED if stop_event.is_set() else AgentRunState.FINISHED
+                )
             )
+            # A user-forced finish always zeroes remaining_seconds - it's a
+            # deliberate "stop counting" action, not a natural exhaustion
+            # that just happens to land near 0.
+            final_remaining = 0 if finished_by_request else run_state.get("time_left", 0)
             await _persist_run_state(
-                project_id, target_id, final_status, run_state.get("time_left", 0)
+                project_id, target_id, final_status, final_remaining
             )
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
@@ -690,4 +742,8 @@ class AgentService:
             _pending_interrupts.pop(target_id, None)
             _stop_events.pop(target_id, None)
             _run_states.pop(target_id, None)
+            # Purely defensive - the try block above already pops this on
+            # the normal-completion path. A finish request that overlaps an
+            # exception/FAILED run is simply dropped, not retried.
+            _finish_intents.pop(target_id, None)
             await _set_running(project_id, target_id, False)

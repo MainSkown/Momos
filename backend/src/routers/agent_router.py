@@ -71,6 +71,24 @@ async def pause_agent(project_id: str, target_id: str):
             detail="Could not pause agent",
         )
 
+@router.post(
+    "/project/{project_id}/target/{target_id}/agent/finish", operation_id="FinishAgent"
+)
+async def finish_agent(project_id: str, target_id: str):
+    try:
+        await AgentService.finish_agent(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not finish agent: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not finish agent",
+        )
+
 @router.get(
     "/project/{project_id}/agent_logs",
     response_model=list[AgentLogResponse],
