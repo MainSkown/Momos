@@ -2133,6 +2133,7 @@ def create_vulnerability_tool(
     clear_tested: Callable[[], None],
     on_reported: Callable[[], None],
     get_last_raw_output: Callable[[], Optional[str]],
+    get_model_name: Callable[[], str],
 ):
     """Builds a report_vulnerability tool bound to a specific project/target."""
 
@@ -2149,10 +2150,10 @@ def create_vulnerability_tool(
 
         Args:
             name: A short, descriptive name for the vulnerability.
-            severity: Your own assessment of impact - one of "low",
-                "medium", "high", or "critical". This is the field that
-                actually matters here; always give your honest best
-                judgment for it.
+            severity: Your own assessment of impact - one of
+                "informational", "low", "medium", "high", or "critical".
+                This is the field that actually matters here; always give
+                your honest best judgment for it.
             proof_of_concept: Step-by-step instructions describing exactly how to
                 verify or exploit the vulnerability, in enough detail to reproduce it.
             cvss4_vector: OPTIONAL - leave this empty unless you are
@@ -2216,6 +2217,7 @@ def create_vulnerability_tool(
             proof_of_concept=validated.proof_of_concept,
             found_in=target_id,
             related_to_project=project_id,
+            found_by_model=get_model_name(),
         )
 
         saved = await _save_vulnerability(vulnerability)
@@ -2855,6 +2857,7 @@ def build_agent_tools(
     on_raw_output: Callable[[str], None],
     get_last_raw_output: Callable[[], Optional[str]],
     get_unresolved_vulnerable_claims_count: Callable[[], int],
+    get_model_name: Callable[[], str],
     allow_shell: bool = True,
     allow_install_packages: bool = True,
 ) -> list:
@@ -2901,6 +2904,7 @@ def build_agent_tools(
             clear_tested,
             on_reported,
             get_last_raw_output,
+            get_model_name,
         )
     )
     tools.append(

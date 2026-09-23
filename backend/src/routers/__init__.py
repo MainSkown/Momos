@@ -4,6 +4,7 @@ from .websocket_router import router as websocket_router
 from .kali_router import router as kali_router
 from .ollama_router import router as ollama_router
 from .agent_router import router as agent_router
+from .vulnerability_router import router as vulnerability_router
 
 __all__ = [
     "project_router",
@@ -12,4 +13,5 @@ __all__ = [
     "kali_router",
     "ollama_router",
     "agent_router",
+    "vulnerability_router",
 ]

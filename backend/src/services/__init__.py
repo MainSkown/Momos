@@ -3,8 +3,10 @@ from .target_service import TargetService
 from .kali_service import KaliService
 from .ollama_service import OllamaService
 from .agent_service import AgentService
+from .vulnerability_service import VulnerabilityService
 
 __all__ = [
     "ProjectService",
-    "TargetService"
+    "TargetService",
+    "VulnerabilityService"
 ]

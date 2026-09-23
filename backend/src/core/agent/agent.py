@@ -351,6 +351,12 @@ class Agent:
         # _at_shell_prompt above.
         self._last_raw_output: Optional[str] = None
 
+        # A callable, not the value itself - changeModel() (which actually
+        # sets self.model_name) runs AFTER build_agent_tools below, so
+        # report_vulnerability reads this lazily at call time instead of
+        # capturing an unset value now.
+        self._get_model_name = lambda: getattr(self, "model_name", "")
+
         self.tools = agent_tools.build_agent_tools(
             project_id,
             target_id,
@@ -370,6 +376,7 @@ class Agent:
             self._set_last_raw_output,
             self._get_last_raw_output,
             self._get_unresolved_vulnerable_claims_count,
+            self._get_model_name,
             allow_shell,
             allow_install_packages,
         )

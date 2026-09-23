@@ -52,6 +52,18 @@ class DatabaseManager:
                     "allow_install_packages BOOLEAN NOT NULL DEFAULT true"
                 )
             )
+            conn.execute(
+                text(
+                    "ALTER TABLE vulnerability ADD COLUMN IF NOT EXISTS "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE vulnerability ADD COLUMN IF NOT EXISTS "
+                    "found_by_model TEXT"
+                )
+            )
             conn.commit()
 
         # Same idea for an existing Postgres ENUM TYPE: create_all() never
@@ -236,6 +248,12 @@ class DatabaseManager:
             session.refresh(merged_vulnerability)
 
             return merged_vulnerability
+
+    def get_vulnerability(self, vulnerability_id: str | uuid.UUID) -> Vulnerability | None:
+        parsed_uuid = self._parse_uuid(vulnerability_id)
+
+        with Session(self.engine) as session:
+            return session.get(Vulnerability, parsed_uuid)
 
     def delete_vulnerability(self, vulnerability_id: str | uuid.UUID):
         parsed_uuid = self._parse_uuid(vulnerability_id)
