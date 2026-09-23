@@ -291,7 +291,10 @@ watch(
 <style scoped>
 .settings-wrapper {
   width: 98.5%;
+  height: 82vh;
   padding: 1rem;
+  box-sizing: border-box;
+  overflow-y: auto;
 }
 
 .settings-columns {
