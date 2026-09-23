@@ -1302,6 +1302,38 @@ export type PauseAgentResponses = {
     200: unknown;
 };
 
+export type FinishAgentData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/finish';
+};
+
+export type FinishAgentErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type FinishAgentError = FinishAgentErrors[keyof FinishAgentErrors];
+
+export type FinishAgentResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type GetProjectAgentLogsData = {
     body?: never;
     path: {

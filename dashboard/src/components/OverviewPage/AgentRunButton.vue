@@ -6,35 +6,76 @@
   </Tooltip>
 
   <button
-    v-else-if="!showTimer"
+    v-else-if="!showTimer && run?.status !== 'paused'"
     class="button no-border"
     :disabled="!hasDuration"
     @click="handleStart"
   >
-    <span v-if="hasDuration" class="material-icons-outlined">
-      {{ run?.status === "paused" ? "play_circle" : "play_arrow" }}
-    </span>
+    <span v-if="hasDuration" class="material-icons-outlined"> play_arrow </span>
     <Tooltip v-else :message="$t('targets.duration_required')">
       <span class="material-icons-outlined"> timer_off </span>
     </Tooltip>
   </button>
 
-  <button
-    v-else
-    class="button no-border timer-button"
-    :class="{ 'timer-button--interrupted': run?.status === 'interrupted' }"
-    @mouseenter="isHovering = true"
-    @mouseleave="isHovering = false"
-    @click="handlePause"
-  >
-    <span
-      v-if="isHovering && run?.status === 'running'"
-      class="material-icons-outlined"
-    >
-      pause
-    </span>
-    <span v-else class="timer-text">{{ formattedRemaining }}</span>
-  </button>
+  <!-- Paused (click resumes, hold finishes) or running/interrupted (click
+       pauses, hold finishes) - both share the same hold-to-finish
+       machinery, only the click action and icon differ. -->
+  <div v-else class="timer-button-wrapper">
+    <!-- Adapted from ContextUsageRing.vue's stroke-dasharray/dashoffset
+         technique - not extracted into a shared component since this is a
+         live rAF-driven hold-progress ring coupled to icon-swap state,
+         while ContextUsageRing is a static fraction display; the overlap
+         is small enough that a shared primitive would be premature. -->
+    <svg v-if="isHolding" class="hold-ring" viewBox="0 0 40 40">
+      <circle
+        class="hold-ring-track"
+        cx="20"
+        cy="20"
+        r="17"
+        fill="none"
+        stroke-width="3"
+      />
+      <circle
+        class="hold-ring-fill"
+        cx="20"
+        cy="20"
+        r="17"
+        fill="none"
+        stroke-width="3"
+        stroke-linecap="round"
+        :stroke-dasharray="HOLD_RING_CIRCUMFERENCE"
+        :stroke-dashoffset="holdDashOffset"
+      />
+    </svg>
+
+    <Tooltip :message="holdTooltipMessage">
+      <button
+        class="button no-border timer-button"
+        :class="{
+          'timer-button--interrupted': run?.status === 'interrupted',
+          'timer-button--holding': isHolding,
+        }"
+        :disabled="run?.status === 'paused' && !hasDuration"
+        @mouseenter="isHovering = true"
+        @mouseleave="onButtonLeave"
+        @mousedown="onHoldStart"
+        @mouseup="onHoldEnd"
+        @click="handleClick"
+      >
+        <span v-if="isHolding" class="material-icons-outlined">stop</span>
+        <span v-else-if="run?.status === 'paused'" class="material-icons-outlined">
+          play_circle
+        </span>
+        <span
+          v-else-if="isHovering && run?.status === 'running'"
+          class="material-icons-outlined"
+        >
+          pause
+        </span>
+        <span v-else class="timer-text">{{ formattedRemaining }}</span>
+      </button>
+    </Tooltip>
+  </div>
 
   <Dialog
     v-if="pendingInterrupt"
@@ -69,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import {
@@ -77,6 +118,7 @@ import {
   getProjectKaliStatus,
   startAgent,
   pauseAgent,
+  finishAgent,
   type AgentRunResponse,
   type AgentRunTimer as AgentRunTimerMessage,
   type AgentInterruptRequest as AgentInterruptRequestMessage,
@@ -100,6 +142,49 @@ const isHovering = ref(false);
 const displayNow = ref(Date.now());
 const isBuilding = ref(false);
 const buildingStage = ref<string | null>(null);
+
+const HOLD_DURATION_MS = 3000;
+// A normal click's mousedown->mouseup is a lot shorter than this, but not
+// instant - without a grace period, EVERY click (even a fast one) flashed
+// the ring/stop-icon into view for a frame before reverting, which reads
+// as "clicking starts the hold procedure" even though it still correctly
+// falls back to pausing. Only an actually-sustained press reveals the
+// hold visual; the 3s finish timer itself is unaffected by this delay.
+const HOLD_REVEAL_DELAY_MS = 150;
+const HOLD_RING_RADIUS = 17;
+const HOLD_RING_CIRCUMFERENCE = 2 * Math.PI * HOLD_RING_RADIUS;
+
+const isHolding = ref(false);
+const holdProgress = ref(0);
+// Set only when the 3s hold actually completes - consumed once by
+// handleClick to suppress the native click that still fires on mouseup
+// after a long hold (click only needs mousedown+mouseup on the same
+// element, regardless of how long between them).
+const longPressTriggered = ref(false);
+
+let holdStartTime: number | null = null;
+let holdRevealHandle: ReturnType<typeof setTimeout> | null = null;
+let holdTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+let holdRafHandle: number | null = null;
+
+const holdDashOffset = computed(
+  () => HOLD_RING_CIRCUMFERENCE * (1 - holdProgress.value),
+);
+
+// Hold-to-finish is offered from both "running" (click pauses) and
+// "paused" (click resumes) - a fresh/never-started/finished/failed run has
+// nothing meaningful to finish, and "interrupted" is excluded because
+// stop_event has no effect on a run parked awaiting interrupt approval
+// (see AgentService.finish_agent's docstring on the backend).
+function canHold(status: string | undefined): boolean {
+  return status === "running" || status === "paused";
+}
+
+const holdTooltipMessage = computed(() =>
+  run.value?.status === "paused"
+    ? $t("targets.hold_to_finish_tooltip_paused")
+    : $t("targets.hold_to_finish_tooltip"),
+);
 
 const buildingLabel = computed(() => {
   if (!isBuilding.value) return null;
@@ -206,6 +291,117 @@ async function handlePause() {
   }
 }
 
+async function handleFinish() {
+  const result = await finishAgent({
+    path: { project_id: props.target.project_id, target_id: props.target.id },
+  });
+
+  if (result.error) {
+    const detail = (result.error as { detail?: string }).detail;
+    toast.error(detail ?? $t("targets.agent_finish_failed"), {
+      position: toast.POSITION.TOP_CENTER,
+    });
+  }
+}
+
+function tickHoldProgress() {
+  if (!isHolding.value || holdStartTime === null) return;
+
+  const elapsed = performance.now() - holdStartTime;
+  holdProgress.value = Math.min(1, elapsed / HOLD_DURATION_MS);
+
+  if (holdProgress.value < 1) {
+    holdRafHandle = requestAnimationFrame(tickHoldProgress);
+  }
+}
+
+function onHoldStart() {
+  if (!canHold(run.value?.status)) return;
+
+  // A fresh press always clears any stale flag from a prior incomplete
+  // interaction (e.g. a hold whose mouseup landed outside the button, so
+  // no click ever consumed it) - otherwise it could leak into and silently
+  // swallow the next, unrelated click.
+  longPressTriggered.value = false;
+
+  holdStartTime = performance.now();
+  holdProgress.value = 0;
+
+  // Revealing the ring/stop-icon is deferred - see HOLD_REVEAL_DELAY_MS.
+  // Progress is still measured from the real mousedown time, so once
+  // revealed the ring starts already slightly filled rather than jumping
+  // from 0, and the 3s finish timer below runs independently of this.
+  holdRevealHandle = setTimeout(() => {
+    holdRevealHandle = null;
+    isHolding.value = true;
+    holdRafHandle = requestAnimationFrame(tickHoldProgress);
+  }, HOLD_REVEAL_DELAY_MS);
+
+  holdTimeoutHandle = setTimeout(() => {
+    holdTimeoutHandle = null;
+    if (!canHold(run.value?.status)) {
+      onHoldEnd();
+      return;
+    }
+
+    longPressTriggered.value = true;
+    handleFinish();
+    onHoldEnd();
+  }, HOLD_DURATION_MS);
+}
+
+function onHoldEnd() {
+  // Idempotent - a timeout-triggered auto-end and a subsequent real
+  // mouseup/mouseleave must not double-fire. Deliberately does not touch
+  // longPressTriggered, which is only ever set by the timeout above and
+  // consumed once by handleClick.
+  if (
+    holdRevealHandle === null &&
+    holdTimeoutHandle === null &&
+    holdRafHandle === null &&
+    !isHolding.value
+  ) {
+    return;
+  }
+
+  if (holdRevealHandle !== null) {
+    clearTimeout(holdRevealHandle);
+    holdRevealHandle = null;
+  }
+
+  if (holdTimeoutHandle !== null) {
+    clearTimeout(holdTimeoutHandle);
+    holdTimeoutHandle = null;
+  }
+
+  if (holdRafHandle !== null) {
+    cancelAnimationFrame(holdRafHandle);
+    holdRafHandle = null;
+  }
+
+  isHolding.value = false;
+  holdProgress.value = 0;
+  holdStartTime = null;
+}
+
+function onButtonLeave() {
+  isHovering.value = false;
+  onHoldEnd();
+}
+
+function handleClick() {
+  if (longPressTriggered.value) {
+    longPressTriggered.value = false;
+    return;
+  }
+
+  if (run.value?.status === "paused") {
+    handleStart();
+  } else {
+    handlePause();
+  }
+}
+
 function respondToInterrupt(approved: boolean) {
   if (!pendingInterrupt.value) return;
 
@@ -267,6 +463,17 @@ const onAgentMessage: tCallback = (message) => {
 
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 
+// An external event (another tab pausing it, the run finishing/failing,
+// duration running out, ...) can change the run's status mid-hold - cancel
+// the visual hold immediately rather than leaving a stale filling ring
+// that would silently no-op once the 3s timeout re-checks status itself.
+watch(
+  () => run.value?.status,
+  (status) => {
+    if (!canHold(status)) onHoldEnd();
+  },
+);
+
 onMounted(() => {
   loadRun();
   loadBuildStatus();
@@ -290,13 +497,47 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (tickInterval) clearInterval(tickInterval);
+  if (holdRevealHandle) clearTimeout(holdRevealHandle);
+  if (holdTimeoutHandle) clearTimeout(holdTimeoutHandle);
+  if (holdRafHandle) cancelAnimationFrame(holdRafHandle);
 });
 </script>
 
 <style scoped lang="css">
+.timer-button-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hold-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  pointer-events: none;
+}
+
+.hold-ring-track {
+  stroke: var(--border-subtle);
+}
+
+.hold-ring-fill {
+  stroke: var(--red-primary);
+}
+
 .timer-button {
   font-family: var(--font-mono);
   font-size: 0.8rem;
+}
+
+.timer-button--holding {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
 }
 
 .building-loader {
