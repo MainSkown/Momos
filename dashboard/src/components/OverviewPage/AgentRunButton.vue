@@ -132,6 +132,7 @@ import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import {
   getTargetAgentRun,
+  getTargetPendingInterrupt,
   getProjectKaliStatus,
   startAgent,
   pauseAgent,
@@ -267,6 +268,27 @@ async function loadRun() {
     path: { project_id: props.target.project_id, target_id: props.target.id },
   });
   run.value = result.data ?? null;
+
+  // The approval dialog's content (pendingInterrupt) is otherwise only ever
+  // populated by the one-shot AgentInterruptRequest websocket push - a
+  // reload while it's up would miss that push entirely and leave the run
+  // stuck as "interrupted" with no way to approve/deny it. Recover it from
+  // the backend's own in-memory record instead, which survives a reload
+  // (only a full backend restart would drop it).
+  if (run.value?.status === "interrupted") {
+    const interruptResult = await getTargetPendingInterrupt({
+      path: { project_id: props.target.project_id, target_id: props.target.id },
+    });
+
+    if (interruptResult.data) {
+      pendingInterrupt.value = {
+        type: "AgentInterruptRequest",
+        project_id: props.target.project_id,
+        target_id: props.target.id,
+        tool_calls: interruptResult.data.tool_calls,
+      };
+    }
+  }
 }
 
 // Recovers the "container is being built for this target" indicator after

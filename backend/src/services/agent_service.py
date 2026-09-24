@@ -36,6 +36,15 @@ from src.websocket import (
 # thread_id (== target_id) -> pending interrupt's accept callback
 _pending_interrupts: Dict[str, Callable[[bool], None]] = {}
 
+# thread_id (== target_id) -> the tool_calls of the interrupt currently
+# pending for that target, same shape as the AgentInterruptRequest websocket
+# message sent below. Kept in lockstep with _pending_interrupts (set/popped
+# together) so a client that reloads mid-approval (missing the one-shot
+# websocket push) can still recover what it needs to render the dialog via
+# AgentService.get_pending_interrupt, instead of being stuck forever with no
+# way to approve/deny an "interrupted" run.
+_pending_interrupt_tool_calls: Dict[str, List[dict]] = {}
+
 # target_id -> project_id, for every target currently running an agent
 _running_targets: Dict[str, str] = {}
 
@@ -92,6 +101,7 @@ async def _persist_run_state(
 
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
     accept = _pending_interrupts.pop(message.target_id, None)
+    _pending_interrupt_tool_calls.pop(message.target_id, None)
 
     if accept is None:
         print(f"No pending interrupt for target {message.target_id}. Ignoring.")
@@ -624,6 +634,17 @@ class AgentService:
         return db_manager.get_agent_run(target_id)
 
     @staticmethod
+    def get_pending_interrupt(project_id: str, target_id: str) -> Optional[List[dict]]:
+        """The tool_calls of the interrupt currently awaiting approval for
+        target_id, or None if there isn't one - lets a client that reloaded
+        mid-approval (and so missed the one-shot AgentInterruptRequest
+        websocket push) recover the dialog's contents instead of being
+        stuck with a run stuck as INTERRUPTED and nothing to approve/deny."""
+        AgentService._get_owned_target(project_id, target_id)
+
+        return _pending_interrupt_tool_calls.get(target_id)
+
+    @staticmethod
     def is_project_running(project_id: str) -> bool:
         return project_id in _running_targets.values()
 
@@ -700,6 +721,11 @@ class AgentService:
                 if isinstance(event, dict):
                     # AgentInterruptAction - pause and wait for approval
                     _pending_interrupts[target_id] = event["accept"]
+                    tool_calls = [
+                        {"name": tc["name"], "args": tc["args"]}
+                        for tc in event["tool_calls"]
+                    ]
+                    _pending_interrupt_tool_calls[target_id] = tool_calls
 
                     await _persist_run_state(
                         project_id,
@@ -713,10 +739,7 @@ class AgentService:
                             type=WsTypes.AgentInterruptRequest,
                             project_id=project_id,
                             target_id=target_id,
-                            tool_calls=[
-                                {"name": tc["name"], "args": tc["args"]}
-                                for tc in event["tool_calls"]
-                            ],
+                            tool_calls=tool_calls,
                         )
                     )
                     continue
@@ -786,6 +809,7 @@ class AgentService:
                 await manager.close_sessions_for_target(target_id)
 
             _pending_interrupts.pop(target_id, None)
+            _pending_interrupt_tool_calls.pop(target_id, None)
             _stop_events.pop(target_id, None)
             _run_states.pop(target_id, None)
             # Purely defensive - the try block above already pops this on

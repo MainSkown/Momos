@@ -20,6 +20,9 @@ class AgentRunningResponse(BaseModel):
     running: bool
     target_id: Optional[str] = None
 
+class AgentPendingInterruptResponse(BaseModel):
+    tool_calls: list[dict]
+
 @router.post(
     "/project/{project_id}/target/{target_id}/agent/start", operation_id="StartAgent"
 )
@@ -134,3 +137,28 @@ def get_target_agent_run(project_id: str, target_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not fetch agent run",
         )
+
+@router.get(
+    "/project/{project_id}/target/{target_id}/agent/pending_interrupt",
+    response_model=Optional[AgentPendingInterruptResponse],
+    operation_id="GetTargetPendingInterrupt",
+)
+def get_target_pending_interrupt(project_id: str, target_id: str):
+    try:
+        tool_calls = AgentService.get_pending_interrupt(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not fetch pending interrupt: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not fetch pending interrupt",
+        )
+
+    if tool_calls is None:
+        return None
+
+    return AgentPendingInterruptResponse(tool_calls=tool_calls)

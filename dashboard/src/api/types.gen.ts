@@ -131,6 +131,18 @@ export type AgentMessage = {
 };
 
 /**
+ * AgentPendingInterruptResponse
+ */
+export type AgentPendingInterruptResponse = {
+    /**
+     * Tool Calls
+     */
+    tool_calls: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
  * AgentRunResponse
  */
 export type AgentRunResponse = {
@@ -1431,6 +1443,42 @@ export type GetTargetAgentRunResponses = {
 };
 
 export type GetTargetAgentRunResponse = GetTargetAgentRunResponses[keyof GetTargetAgentRunResponses];
+
+export type GetTargetPendingInterruptData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/pending_interrupt';
+};
+
+export type GetTargetPendingInterruptErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTargetPendingInterruptError = GetTargetPendingInterruptErrors[keyof GetTargetPendingInterruptErrors];
+
+export type GetTargetPendingInterruptResponses = {
+    /**
+     * Response Gettargetpendinginterrupt
+     *
+     * Successful Response
+     */
+    200: AgentPendingInterruptResponse | null;
+};
+
+export type GetTargetPendingInterruptResponse = GetTargetPendingInterruptResponses[keyof GetTargetPendingInterruptResponses];
 
 export type GetAllVulnerabilitiesInProjectData = {
     body?: never;
