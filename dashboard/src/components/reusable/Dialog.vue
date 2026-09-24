@@ -58,6 +58,7 @@ withDefaults(defineProps<{ title?: string; showTitle?: boolean, noCloseButton?: 
 }
 .dialog-content {
   backdrop-filter: blur(4px);
+  background-color: var(--black);
   padding-inline: 20px;
   padding-top: 10px;
   padding-bottom: 20px;
