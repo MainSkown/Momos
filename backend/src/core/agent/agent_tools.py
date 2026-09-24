@@ -1773,11 +1773,15 @@ def create_pentest_tools(
     async def searchsploit_view(edb_id: str) -> str:
         """Reads the source of exploit-db entry `edb_id` (from
         searchsploit_search) - use this to see what language it's in and
-        what arguments/target format it expects before running it. If the
-        source reveals it needs a port that isn't currently authorized
-        (e.g. a hardcoded backdoor/callback port), call
-        request_port_access for that port before running it, rather than
-        running it and having the connection silently blocked.
+        what arguments/target format it expects before running it.
+        REQUIRED: if the source reveals it needs a port that isn't
+        currently authorized (e.g. a hardcoded backdoor/callback port),
+        you MUST call request_port_access for that port and get it
+        approved BEFORE calling searchsploit_run - do not run it first
+        and hope. Traffic to an unauthorized port is silently dropped by
+        the sandbox's firewall, not refused with an error, so a run
+        against an unauthorized port just looks like the exploit failed
+        with no diagnosable cause.
 
         Args:
             edb_id: The numeric Exploit-DB ID, e.g. "49757".
@@ -1806,6 +1810,15 @@ def create_pentest_tools(
         Only works for a plain Python/Perl/Ruby/shell script - a script
         needing further interactive back-and-forth of its own isn't a
         good fit for this one-shot tool.
+
+        REQUIRED: every port this exploit talks to must already be in the
+        target's authorized-ports allowlist before you call this. If
+        searchsploit_view showed a port that isn't authorized yet (e.g. a
+        hardcoded backdoor/callback port), call request_port_access for it
+        and wait for approval FIRST - do not call this tool speculatively
+        to "see what happens". An unauthorized port is silently dropped by
+        the sandbox firewall, not refused, so the run will just look like
+        a failed exploit with nothing to debug.
 
         Args:
             edb_id: The numeric Exploit-DB ID, e.g. "49757".
