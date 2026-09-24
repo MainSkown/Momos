@@ -77,12 +77,7 @@
     </Tooltip>
   </div>
 
-  <Dialog
-    v-if="pendingInterrupt"
-    :visible="!!pendingInterrupt"
-    :title="$t('targets.agent_wants_to_run')"
-    :no-close-button="true"
-  >
+  <Dialog v-if="pendingInterrupt" :visible="!!pendingInterrupt" :no-close-button="true" :title="$t('targets.agent_wants_to_run')">    
     <div class="column gap-low interrupt-body">
       <div
         v-for="(tc, idx) in pendingInterrupt.tool_calls"
@@ -93,16 +88,38 @@
           <span class="material-icons-outlined">terminal</span>
           <span class="text-bold">{{ tc.name }}</span>
         </div>
-        <div class="interrupt-command">
+        <div v-if="tc.name === REQUEST_PORT_ACCESS_TOOL_NAME" class="column gap-low interrupt-fields">
+          <div class="row interrupt-field">
+            <span class="interrupt-field-label">{{ $t("targets.request_port_access_port") }}</span>
+            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).port }}</span>
+          </div>
+          <div class="row interrupt-field">
+            <span class="interrupt-field-label">{{ $t("targets.request_port_access_protocol") }}</span>
+            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).protocol }}</span>
+          </div>
+          <div class="row interrupt-field">
+            <span class="interrupt-field-label">{{ $t("targets.request_port_access_reason") }}</span>
+            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).reason }}</span>
+          </div>
+        </div>
+        <div v-else class="interrupt-command">
           {{ toolCallCommand(tc.args) }}
         </div>
       </div>
     </div>
     <div class="row flex-center gap-high" style="padding-inline: 10px; margin-top: 16px">
-      <button class="button border" style="flex-grow: 1" @click="respondToInterrupt(true)">
+      <button
+        class="button border interrupt-action-button"
+        style="flex-grow: 1"
+        @click="respondToInterrupt(true)"
+      >
         <span>{{ $t("universal.yes") }}</span>
       </button>
-      <button class="button border" style="flex-grow: 1" @click="respondToInterrupt(false)">
+      <button
+        class="button border interrupt-action-button"
+        style="flex-grow: 1"
+        @click="respondToInterrupt(false)"
+      >
         <span>{{ $t("universal.no") }}</span>
       </button>
     </div>
@@ -227,6 +244,22 @@ function toolCallCommand(args: unknown): string {
     return String((args as { command: unknown }).command);
   }
   return JSON.stringify(args);
+}
+
+// Matches backend's agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME - this tool's
+// args (port/protocol/reason) get their own labeled-field rendering in the
+// interrupt dialog instead of the generic JSON fallback above, since an
+// operator approving a real scope-widening request needs to read it at a
+// glance, not parse a JSON blob.
+const REQUEST_PORT_ACCESS_TOOL_NAME = "request_port_access";
+
+function portAccessArgs(args: unknown): { port: string; protocol: string; reason: string } {
+  const a = (args ?? {}) as Record<string, unknown>;
+  return {
+    port: a.port !== undefined ? String(a.port) : "",
+    protocol: a.protocol !== undefined ? String(a.protocol) : "",
+    reason: a.reason !== undefined ? String(a.reason) : "",
+  };
 }
 
 async function loadRun() {
@@ -548,6 +581,18 @@ onUnmounted(() => {
   color: var(--red-light);
 }
 
+.interrupt-action-button {
+  /* Flatter than the shared .border/.button look elsewhere in the app -
+     a plain neutral border/background, no red glow, for this dialog's
+     Yes/No buttons specifically. */
+  border-color: var(--border-subtle);
+  box-shadow: none;
+}
+
+.interrupt-action-button:hover {
+  box-shadow: none;
+}
+
 .interrupt-body {
   width: 420px;
 }
@@ -567,6 +612,27 @@ onUnmounted(() => {
 .interrupt-command {
   font-family: var(--font-mono);
   font-size: 0.85rem;
+  color: var(--text-white);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.interrupt-fields {
+  font-size: 0.85rem;
+}
+
+.interrupt-field {
+  align-items: baseline;
+  gap: 8px;
+}
+
+.interrupt-field-label {
+  flex-shrink: 0;
+  min-width: 64px;
+  color: var(--text-muted);
+}
+
+.interrupt-field-value {
   color: var(--text-white);
   white-space: pre-wrap;
   word-break: break-word;
