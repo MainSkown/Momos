@@ -130,6 +130,27 @@ _PROMPT_TAIL_CHECK_BYTES: Final = 256
 # it's seen) in case a little more output is still trailing right behind it.
 _PROMPT_REAPPEAR_GRACE_SECONDS: Final = 2.0
 
+# Same early-exit idea as _SHELL_PROMPT_PATTERN, but for interactive
+# programs whose OWN prompt never matches the plain bash pattern (ftp's
+# "ftp> ", confirmed against a real PTY session - it prints with no
+# trailing newline, same as a shell prompt does). Keyed by _leading_token
+# of the session's launch command - see _EXTRA_READY_PATTERNS/_session_io.
+# Deliberately as narrow as _CONFUSION_SIGNATURES: a wrong match here would
+# cut a still-running command's wait short, so only programs whose prompt
+# text is unambiguous and confirmed get an entry.
+_FTP_PROMPT_PATTERN: Final = re.compile(r"(?:^|\n)ftp>\s*$")
+_EXTRA_READY_PATTERNS: Final[Dict[str, "re.Pattern"]] = {"ftp": _FTP_PROMPT_PATTERN}
+
+
+def _looks_ready(output: str, extra_pattern: Optional["re.Pattern"]) -> bool:
+    """Like _looks_like_shell_prompt, but also accepts `extra_pattern`
+    (e.g. ftp's own "ftp> ") as an early-exit signal - see
+    _EXTRA_READY_PATTERNS."""
+    cleaned = _ANSI_ESCAPE_PATTERN.sub("", output).strip()
+    if _SHELL_PROMPT_PATTERN.search(cleaned):
+        return True
+    return extra_pattern is not None and bool(extra_pattern.search(cleaned))
+
 
 # IANA protocol numbers, used with "meta l4proto" instead of protocol names -
 # name resolution depends on the container's /etc/protocols contents (e.g. it
@@ -734,11 +755,14 @@ class KaliManger:
         sock: socket_module.socket,
         data: Optional[bytes],
         wait_seconds: float,
+        extra_ready_pattern: Optional["re.Pattern"] = None,
     ) -> str:
         """Runs in the executor thread. Optionally writes `data`, then
         drains whatever arrives until `wait_seconds` pass with NO new data
-        at all, the session's own shell prompt reappears (see below), or
-        the peer closes (the session's process exited).
+        at all, the session's own shell prompt (or `extra_ready_pattern`,
+        for a curated non-shell program - see _EXTRA_READY_PATTERNS)
+        reappears (see below), or the peer closes (the session's process
+        exited).
 
         Deliberately not a short "stop at the first quiet gap" heuristic -
         a command can print a little (a banner, a warning) and then
@@ -815,7 +839,7 @@ class KaliManger:
                     continue
 
                 tail = chunks[-_PROMPT_TAIL_CHECK_BYTES:].decode(errors="replace")
-                if _looks_like_shell_prompt(tail):
+                if _looks_ready(tail, extra_ready_pattern):
                     next_timeout = _PROMPT_REAPPEAR_GRACE_SECONDS
                 else:
                     # Either ordinary output, or more data arrived right
@@ -884,11 +908,17 @@ class KaliManger:
     ) -> str:
         wait_seconds = max(0.5, min(wait_seconds, MAX_READ_WINDOW_SECONDS))
         loop = asyncio.get_running_loop()
+        extra_ready_pattern = _EXTRA_READY_PATTERNS.get(_leading_token(session.command))
 
         async with session.io_lock:
             try:
                 output = await loop.run_in_executor(
-                    None, self._session_io_sync, session.sock, data, wait_seconds
+                    None,
+                    self._session_io_sync,
+                    session.sock,
+                    data,
+                    wait_seconds,
+                    extra_ready_pattern,
                 )
             except EOFError:
                 exit_info = await loop.run_in_executor(

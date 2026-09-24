@@ -92,3 +92,20 @@ class KaliSession:
     # program (including any real reverse or foreign shell) - these
     # deliberately get no content-based confusion detection at all.
     active_program: Optional[str] = None
+    # Whether agent_tools.py's _send_ftp_passive has already toggled this
+    # exact ftp session into passive mode - lives on the session object
+    # itself (not a per-run/per-Agent closure) specifically because ftp
+    # sessions persist across agent runs/pause-resumes (see
+    # KaliManger._ensure_ftp_session's docstring), while a fresh run's
+    # closure-scoped state (e.g. ftp_connect's _ftp_logged_in) resets every
+    # time. "freshly_opened" only ever meant "did this run's ftp_connect
+    # call find an existing process" - it says nothing about whether THIS
+    # session was ever toggled passive, so gating the passive-mode send on
+    # it left a session opened before that fix (or in an earlier run)
+    # permanently stuck in ftp's default active mode across every later
+    # run that reuses it, silently reintroducing the exact data-connection
+    # hang the passive-mode fix exists to prevent. Checking this flag
+    # directly instead - independent of freshly_opened/session age - means
+    # ANY still-open, still-active-mode session gets caught and fixed the
+    # next time ftp_connect touches it, exactly once, ever, per session.
+    ftp_passive: bool = False

@@ -67,6 +67,15 @@ PACKAGE_INSTALL_TIMEOUT_SECONDS = 300
 # immediately or not at all until something is sent.
 SESSION_OPEN_READ_SECONDS = 3
 
+# How long ftp_command waits for a command's real output - deliberately
+# longer than SESSION_OPEN_READ_SECONDS (which is for a banner/prompt, not
+# an actual command result - ls/get/put can legitimately take a while).
+# Session-io's own prompt-reappearance early-exit (ftp's "ftp> " - see
+# kali_manager's _EXTRA_READY_PATTERNS) still returns well before this on
+# an ordinary successful command; this is the ceiling for a slow one, not
+# the typical wait.
+FTP_COMMAND_READ_SECONDS = 20
+
 # Only a genuine, still-unanswered credential prompt should block
 # condensation regardless of length - NOT an ordinary shell prompt (which
 # also ends in $/#/> with no trailing newline, but reappears after every
@@ -1736,6 +1745,87 @@ def create_pentest_tools(
 
 FTP_SESSION_NAME = "ftp"
 
+# "150 ..." (data connection opening) with no "226 .../425 .../426 ..."
+# (transfer complete/failed) anywhere after it means the data connection
+# itself never resolved within the wait window - real output (a listing,
+# a file) would only ever arrive over that connection, so this is
+# specifically the "data channel stalled" case (e.g. an active-mode PORT
+# whose callback can't reach this sandbox), not a genuinely empty result.
+# Line-anchored on the reply code, same reasoning as ftp_connect's own
+# "^230[ -]" check below - a bare \b150\b could match inside unrelated
+# text (a file named "150", a byte count).
+_FTP_DATA_OPEN_PATTERN = re.compile(r"(?m)^150[ -]")
+_FTP_DATA_DONE_PATTERN = re.compile(r"(?m)^(226|425|426)[ -]")
+
+
+def _ftp_data_connection_stalled(raw_output: str) -> bool:
+    return bool(_FTP_DATA_OPEN_PATTERN.search(raw_output)) and not _FTP_DATA_DONE_PATTERN.search(
+        raw_output
+    )
+
+
+# The classic ftp client's own real command set (from its `?`/`help`
+# listing), trimmed to what's actually useful/safe for ftp_command to send
+# - checked BEFORE anything reaches the session, so a typo/hallucinated
+# command gets an immediate, structured correction instead of round-
+# tripping to the real ftp process for its own bare "?Invalid command"
+# (observed in production: the model would then just retry more garbage
+# against that same unhelpful reply, looping instead of self-correcting).
+# Deliberately excludes, by category, from the full real command set:
+# - Session lifecycle ("open", "close", "bye", "disconnect"): handled by
+#   ftp_connect/close_session, not this tool - sending these here would
+#   tear down or repoint the connection those tools are managing.
+# - Login ("user"): ftp_connect's own job - re-sending it mid-session is
+#   already documented above (see ftp_connect) to get a real but
+#   misleading "530 Can't change from guest user" reply.
+# - "passive": _send_ftp_passive already toggles this exactly once per
+#   session (see FTP_TOOL_BUG_REPORT.md) - it's a TOGGLE, not a setting,
+#   so the model sending it again would flip the session back to active
+#   mode and reintroduce the exact data-connection hang that fix exists to
+#   prevent.
+# - Everything that would have the same effect indirectly ("sendport"
+#   forces active-mode PORT explicitly; "epsv4"/"ipany"/"ipv4"/"ipv6"
+#   change the address-family/EPSV negotiation the passive-mode fix's
+#   227/229 reply parsing depends on) - excluded for the same reason as
+#   "passive" itself.
+# - Local shell/macro escape hatches ("$", "macdef"): "$" invokes a
+#   locally-defined macro, "macdef" defines one (multi-line, which
+#   ftp_command's own newline check already refuses anyway) - no
+#   legitimate use here and an unnecessary shell-adjacent risk.
+# - Legacy protocol-tuning knobs essentially never needed against a real
+#   target ("mode", "form", "struct", "ntrans", "tenex", "sunique",
+#   "runique", "proxy", and ftp's own "nmap" - a filename-mapping-template
+#   command from the 1980s, NOT the network scanner, kept out partly to
+#   avoid any confusion with the real nmap_scan tool).
+# - Interactive/display-only toggles with no value to a non-interactive
+#   caller that only reads final text output ("bell", "case", "cr",
+#   "hash", "verbose", "debug", "trace", "glob", "reset", "umask", "?",
+#   and "image", a redundant alias of "binary").
+# "quote" is deliberately KEPT as the escape hatch for any real FTP
+# protocol verb not covered by a named command above.
+_FTP_ALLOWED_COMMANDS = frozenset(
+    {
+        # Navigation/listing
+        "cd", "cdup", "pwd", "ls", "dir", "mls", "mdir", "nlist", "lcd", "lpwd",
+        # Transfer
+        "get", "mget", "put", "mput", "append", "recv", "send",
+        # Remote file operations
+        "mkdir", "rmdir", "delete", "mdelete", "rename", "chmod",
+        # Metadata/recon
+        "size", "modtime", "status", "rstatus", "rhelp", "help", "idle",
+        # Transfer type
+        "ascii", "binary", "type",
+        # Auth/server passthrough
+        "account", "site", "quote",
+        # Transfer control
+        "restart",
+        # Suppresses mget/mput's per-file y/n confirmation, which this
+        # tool has no way to answer - without turning this off first, a
+        # multi-file mget/mput would sit waiting on a prompt forever.
+        "prompt",
+    }
+)
+
 
 async def _ensure_ftp_session(manager: KaliManger, target_id: str, host: str, on_session_change):
     """Opens target_id's 'ftp' session if it doesn't exist yet (running
@@ -1756,6 +1846,48 @@ async def _ensure_ftp_session(manager: KaliManger, target_id: str, host: str, on
         await manager.switch_session(target_id, FTP_SESSION_NAME)
     on_session_change(FTP_SESSION_NAME, command)
     return manager.get_current_session(target_id), freshly_opened
+
+
+async def _send_ftp_passive(
+    manager: KaliManger,
+    project_id: str,
+    target_id: str,
+    current_session,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
+) -> tuple:
+    """Toggles the classic ftp client into passive mode - called exactly
+    once, right after a freshly opened FTP session and before login (see
+    ftp_connect). The client defaults to ACTIVE mode (PORT), which makes
+    the TARGET open a brand-new inbound connection back into this sandbox
+    for every data-connection command (ls, get, put, ...); that callback
+    has nowhere to land here, so the command just hangs until
+    ftp_command's own read window gives up, returning little more than
+    its own echoed input (confirmed in production - see
+    FTP_TOOL_BUG_REPORT.md). Passive mode instead has the client open the
+    data connection itself, matching how curl's own FTP support already
+    behaves in this codebase.
+
+    "passive" is ftp's own interactive TOGGLE command, not a persisted
+    setting - sending it a second time on an already-passive session
+    would switch it back to active, so this must only ever be called once
+    per freshly opened session, never on an already-open one."""
+    return await _send_and_condense(
+        manager,
+        project_id,
+        target_id,
+        current_session,
+        "passive",
+        SESSION_OPEN_READ_SECONDS,
+        on_enumeration,
+        mark_tested,
+        on_session_change,
+        on_prompt_state_change,
+        on_raw_output,
+    )
 
 
 def create_guided_session_tools(
@@ -1817,6 +1949,30 @@ def create_guided_session_tools(
         except KaliSessionError as e:
             return str(e), None
 
+        # Checked independently of freshly_opened - see KaliSession.ftp_passive's
+        # own comment. A session can be "not freshly opened" (this run just
+        # found it already there) while still never having been toggled
+        # passive itself (opened by an earlier run, before this fix, or by
+        # a version of ftp_connect that predates it) - gating on
+        # freshly_opened alone left exactly that session stuck in ftp's
+        # active mode forever.
+        if not current_session.ftp_passive:
+            passive_condensed, passive_raw = await _send_ftp_passive(
+                manager,
+                project_id,
+                target_id,
+                current_session,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+            if passive_raw is None:
+                return passive_condensed, None
+            current_session = manager.get_current_session(target_id)
+            current_session.ftp_passive = True
+
         if freshly_opened:
             _ftp_logged_in[target_id] = False
         elif _ftp_logged_in.get(target_id):
@@ -1874,6 +2030,21 @@ def create_guided_session_tools(
             except KaliSessionError as e:
                 return str(e), None
             _ftp_logged_in[target_id] = False
+            passive_condensed, passive_raw = await _send_ftp_passive(
+                manager,
+                project_id,
+                target_id,
+                current_session,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+            if passive_raw is None:
+                return passive_condensed, None
+            current_session = manager.get_current_session(target_id)
+            current_session.ftp_passive = True
             condensed, raw_output = await _send_and_condense(
                 manager,
                 project_id,
@@ -1950,11 +2121,35 @@ def create_guided_session_tools(
         by shell access: ftp's own command grammar can't reach outside
         the already-open connection to the target.
 
+        Only a fixed set of real ftp commands is accepted - navigation
+        (cd, cdup, pwd, ls, dir, mls, mdir, nlist, lcd, lpwd), transfer
+        (get, mget, put, mput, append, recv, send), remote file operations
+        (mkdir, rmdir, delete, mdelete, rename, chmod), recon/metadata
+        (size, modtime, status, rstatus, rhelp, help, idle), transfer type
+        (ascii, binary, type), account/site, quote (raw protocol escape
+        hatch), restart, and prompt. Login (user) and passive mode are
+        already handled for you (by ftp_connect and automatically,
+        respectively) - do not send those, or "open"/"close"/"bye" (use
+        ftp_connect/close_session instead), yourself. Anything not on this
+        list is rejected immediately, before touching the connection.
+
         Args:
             command: The ftp command to send, e.g. "ls" or "get file.txt".
         """
         if "\n" in command or "\r" in command:
             return "Command cannot contain newlines - send one command at a time.", None
+
+        stripped = command.strip()
+        first_word = stripped.split(None, 1)[0].lower() if stripped else ""
+        if first_word not in _FTP_ALLOWED_COMMANDS:
+            return (
+                f"'{first_word or command}' is not an accepted ftp command for "
+                "this tool - it was rejected before touching the connection, "
+                "so nothing was sent. Allowed commands: "
+                f"{', '.join(sorted(_FTP_ALLOWED_COMMANDS))}. Login is handled "
+                "by ftp_connect (not 'user' here), and passive mode is already "
+                "set automatically - don't send either of those yourself."
+            ), None
 
         manager = await kali_registry.get_manager(project_id)
         sessions = await manager.list_sessions(target_id)
@@ -1968,19 +2163,32 @@ def create_guided_session_tools(
                 return str(e), None
         current_session = manager.get_current_session(target_id)
 
-        return await _send_and_condense(
+        condensed, raw_output = await _send_and_condense(
             manager,
             project_id,
             target_id,
             current_session,
             command,
-            SESSION_OPEN_READ_SECONDS,
+            FTP_COMMAND_READ_SECONDS,
             on_enumeration,
             mark_tested,
             on_session_change,
             on_prompt_state_change,
             on_raw_output,
         )
+        if raw_output is not None and _ftp_data_connection_stalled(raw_output):
+            condensed = (
+                "[The FTP data connection for this command never completed - "
+                "the server acknowledged it ('150 ...') but no transfer-"
+                "complete/failed reply ('226'/'425'/'426') came back within "
+                "the wait window. This is NOT confirmation of an empty "
+                "result - it looks like the data connection itself couldn't "
+                "be established (e.g. an active-mode callback this sandbox "
+                "can't receive, or a firewalled passive-mode port). Retrying "
+                "the same command is unlikely to help on its own.]\n\n"
+                + condensed
+            )
+        return condensed, raw_output
 
     @tool(SSH_CHECK_LOGIN_TOOL_NAME, response_format="content_and_artifact")
     async def ssh_check_login(username: str, password: str) -> str:
