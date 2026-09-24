@@ -214,6 +214,9 @@ def _render_tool_call_content(tool_name: str, args: dict) -> str:
     if tool_name == agent_tools.SWITCH_MODE_TOOL_NAME:
         return f"{args.get('mode', '')}: {args.get('reason', '')}"
 
+    if tool_name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME:
+        return f"{args.get('port', '')}/{args.get('protocol', '')}: {args.get('reason', '')}"
+
     if tool_name == agent_tools.RUN_TOOL_NAME:
         input_value = args.get("input")
         return str(input_value) if input_value is not None else "(checking for output)"

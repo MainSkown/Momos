@@ -125,6 +125,20 @@ _MODE_GATE_READER_TOOL_NAMES = {
 # otherwise have Tier 1/2 tool calls slip through unreviewed.
 _INTERRUPT_GATED_TOOL_NAMES = _MODE_GATE_WRITER_TOOL_NAMES - {agent_tools.SWITCH_MODE_TOOL_NAME}
 
+# Tool names that must ALWAYS pause for human approval, independent of
+# project_settings.should_interrupt entirely (see start_agent's
+# requires_interrupt below) - unlike _INTERRUPT_GATED_TOOL_NAMES (only
+# gates when the operator opted into reviewing every real action),
+# request_port_access exists specifically so a human gates a real
+# widening of the sandbox's own authorized-ports scope; that gate must
+# hold even on a project that has "pause for approval" turned off.
+# Deliberately NOT folded into _MODE_GATE_WRITER_TOOL_NAMES/
+# _INTERRUPT_GATED_TOOL_NAMES above: this tool doesn't call mark_tested()/
+# touch _last_raw_output the way every member of that set does, so it has
+# no part in the writer/reader batch-rejection race those sets exist to
+# prevent (see _tools_node below).
+_ALWAYS_INTERRUPT_TOOL_NAMES = {agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME}
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -331,6 +345,28 @@ class Agent:
         self._current_session_name: Optional[str] = None
         self._current_session_command: Optional[str] = None
 
+        # Live, synchronously-updated override of target_scope's ports -
+        # same pattern as self.mode/_current_session_name above, and for
+        # the same reason: request_port_access (agent_tools.py) can only
+        # update the CHECKPOINTED target_scope (via _apply_granted_ports)
+        # from the message-consumption loop BETWEEN graph steps, but
+        # interrupt_before=["tools"] means the "tools" step that just ran
+        # request_port_access and the very next "agent" step - the one
+        # whose prompt is supposed to show the newly authorized port - both
+        # execute inside the SAME astream() call, off the SAME in-memory
+        # checkpoint snapshot loaded once at that call's start (confirmed
+        # against langgraph's AsyncPregelLoop: aget_tuple is only called in
+        # __aenter__, tick() never re-reads the checkpointer). A checkpoint
+        # patch alone would only become visible one extra turn later than
+        # intended. This live override is set synchronously from within
+        # the tool call itself (see on_ports_changed) so the very next
+        # turn's reminder is correct immediately, exactly like self.mode
+        # already is for switch_mode. None until a grant happens; not
+        # checkpointed on its own - _apply_granted_ports still patches the
+        # real target_scope for a paused-then-resumed run, since a fresh
+        # Agent instance on resume starts this back at None.
+        self._authorized_ports_override: Optional[List[int]] = None
+
         # Live, synchronously-updated guess at whether the current session's
         # last output ended at a plain shell prompt vs. some other program's
         # (ftp, an interpreter, ...) - see agent_tools.py's run() and
@@ -377,6 +413,7 @@ class Agent:
             self._get_last_raw_output,
             self._get_unresolved_vulnerable_claims_count,
             self._get_model_name,
+            self._set_authorized_ports,
             allow_shell,
             allow_install_packages,
         )
@@ -485,6 +522,54 @@ class Agent:
         right after close_session removes the last open session)."""
         self._current_session_name = name
         self._current_session_command = command
+
+    def _set_authorized_ports(self, new_ports: List[int]):
+        """Updates the live authorized-ports override read by
+        _render_context_message every turn - see _authorized_ports_override's
+        comment in __init__ for why this needs to be a synchronous, live
+        attribute rather than only a checkpoint patch. Called directly from
+        request_port_access's own tool call (agent_tools.py), the moment a
+        grant is actually committed to the DB/firewall - unlike
+        _apply_granted_ports below, this takes effect on the very next
+        turn even within the SAME astream() call that just ran the tool."""
+        self._authorized_ports_override = new_ports
+
+    async def _apply_granted_ports(self, config: RunnableConfig, new_ports: list[int]):
+        """Patches AgentState.target_scope's ports in place right after
+        request_port_access successfully widens Target.ports and reopens
+        the firewall for it - for PERSISTENCE across a pause/resume only
+        (a fresh Agent instance on resume starts _authorized_ports_override
+        back at None, so without this the checkpointed target_scope would
+        revert to showing the pre-grant ports list after a pause). Without
+        _set_authorized_ports's live override above, this alone would also
+        be the mechanism for same-run visibility, but a checkpoint patch
+        takes effect one whole turn later than intended (see
+        _authorized_ports_override's comment) - it is not a substitute for
+        that live update, only a complement to it for the resume case.
+
+        Merges into whatever's already in the checkpoint (union, not
+        overwrite) rather than trusting `new_ports` as the final word: if
+        two request_port_access calls land in the same turn, this method
+        runs once per call in tool_calls list order, which is NOT
+        necessarily the order they actually committed in (each call's own
+        `new_ports` snapshot is only guaranteed to include grants already
+        committed before IT ran) - overwriting with a possibly-earlier
+        snapshot after a later, more-complete one was already applied
+        would silently drop a just-granted port from the reminder. A union
+        is order-independent and always converges to the full set.
+
+        Must only ever be called BETWEEN graph steps (see its call site in
+        start_agent's message-consumption loop, right after a completed
+        step's messages are yielded) - never from within a live tool call's
+        own execution. A step's checkpoint is written as part of that
+        step, before its update is made visible to the stream consumer;
+        calling aupdate_state from inside the tool coroutine itself would
+        race that write and be silently discarded once the step's own
+        (target_scope-unaware) checkpoint lands after it."""
+        current_state = await self.app.aget_state(config)
+        scope = dict(current_state.values.get("target_scope") or {})
+        scope["ports"] = sorted(set(scope.get("ports") or []) | set(new_ports))
+        await self.app.aupdate_state(config, {"target_scope": scope})
 
     async def _tools_node(self, state: AgentState, config: RunnableConfig):
         """Wraps the real ToolNode with a pre-dispatch check for the race
@@ -611,7 +696,13 @@ class Agent:
         matters more here than usual given this runs on local Ollama models
         with comparatively weak long-context recall and often a small
         context window to begin with."""
-        scope_reminder = self._render_target_scope_reminder(state.get("target_scope"))
+        target_scope = state.get("target_scope")
+        if self._authorized_ports_override is not None and target_scope:
+            # See _authorized_ports_override's comment - overrides the
+            # checkpointed ports with whatever's actually been granted this
+            # run, since the checkpoint alone can lag by a turn.
+            target_scope = {**target_scope, "ports": self._authorized_ports_override}
+        scope_reminder = self._render_target_scope_reminder(target_scope)
         lines = [scope_reminder, ""] if scope_reminder else []
 
         mode = self.mode
@@ -1257,6 +1348,12 @@ class Agent:
                             continue
                         for message in node_update.get("messages", []):
                             yield message
+                            if (
+                                isinstance(message, ToolMessage)
+                                and message.name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME
+                                and message.artifact
+                            ):
+                                await self._apply_granted_ports(config, message.artifact)
                             # Real per-turn token counts from Ollama itself
                             # (see AgentContextUsageEvent's own comment) -
                             # only ever present on the AIMessage _call_model
@@ -1309,10 +1406,13 @@ class Agent:
                     tool_call_names & _MODE_GATE_WRITER_TOOL_NAMES
                     and tool_call_names & _MODE_GATE_READER_TOOL_NAMES
                 )
-                requires_interrupt = (
-                    should_interrupt
-                    and not batch_will_be_rejected
-                    and bool(tool_call_names & _INTERRUPT_GATED_TOOL_NAMES)
+                # request_port_access must pause for approval unconditionally
+                # - see _ALWAYS_INTERRUPT_TOOL_NAMES - even on a project that
+                # has should_interrupt turned off entirely.
+                always_interrupt = bool(tool_call_names & _ALWAYS_INTERRUPT_TOOL_NAMES)
+                requires_interrupt = not batch_will_be_rejected and (
+                    always_interrupt
+                    or (should_interrupt and bool(tool_call_names & _INTERRUPT_GATED_TOOL_NAMES))
                 )
 
                 if not requires_interrupt:

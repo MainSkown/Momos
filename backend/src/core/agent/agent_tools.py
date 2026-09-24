@@ -26,6 +26,7 @@ INTERRUPT_SESSION_TOOL_NAME = "interrupt_session"
 INSTALL_PACKAGE_TOOL_NAME = "install_kali_package"
 ATTACK_LOG_TOOL_NAME = "log_attack_attempt"
 SWITCH_MODE_TOOL_NAME = "switch_mode"
+REQUEST_PORT_ACCESS_TOOL_NAME = "request_port_access"
 
 # Tier 1 (one-shot structured tools) and Tier 2 (guided session tools) - see
 # create_pentest_tools/create_guided_session_tools. Always registered
@@ -1093,6 +1094,123 @@ def create_install_package_tool(project_id: str):
     return install_kali_package
 
 
+def create_request_port_access_tool(
+    project_id: str, target_id: str, on_ports_changed: Callable[[List[int]], None]
+):
+    """Builds request_port_access, bound to a specific project/target. This
+    is the ONLY sanctioned way to reach a port outside this target's
+    "Authorized ports" (target.ports) - every other tool either refuses
+    out-of-scope ports outright (nmap_scan) or is silently dropped by the
+    sandbox's own nftables allowlist (prepare_nftables). It exists because
+    that allowlist, while real and load-bearing sandboxing, also blocks
+    ordinary pentest follow-through: a successful exploit routinely opens a
+    port that was never in the pre-scan list (e.g. CVE-2011-2523's vsftpd
+    backdoor only becomes reachable on port 6200 after a successful trigger
+    over the already-authorized port 21), and an FTP data connection needs
+    a random passive-mode port.
+
+    Deliberately NOT an automated grant: this tool always pauses for human
+    approval (see agent.py's _ALWAYS_INTERRUPT_TOOL_NAMES, independent of
+    this project's own should_interrupt setting) rather than trying to
+    algorithmically corroborate "is this really a consequence of something
+    already authorized" - a more automated version of this was designed and
+    rejected as too complex. The human approving the request is the entire
+    gate; on denial LangGraph's existing rejection path means this
+    function's body never runs at all."""
+
+    @tool(REQUEST_PORT_ACCESS_TOOL_NAME, response_format="content_and_artifact")
+    async def request_port_access(
+        port: int, protocol: Literal["tcp", "udp"], reason: str
+    ) -> str:
+        """Asks a human operator for permission to add `port` to this
+        target's authorized-ports allowlist. This ALWAYS pauses for human
+        approval, regardless of this project's approval setting - only
+        call it with a concrete reason (e.g. "exploit X opened a shell on
+        this port"), never speculatively "just in case".
+
+        Note: the underlying allowlist has no protocol dimension - approval
+        opens `port` for both tcp and udp, not just whichever you request.
+
+        Args:
+            port: The port number (1-65535) to request.
+            protocol: "tcp" or "udp" - context for the human reviewing this
+                request, not an enforced restriction (see the note above).
+            reason: A short, concrete justification - what you found, and
+                why you need this specific port to continue.
+        """
+        if not 1 <= port <= 65535:
+            return f"Invalid port {port} - must be between 1 and 65535.", None
+
+        target, error = await _get_target_info(target_id)
+        if error:
+            return error, None
+        if not target.ports:
+            return (
+                "This target has no port restriction configured - every "
+                "port is already reachable, nothing to authorize."
+            ), None
+        if port in target.ports:
+            return f"Port {port} is already authorized - no change needed.", None
+
+        manager = await kali_registry.get_manager(project_id)
+        # Shares command_lock with Tier 1 tools' one-shot execute() calls
+        # (see create_install_package_tool above) - prepare_nftables issues
+        # a long sequence of its own execute() calls and doesn't take this
+        # lock internally, so without it a concurrent Tier 1 tool call
+        # could interleave with the destroy/rebuild sequence below. Does
+        # NOT protect against a concurrent run()/ftp/ssh/telnet session -
+        # those deliberately never take this lock (a long-lived session
+        # must never block a one-shot command or vice versa) - so the
+        # brief window where prepare_nftables has destroyed the old table
+        # and not yet rebuilt it (during which the sandbox is effectively
+        # unscoped) is a real, accepted trade-off, not fully closed here.
+        async with manager.command_lock:
+            # Re-check under the lock - a concurrent request_port_access
+            # call for the same port shouldn't double-add it or rebuild
+            # the firewall twice for nothing.
+            target, error = await _get_target_info(target_id)
+            if error:
+                return error, None
+            if port in (target.ports or []):
+                return f"Port {port} is already authorized - no change needed.", None
+
+            new_ports = sorted(set(target.ports or []) | {port})
+            target.ports = new_ports
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, db_manager.update_target, target)
+
+            try:
+                await manager.prepare_nftables(target)
+            except Exception as e:
+                return (
+                    f"Port {port} was saved to the target's authorized "
+                    f"ports, but reapplying the firewall failed: {e}. The "
+                    "database and the actual firewall may now be out of "
+                    "sync - a human should check this before relying on "
+                    "the port being reachable."
+                ), None
+
+        # Called synchronously, from within this tool call itself - not
+        # deferred to a later message-processing hook - so the very next
+        # turn's "Authorized ports" reminder is correct immediately, even
+        # within the same astream() call this tool just ran in (see
+        # agent.py's _authorized_ports_override for why a checkpoint-only
+        # patch would otherwise lag by a whole extra turn). NOT called in
+        # the prepare_nftables-failed branch above - the firewall may not
+        # actually allow the port yet there, so the agent shouldn't be told
+        # it does.
+        on_ports_changed(new_ports)
+
+        return (
+            f"Approved - port {port}/{protocol} is now authorized "
+            f"(reason: {reason}). Authorized ports: "
+            f"{', '.join(map(str, new_ports))}."
+        ), new_ports
+
+    return request_port_access
+
+
 async def _run_kali_command(
     project_id: str, command: str, on_enumeration: Callable[[dict], None]
 ) -> str:
@@ -1625,7 +1743,7 @@ def create_pentest_tools(
         and returns matching Exploit-DB IDs and titles. Use
         searchsploit_view to read a candidate's source, then
         searchsploit_run to actually run it.
-
+        
         Args:
             query: Search terms, e.g. "vsftpd 2.3.4".
         """
@@ -1655,7 +1773,11 @@ def create_pentest_tools(
     async def searchsploit_view(edb_id: str) -> str:
         """Reads the source of exploit-db entry `edb_id` (from
         searchsploit_search) - use this to see what language it's in and
-        what arguments/target format it expects before running it.
+        what arguments/target format it expects before running it. If the
+        source reveals it needs a port that isn't currently authorized
+        (e.g. a hardcoded backdoor/callback port), call
+        request_port_access for that port before running it, rather than
+        running it and having the connection silently blocked.
 
         Args:
             edb_id: The numeric Exploit-DB ID, e.g. "49757".
@@ -3076,6 +3198,7 @@ def build_agent_tools(
     get_last_raw_output: Callable[[], Optional[str]],
     get_unresolved_vulnerable_claims_count: Callable[[], int],
     get_model_name: Callable[[], str],
+    on_ports_changed: Callable[[List[int]], None],
     allow_shell: bool = True,
     allow_install_packages: bool = True,
 ) -> list:
@@ -3094,6 +3217,10 @@ def build_agent_tools(
             on_raw_output,
         ),
     ]
+    # Unconditional - not gated by allow_shell/allow_install_packages, since
+    # asking a human to widen the authorized-ports scope is independent of
+    # this project's shell/install permissions.
+    tools.append(create_request_port_access_tool(project_id, target_id, on_ports_changed))
     if allow_install_packages:
         tools.append(create_install_package_tool(project_id))
     if allow_shell:
