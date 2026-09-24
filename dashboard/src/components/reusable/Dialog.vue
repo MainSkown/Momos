@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div v-if="visible" class="dialog-overlay" @click.self="visible = false">
+      <div v-if="visible" class="dialog-overlay" @click.self="closeOnOutsideClick && (visible = false)">
         <div class="dialog-content border">
           <div class="dialog-header" v-if="showTitle">
             <slot name="title"
@@ -25,10 +25,14 @@
 
 <script setup lang="ts">
 const visible = defineModel("visible", { type: Boolean, default: false });
-withDefaults(defineProps<{ title?: string; showTitle?: boolean, noCloseButton?: boolean }>(), {
-  showTitle: true,
-  noCloseButton: false
-});
+withDefaults(
+  defineProps<{ title?: string; showTitle?: boolean; noCloseButton?: boolean; closeOnOutsideClick?: boolean }>(),
+  {
+    showTitle: true,
+    noCloseButton: false,
+    closeOnOutsideClick: true,
+  }
+);
 </script>
 
 <style scoped>

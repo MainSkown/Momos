@@ -77,7 +77,7 @@
     </Tooltip>
   </div>
 
-  <Dialog v-if="pendingInterrupt" :visible="!!pendingInterrupt" :no-close-button="true" :title="$t('targets.agent_wants_to_run')">    
+  <Dialog v-if="pendingInterrupt" :visible="!!pendingInterrupt" :no-close-button="true" :close-on-outside-click="false" :title="$t('targets.agent_wants_to_run')">
     <div class="column gap-low interrupt-body">
       <div
         v-for="(tc, idx) in pendingInterrupt.tool_calls"
