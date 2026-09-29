@@ -134,7 +134,9 @@ export const en = {
             ssh: "SSH",
             ssh_desc: "Test SSH credentials and run commands over SSH.",
             telnet: "Telnet",
-            telnet_desc: "Probe a Telnet service."
+            telnet_desc: "Probe a Telnet service.",
+            metasploit: "Metasploit",
+            metasploit_desc: "Drive msfconsole against the target. Large download - off by default."
         }
     },
 
