@@ -19,8 +19,9 @@ from typing import Final, FrozenSet, List, Optional, Set, Tuple
 # searchsploit_search, searchsploit_view - none of these touch the target's
 # actual services, they're local/recon-only. Also not included: run/
 # new_session/the rest of the shell-session tools - gated solely by
-# allow_shell, a fully separate capability this module must not touch;
-# metasploit-framework - no dedicated tool exists for it yet.
+# allow_shell, a fully separate capability this module must not touch; the
+# local file read/write/list tools - unconditional utility tools, not tied
+# to any target-interaction group either.
 
 # Always installed regardless of which groups below are enabled - core
 # sandbox infra (nftables, libcap2-bin for nmap's setcap), general recon
@@ -61,6 +62,14 @@ class ToolGroup:
     # searchsploit_run needs nothing beyond what searchsploit_search/view
     # already require unconditionally).
     packages: Tuple[str, ...]
+    # Whether this group counts as enabled when a project's enabled_tools
+    # is still None (never explicitly saved) - True for every pre-existing
+    # group, preserving the exact set a project had before this field
+    # existed. metasploit is the one exception: it must be off by default
+    # for every project, not just ones created before it existed (it's a
+    # ~518MB download - see kali_manager.py's DEFAULT_KALI_PACKAGES
+    # comment), so it sets this False and requires explicit opt-in.
+    default_enabled: bool = True
 
 
 TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
@@ -70,6 +79,9 @@ TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
     ToolGroup("ftp", ("ftp_connect", "ftp_command"), ("ftp",)),
     ToolGroup("ssh", ("ssh_check_login", "ssh_run"), ("openssh-client", "sshpass")),
     ToolGroup("telnet", ("telnet_probe",), ("telnet",)),
+    ToolGroup(
+        "metasploit", ("metasploit_run",), ("metasploit-framework",), default_enabled=False
+    ),
 )
 
 TOOL_GROUP_IDS: Final[FrozenSet[str]] = frozenset(g.id for g in TOOL_GROUPS)
@@ -84,22 +96,28 @@ ALL_GROUPED_TOOL_NAMES: Final[FrozenSet[str]] = frozenset(
 )
 
 
-def tool_names_for(enabled_tools: Optional[List[str]]) -> Optional[Set[str]]:
-    """None -> None (no filtering - every group's tools stay bound, today's
-    existing behavior). Otherwise the union of tool names belonging to each
-    enabled group id - an unknown id (already rejected at the API boundary,
-    see project_router.py) is silently ignored rather than raising here."""
+def tool_names_for(enabled_tools: Optional[List[str]]) -> Set[str]:
+    """enabled_tools=None -> every group whose default_enabled is True
+    (today's existing behavior for pre-existing groups; opt-in-only groups
+    like metasploit stay excluded even then). An explicit list overrides
+    defaults entirely - only the listed group ids' tools are included,
+    regardless of their own default_enabled. An unknown id (already
+    rejected at the API boundary, see project_router.py) is silently
+    ignored rather than raising here."""
     if enabled_tools is None:
-        return None
+        return {name for g in TOOL_GROUPS if g.default_enabled for name in g.tool_names}
     enabled = set(enabled_tools)
     return {name for g in TOOL_GROUPS if g.id in enabled for name in g.tool_names}
 
 
 def packages_for_enabled_tools(enabled_tools: Optional[List[str]]) -> List[str]:
-    """BASELINE_KALI_PACKAGES plus every enabled group's own packages. None
-    means every group (the full, today's-equivalent package set)."""
+    """BASELINE_KALI_PACKAGES plus every enabled group's own packages.
+    enabled_tools=None means every default_enabled group - mirrors
+    tool_names_for's own None handling."""
     if enabled_tools is None:
-        return list(BASELINE_KALI_PACKAGES) + [p for g in TOOL_GROUPS for p in g.packages]
+        return list(BASELINE_KALI_PACKAGES) + [
+            p for g in TOOL_GROUPS if g.default_enabled for p in g.packages
+        ]
     enabled = set(enabled_tools)
     packages = list(BASELINE_KALI_PACKAGES)
     for g in TOOL_GROUPS:

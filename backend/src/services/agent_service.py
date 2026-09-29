@@ -5,7 +5,7 @@ from langchain_core.messages import (
     BaseMessage,
     ToolMessage,
 )
-from src.core import db_manager, ollama_manager, settings
+from src.core import db_manager, ollama_manager, settings, tool_groups
 from src.core.agent import Agent, agent_tools
 from src.core.agent import agent_checkpointer
 from src.core.kali_integration import kali_registry
@@ -153,6 +153,16 @@ def _capability_note(project_settings: ProjectSettings) -> str:
     already-created or hand-edited project. Empty string when both flags are
     on (today's implicit assumption, so nothing needs correcting)."""
     if not project_settings.allow_shell:
+        # nmap_scan/searchsploit_search/searchsploit_view are core/always-
+        # bound (tool_groups.py) regardless of enabled_tools; everything
+        # else this project actually has bound is whatever
+        # tool_names_for(enabled_tools) resolves to (metasploit_run
+        # included only when that group is on) - listing a tool here that
+        # build_agent_tools didn't actually bind would just have the model
+        # call something that doesn't exist.
+        available = ["nmap_scan", "searchsploit_search", "searchsploit_view"] + sorted(
+            tool_groups.tool_names_for(project_settings.enabled_tools)
+        )
         return (
             "\n\n### Runtime Note\n"
             "Raw terminal access is disabled for this run - `run`, "
@@ -160,11 +170,9 @@ def _capability_note(project_settings: ProjectSettings) -> str:
             "`close_session`, `interrupt_session`, and "
             "`install_kali_package` are NOT available, regardless of "
             "anything said above. Your only way to act against the target "
-            "is the structured tools (`nmap_scan`, `hydra_bruteforce`, "
-            "`gobuster_scan`, `searchsploit_search`/`searchsploit_view`/"
-            "`searchsploit_run`, `ftp_connect`/`ftp_command`, "
-            "`ssh_check_login`/`ssh_run`, `telnet_probe`) - use those for "
-            "everything."
+            "is the structured tools this project has enabled: "
+            + ", ".join(f"`{name}`" for name in available)
+            + " - use those for everything."
         )
     if not project_settings.allow_install_packages:
         return (

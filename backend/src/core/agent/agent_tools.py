@@ -1,8 +1,10 @@
 import asyncio
+import base64
 import json
 import os
 import re
 import shlex
+import uuid
 from typing import Callable, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
@@ -43,6 +45,14 @@ FTP_COMMAND_TOOL_NAME = "ftp_command"
 SSH_CHECK_LOGIN_TOOL_NAME = "ssh_check_login"
 SSH_RUN_TOOL_NAME = "ssh_run"
 TELNET_PROBE_TOOL_NAME = "telnet_probe"
+METASPLOIT_RUN_TOOL_NAME = "metasploit_run"
+
+# Unconditional utility tools (not gated by allow_shell, not part of
+# tool_groups.py - file I/O inside the sandbox, distinct from both raw
+# shell access and target interaction) - see create_file_tools.
+WRITE_LOCAL_FILE_TOOL_NAME = "write_local_file"
+READ_LOCAL_FILE_TOOL_NAME = "read_local_file"
+LIST_LOCAL_FILES_TOOL_NAME = "list_local_files"
 
 ATTACK_OUTCOMES = {"vulnerable", "not_vulnerable", "inconclusive"}
 VALID_MODES = {"scouting", "exploiting"}
@@ -1299,6 +1309,11 @@ _SAFE_PORT_SPEC_PATTERN = re.compile(r"^[\d,-]+$")
 _SAFE_PATH_PATTERN = re.compile(r"^[\w./-]+$")
 _SAFE_EXTENSIONS_PATTERN = re.compile(r"^[\w,]*$")
 _SAFE_EDB_ID_PATTERN = re.compile(r"^\d+$")
+# No "/" (or ".."-via-"/") at all, unlike _SAFE_PATH_PATTERN above - this is
+# a bare filename component write_local_file appends to its own generated
+# directory, never a caller-supplied path, so it must not be able to escape
+# that directory.
+_SAFE_FILENAME_PATTERN = re.compile(r"^[\w.-]+$")
 
 
 def _expand_port_spec(spec: str) -> set:
@@ -1369,6 +1384,124 @@ SEARCHSPLOIT_RUN_TIMEOUT_SECONDS = 120
 SSH_CHECK_LOGIN_TIMEOUT_SECONDS = 20
 SSH_RUN_TIMEOUT_SECONDS = 60
 TELNET_PROBE_TIMEOUT_SECONDS = 15
+# Longer than SEARCHSPLOIT_RUN_TIMEOUT_SECONDS (120s) - msfconsole's own
+# startup + module-database load is real overhead on top of whatever the
+# resource-script commands themselves take, matching NMAP_SCAN's 240s.
+METASPLOIT_RUN_TIMEOUT_SECONDS = 240
+
+LOCAL_FILES_DIR = "/tmp/momos-files"
+WRITE_LOCAL_FILE_TIMEOUT_SECONDS = 15
+READ_LOCAL_FILE_TIMEOUT_SECONDS = 10
+LIST_LOCAL_FILES_TIMEOUT_SECONDS = 10
+# Generous enough for a script/payload/config file, small enough that a
+# base64-encoded blob of it can't strain the exec pipeline or dump
+# something huge into the agent's context on a later read.
+WRITE_LOCAL_FILE_MAX_BYTES = 65536
+READ_LOCAL_FILE_MAX_BYTES = 65536
+
+
+def create_file_tools(project_id: str) -> list:
+    """Unconditional local file read/write/list tools - core sandbox
+    utility, not gated by allow_shell (distinct capability from raw shell
+    access) and not part of tool_groups.py (not target interaction, so
+    never choosable/never interrupt-gated). Deliberately doesn't call
+    mark_tested() - writing/reading a local file inside the sandbox isn't
+    "testing" the target, same reasoning as install_kali_package sitting
+    outside _MODE_GATE_WRITER_TOOL_NAMES."""
+
+    @tool(WRITE_LOCAL_FILE_TOOL_NAME, response_format="content_and_artifact")
+    async def write_local_file(content: str, filename: Optional[str] = None) -> str:
+        """Writes `content` to a new file inside the sandbox (under
+        /tmp/momos-files) and returns its absolute path - use this to save
+        a script, payload, wordlist, or config file to reference later
+        with run()/read_local_file(), or to point another tool at.
+        Nothing else remembers this path for you - if you forget it, call
+        list_local_files() to see what you've already saved.
+
+        Args:
+            content: The exact text to write.
+            filename: Optional filename to make the returned path easier
+                to recognize later (e.g. "exploit.py") - a bare filename,
+                no slashes. A unique prefix is always added too, so this
+                is never required and never collides with an earlier file.
+        """
+        content_bytes = content.encode()
+        if len(content_bytes) > WRITE_LOCAL_FILE_MAX_BYTES:
+            return (
+                f"Content is {len(content_bytes)} bytes, over the "
+                f"{WRITE_LOCAL_FILE_MAX_BYTES}-byte limit - write "
+                "something smaller."
+            ), None
+        if filename is not None and not _SAFE_FILENAME_PATTERN.match(filename):
+            return (
+                f"Invalid filename '{filename}' - letters, digits, '.', "
+                "'_', '-' only, no slashes."
+            ), None
+
+        file_id = uuid.uuid4().hex[:12]
+        name = f"{file_id}-{filename}" if filename else file_id
+        path = f"{LOCAL_FILES_DIR}/{name}"
+        encoded = base64.b64encode(content_bytes).decode()
+        command = (
+            f"mkdir -p {shlex.quote(LOCAL_FILES_DIR)} && "
+            f"echo {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+        )
+        ok, output = await _execute_one_shot(
+            project_id, command, WRITE_LOCAL_FILE_TIMEOUT_SECONDS
+        )
+        if not ok:
+            return output, None
+        return f"Wrote {len(content_bytes)} bytes to {path}", None
+
+    @tool(READ_LOCAL_FILE_TOOL_NAME, response_format="content_and_artifact")
+    async def read_local_file(path: str) -> str:
+        """Reads back a file's content - one written by write_local_file,
+        or any other text file inside the sandbox. Output is capped; a
+        file larger than that only has its start returned.
+
+        Args:
+            path: Absolute path inside the sandbox, e.g.
+                "/tmp/momos-files/abc123def456-exploit.py".
+        """
+        if not _SAFE_PATH_PATTERN.match(path):
+            return f"Invalid path '{path}'.", None
+        if not await _file_exists_in_container(project_id, path):
+            return f"'{path}' does not exist.", None
+
+        ok, output = await _execute_one_shot(
+            project_id,
+            f"head -c {READ_LOCAL_FILE_MAX_BYTES} {shlex.quote(path)}",
+            READ_LOCAL_FILE_TIMEOUT_SECONDS,
+        )
+        if not ok:
+            return output, None
+        if len(output.encode()) >= READ_LOCAL_FILE_MAX_BYTES:
+            output += f"\n\n[... truncated at {READ_LOCAL_FILE_MAX_BYTES} bytes]"
+        return output, output
+
+    @tool(LIST_LOCAL_FILES_TOOL_NAME, response_format="content_and_artifact")
+    async def list_local_files(directory: Optional[str] = None) -> str:
+        """Lists files in `directory` (defaults to /tmp/momos-files, where
+        write_local_file always saves) - use this when you've forgotten
+        the exact path of a file you saved earlier.
+
+        Args:
+            directory: Directory to list inside the sandbox. Defaults to
+                /tmp/momos-files.
+        """
+        target_dir = directory if directory is not None else LOCAL_FILES_DIR
+        if not _SAFE_PATH_PATTERN.match(target_dir):
+            return f"Invalid directory '{target_dir}'.", None
+
+        ok, output = await _execute_one_shot(
+            project_id, f"ls -la {shlex.quote(target_dir)}", LIST_LOCAL_FILES_TIMEOUT_SECONDS
+        )
+        if not ok:
+            return output, None
+        return output, output
+
+    return [write_local_file, read_local_file, list_local_files]
+
 
 _NMAP_TIMING_FLAGS = {
     "paranoid": "-T0", "sneaky": "-T1", "polite": "-T2",
@@ -1882,10 +2015,13 @@ def create_pentest_tools(
             return (
                 "This is a Metasploit-framework module, not a standalone "
                 "script - it needs the full msfconsole runtime (`require "
-                "'msf/core'`), not a bare `ruby` interpreter. If "
-                "allow_shell is enabled, drive msfconsole yourself via "
-                "run() instead (e.g. search for the right module name "
-                'with `msfconsole -q -x "search <name>"`).',
+                "'msf/core'`), not a bare `ruby` interpreter. Use "
+                "metasploit_run instead, if it's enabled for this project "
+                '(e.g. `metasploit_run("use <module path>; set RHOSTS '
+                '<target>; set RPORT <port>; run")`) - or, if allow_shell '
+                "is enabled and metasploit_run isn't, drive msfconsole "
+                'yourself via run() (e.g. `msfconsole -q -x "search '
+                '<name>"`).',
                 None,
             )
 
@@ -1912,6 +2048,46 @@ def create_pentest_tools(
         on_raw_output(output)
         return output, output
 
+    @tool(METASPLOIT_RUN_TOOL_NAME, response_format="content_and_artifact")
+    async def metasploit_run(commands: str) -> str:
+        """Runs a one-off, non-interactive msfconsole session: `commands`
+        is executed as a `;`-separated resource script (exactly what
+        you'd type at the msfconsole prompt, one command per `;`), then
+        the console exits automatically - you don't need to include an
+        exit command yourself.
+
+        Each call starts a completely fresh msfconsole process - nothing
+        is remembered between calls. If you `use` a module and `set`
+        options in one call, a later call needs to repeat all of that
+        (use/set/...) again before it can `run`/`exploit`; there is no
+        persistent session to return to.
+
+        The database is not connected (no `msfdb`/postgresql in this
+        sandbox), so there's no loot/session tracking across calls - read
+        results directly from this call's own output, and don't rely on
+        `sessions`/`creds`/`loot` commands showing anything from a
+        previous call.
+
+        There's no separate target/port arguments - set them yourself
+        with `set RHOSTS <ip>`/`set RPORT <port>` inside `commands`, using
+        the authorized target/ports already shown to you. Traffic to a
+        port outside the authorized set is silently dropped by the
+        sandbox firewall either way, exactly like every other tool here.
+
+        Args:
+            commands: The msfconsole commands to run, separated by `;`,
+                e.g. "use exploit/unix/ftp/vsftpd_234_backdoor; set RHOSTS
+                192.168.0.235; set RPORT 21; run".
+        """
+        safe_commands = _safe_shell_word(f"{commands}; exit -y")
+        command = f"msfconsole -q -x {safe_commands}"
+        ok, output = await _execute_one_shot(project_id, command, METASPLOIT_RUN_TIMEOUT_SECONDS)
+        mark_tested()
+        if not ok:
+            return output, None
+        on_raw_output(output)
+        return output, output
+
     return [
         nmap_scan,
         hydra_bruteforce,
@@ -1919,6 +2095,7 @@ def create_pentest_tools(
         searchsploit_search,
         searchsploit_view,
         searchsploit_run,
+        metasploit_run,
     ]
 
 
@@ -3385,21 +3562,25 @@ def build_agent_tools(
     # tool_groups.py) only ever filters OUT tools in
     # tool_groups.ALL_GROUPED_TOOL_NAMES - nmap_scan/searchsploit_search/
     # searchsploit_view are core/always-on and never touched here, same as
-    # every non-Tier-1/2 tool appended below. None means no filtering at
-    # all (every group enabled), matching every other allow_*-style field's
-    # "unset = today's behavior" convention.
+    # every non-Tier-1/2 tool appended below. enabled_tools=None resolves
+    # to each group's own default_enabled (see tool_names_for) rather than
+    # "no filtering" - an opt-in-only group like metasploit stays excluded
+    # even for a project that's never touched this field.
     allowed_tool_names = tool_groups.tool_names_for(enabled_tools)
-    if allowed_tool_names is not None:
-        optional_tools = [
-            t
-            for t in optional_tools
-            if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
-        ]
+    optional_tools = [
+        t
+        for t in optional_tools
+        if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
+    ]
     tools = optional_tools
     # Unconditional - not gated by allow_shell/allow_install_packages, since
     # asking a human to widen the authorized-ports scope is independent of
     # this project's shell/install permissions.
     tools.append(create_request_port_access_tool(project_id, target_id, on_ports_changed))
+    # Also unconditional - local file I/O inside the sandbox, its own
+    # capability distinct from both raw shell access and target
+    # interaction (see create_file_tools' own docstring).
+    tools.extend(create_file_tools(project_id))
     if allow_install_packages:
         tools.append(create_install_package_tool(project_id))
     if allow_shell:
