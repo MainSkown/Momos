@@ -1076,20 +1076,30 @@ class Agent:
         )
         return [first, notice] + recent
 
-    def _call_model(self, state: AgentState):
+    async def _call_model(self, state: AgentState):
         """Node: one LLM call per turn, tools bound directly, with
         reasoning=True (set in changeModel) so native "thinking" models can
         surface their reasoning via additional_kwargs['reasoning_content']
         - see the module-level comment above for why this replaced the
         previous two-call split. The response is persisted as-is;
         reasoning_content (when present) is read out for logging by
-        agent_service.py's _message_to_log_specs, not touched here."""
+        agent_service.py's _message_to_log_specs, not touched here.
+
+        async + ainvoke (not sync invoke) is required for "finish" to
+        actually abort a mid-generation call, not just discard its result:
+        a sync invoke() runs in a thread-pool executor under astream(),
+        and asyncio.Task.cancel() (see start_agent's stream_task.cancel())
+        can only interrupt code at an await point on the event loop - it
+        cannot stop code already running in a worker thread. ainvoke()
+        awaits langchain_ollama's async (httpx) client directly, so a
+        cancel here actually tears down the in-flight HTTP request instead
+        of letting Ollama keep generating in the background."""
         messages = list(state["messages"])
         context_message = self._render_context_message(state)
 
         trimmed_messages = self._trim_messages_for_model(messages)
         try:
-            response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
+            response = await self.llm_with_tools.ainvoke(trimmed_messages + [context_message])
         except OllamaResponseError as e:
             # Observed in production: a model detected as reasoning-capable
             # (via Ollama's own reported capabilities list, or the name/
@@ -1110,7 +1120,7 @@ class Agent:
                     f"({e.error}) - retrying with reasoning=False"
                 )
                 self.changeModel(self.model_name, reasoning=False)
-                response = self.llm_with_tools.invoke(trimmed_messages + [context_message])
+                response = await self.llm_with_tools.ainvoke(trimmed_messages + [context_message])
             else:
                 raise
         response = self._recover_leaked_tool_calls(response)
