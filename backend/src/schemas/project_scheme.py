@@ -1,6 +1,7 @@
 import uuid
 from typing import List, TYPE_CHECKING, Optional
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, Column
+from sqlalchemy import ARRAY, String
 
 if TYPE_CHECKING:
     from .target_scheme import Target
@@ -54,6 +55,18 @@ class ProjectSettingsBase(SQLModel):
     # (see effective_allow_install there) - there'd be nothing useful to do
     # with a newly installed package without shell access to it.
     allow_install_packages: bool = True
+    # Which of the choosable "vulnerability testing" tool groups (see
+    # src.core.tool_groups) the agent may call, and which Kali packages get
+    # pre-installed for this project's container. None means every group -
+    # today's-equivalent behavior for existing projects and the factory
+    # default below - NOT the same as [] (explicitly nothing enabled); read
+    # sites must check `is None`, not truthiness, the same way Target.ports
+    # already has to. Core tools (nmap_scan, searchsploit_search/view) and
+    # the shell-session tools (gated by allow_shell above) are unaffected
+    # by this field entirely - see tool_groups.py's own module docstring.
+    enabled_tools: Optional[List[str]] = Field(
+        default=None, sa_column=Column(ARRAY(String))
+    )
 
 
 class ProjectSettingsBody(ProjectSettingsBase):

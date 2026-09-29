@@ -8,6 +8,7 @@ from src.schemas import (
     ProjectSettings,
     ProjectSettingsBody,
 )
+from src.core import tool_groups
 
 router = APIRouter()
 
@@ -68,6 +69,14 @@ async def update_project_settings(project_id: str, data: ProjectSettingsBody):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="allow_install_packages requires allow_shell to also be enabled.",
         )
+
+    if data.enabled_tools is not None:
+        unknown = set(data.enabled_tools) - tool_groups.TOOL_GROUP_IDS
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown tool group(s): {sorted(unknown)}",
+            )
 
     # Reject settings that point at a model that isn't actually installed -
     # without this, selecting a model and then deleting it left the project

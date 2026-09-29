@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
-from src.core import settings
+from src.core import settings, tool_groups
 import time
 
 logger = logging.getLogger("momos.agent")
@@ -116,14 +116,22 @@ _MODE_GATE_READER_TOOL_NAMES = {
 }
 
 # What should_interrupt (start_agent's optional pause-for-human-approval
-# gate) actually pauses before - everything that executes something for
-# real, in the container or against the target, as opposed to pure
-# bookkeeping (switch_mode, switch_session/close_session/list_sessions,
-# report_vulnerability/log_attack_attempt/finish_task). Tier 1/2 tools
-# belong here for the same reason run()/new_session() do: an operator who
-# turned this on to review every real action before it fires would
-# otherwise have Tier 1/2 tool calls slip through unreviewed.
-_INTERRUPT_GATED_TOOL_NAMES = _MODE_GATE_WRITER_TOOL_NAMES - {agent_tools.SWITCH_MODE_TOOL_NAME}
+# gate) actually pauses before - run()/new_session() (raw shell, gated
+# separately by allow_shell - always interrupt-gated here regardless of
+# tool selection below), nmap_scan, plus exactly the "vulnerability
+# testing" Tier-1/2 tools a project can individually enable/disable
+# (tool_groups.py - hydra_bruteforce, gobuster_scan, searchsploit_run,
+# ftp_connect/command, ssh_check_login/run, telnet_probe). Deliberately
+# narrower than _MODE_GATE_WRITER_TOOL_NAMES only for searchsploit_search/
+# searchsploit_view - both are local Exploit-DB lookups that never send a
+# single packet to the target, unlike nmap_scan, which does (real SYN/
+# connect scans against the live target) and so stays interrupt-gated even
+# though it's core/always-on for tool-selection purposes (tool_groups.py).
+# switch_mode is pure bookkeeping and was never included here either way.
+_INTERRUPT_GATED_TOOL_NAMES = (
+    {agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME, agent_tools.NMAP_SCAN_TOOL_NAME}
+    | tool_groups.ALL_GROUPED_TOOL_NAMES
+)
 
 # Tool names that must ALWAYS pause for human approval, independent of
 # project_settings.should_interrupt entirely (see start_agent's
@@ -274,6 +282,7 @@ class Agent:
         context_window: Optional[int] = None,
         allow_shell: bool = True,
         allow_install_packages: bool = True,
+        enabled_tools: Optional[List[str]] = None,
     ):
         self.project_id = project_id
         self.target_id = target_id
@@ -449,6 +458,7 @@ class Agent:
             self._set_authorized_ports,
             allow_shell,
             allow_install_packages,
+            enabled_tools,
         )
 
         self.changeModel(model_name=model_name, reasoning=reasoning)

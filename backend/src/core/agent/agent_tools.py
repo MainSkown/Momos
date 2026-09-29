@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from src.core import db_manager, ollama_manager, settings
+from src.core import db_manager, ollama_manager, settings, tool_groups
 from src.core.kali_integration import kali_registry
 from src.core.kali_integration.kali_manager import KaliManger, KALI_USERS
 from src.core.kali_integration.kali_session import KaliSessionError, NO_OUTPUT_MESSAGE
@@ -3364,8 +3364,9 @@ def build_agent_tools(
     on_ports_changed: Callable[[List[int]], None],
     allow_shell: bool = True,
     allow_install_packages: bool = True,
+    enabled_tools: Optional[List[str]] = None,
 ) -> list:
-    tools = [
+    optional_tools = [
         # create_kali_tool(project_id, on_enumeration),  # commented out, not
         # deleted - see create_kali_tool's docstring. The terminal tools
         # below are the agent's only way to run arbitrary commands now.
@@ -3380,6 +3381,21 @@ def build_agent_tools(
             on_raw_output,
         ),
     ]
+    # enabled_tools (project_scheme.py's ProjectSettings field, see
+    # tool_groups.py) only ever filters OUT tools in
+    # tool_groups.ALL_GROUPED_TOOL_NAMES - nmap_scan/searchsploit_search/
+    # searchsploit_view are core/always-on and never touched here, same as
+    # every non-Tier-1/2 tool appended below. None means no filtering at
+    # all (every group enabled), matching every other allow_*-style field's
+    # "unset = today's behavior" convention.
+    allowed_tool_names = tool_groups.tool_names_for(enabled_tools)
+    if allowed_tool_names is not None:
+        optional_tools = [
+            t
+            for t in optional_tools
+            if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
+        ]
+    tools = optional_tools
     # Unconditional - not gated by allow_shell/allow_install_packages, since
     # asking a human to widen the authorized-ports scope is independent of
     # this project's shell/install permissions.

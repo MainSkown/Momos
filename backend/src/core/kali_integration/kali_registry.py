@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 from src.schemas import KaliCreationStage
 from src.websocket import ws_registry, WsTypes, KaliContainerActiveMessage
+from src.core import db_manager, tool_groups
 from .kali_manager import KaliManger
 
 
@@ -35,7 +36,23 @@ class KaliRegistry:
             if project_id in self._active_managers.keys():
                 return self._active_managers[project_id]
 
-            manager = KaliManger(container_name=f"momos-kali-worker-{project_id}")
+            # Only reached once per project (every other call above hits
+            # the cached-manager branch) - the one place that needs to know
+            # which tool groups this project has enabled, so no other
+            # get_manager caller needs a new parameter. A container that
+            # already exists keeps whatever packages it was built with even
+            # if enabled_tools changes later - by design, see
+            # tool_groups.py/ProjectSettings.enabled_tools' own comments.
+            loop = asyncio.get_running_loop()
+            settings = await loop.run_in_executor(
+                None, db_manager.get_project_settings, project_id
+            )
+            packages = tool_groups.packages_for_enabled_tools(
+                settings.enabled_tools if settings else None
+            )
+            manager = KaliManger(
+                container_name=f"momos-kali-worker-{project_id}", packages=packages
+            )
             await manager.start(on_stage=on_stage)
 
             self._active_managers[project_id] = manager

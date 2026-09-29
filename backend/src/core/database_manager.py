@@ -54,6 +54,12 @@ class DatabaseManager:
             )
             conn.execute(
                 text(
+                    "ALTER TABLE projectsettings ADD COLUMN IF NOT EXISTS "
+                    "enabled_tools TEXT[]"
+                )
+            )
+            conn.execute(
+                text(
                     "ALTER TABLE vulnerability ADD COLUMN IF NOT EXISTS "
                     "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
                 )

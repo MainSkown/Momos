@@ -592,6 +592,7 @@ class AgentService:
                 context_window=context_window,
                 allow_shell=project_settings.allow_shell,
                 allow_install_packages=effective_allow_install,
+                enabled_tools=project_settings.enabled_tools,
             )
         except Exception as e:
             # Without this, a failure preparing the container would leave the
