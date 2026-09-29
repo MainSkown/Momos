@@ -162,6 +162,23 @@ L4PROTO_UDP: Final = 17
 L4PROTO_ICMP: Final = 1
 L4PROTO_ICMPV6: Final = 58
 
+# FTP's control channel negotiates the DATA channel's address/port inline in
+# its own protocol (PORT/PASV/EPSV replies) - a plain per-target dport
+# allowlist has no way to know about that port in advance, so without this,
+# a passive-mode data connection to the random high port the server just
+# assigned gets silently dropped by prepare_nftables's final "drop"
+# rule, indistinguishable from an empty directory (confirmed in production:
+# "ls" against a real vsftpd target got exactly as far as "227 Entering
+# Passive Mode (...)" and then nothing - the client's next packet, to that
+# announced port, never got a reply). The standard nftables fix is a "ct
+# helper" object bound to the control channel's own traffic (tcp/21): the
+# kernel's conntrack FTP ALG then inspects that connection's PORT/PASV
+# replies itself and marks the resulting data connection "related", which
+# the OUTPUT chain's existing "ct state established,related accept" rule
+# already allows - no need to parse FTP replies or maintain the allowlist
+# dynamically in this codebase at all.
+FTP_CONTROL_PORT: Final = 21
+
 # Published up front so a future "start listening" (reverse-shell) tool has
 # somewhere reachable from the LAN to bind to - Docker's own port publishing
 # is a scoped, host-managed NAT rule (the same mechanism docker-compose.yml
@@ -229,7 +246,7 @@ DEFAULT_KALI_PACKAGES: Final[tuple[str, ...]] = (
     # up needing it - observed in production repeatedly reaching for
     # msfconsole once past initial recon. Revisit if container startup
     # time becomes a problem again.
-    "metasploit-framework",
+    # "metasploit-framework",
 )
 
 # Granted to this binary (via setcap, in _configure_container) so nmap's
@@ -949,7 +966,9 @@ class KaliManger:
             # harmless, since callers only ever check at_shell_prompt
             # alongside session.command == DEFAULT_SESSION_COMMAND anyway).
             prev_at_shell_prompt = session.at_shell_prompt
+            prev_had_prior_io = session.had_prior_io
             session.at_shell_prompt = _looks_like_shell_prompt(output)
+            session.had_prior_io = True
             sent_text = data.decode(errors="replace") if data is not None else None
 
             if session.at_shell_prompt:
@@ -960,12 +979,17 @@ class KaliManger:
                 # Fresh transition (just launched ftp/telnet/nc/msfconsole/
                 # ...) - never punish the launch turn itself, only what
                 # happens after (see _CONFUSION_SIGNATURES's own comment).
-                if sent_text:
+                if sent_text and prev_had_prior_io:
                     session.active_program = _leading_token(sent_text)
                 # else: a bare poll caused/observed this transition (e.g.
                 # new_session's own initial read, right after open_session
-                # already tagged active_program from the launch command) -
-                # nothing new to retag from, so don't clobber it to None.
+                # already tagged active_program from the launch command),
+                # OR this is a directly-launched non-bash session's (ftp/
+                # telnet/msfconsole/...) very first _session_io call ever -
+                # either way active_program is already correctly set from
+                # the launch command by open_session, so don't clobber it
+                # with whatever was just sent INTO that already-running
+                # program (see KaliSession.had_prior_io).
                 session.confusion_streak = 0
             elif sent_text is not None and session.active_program in _CONFUSION_SIGNATURES:
                 # Already inside a KNOWN, curated program and still not
@@ -1219,6 +1243,15 @@ class KaliManger:
             user=KALI_USERS.root,
         )
 
+        # FTP conntrack helper - see FTP_CONTROL_PORT's own comment. Binding
+        # it to the control channel here, before the established/related
+        # rule below, means the kernel starts tracking that connection's
+        # PORT/PASV replies from its very first packet.
+        await self.execute(
+            "nft 'add ct helper ip MOMOS_IPv4 ftp-helper { type \"ftp\" protocol tcp; }'",
+            user=KALI_USERS.root,
+        )
+
         # Allow traffic to comeback
         await self.execute(
             "nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ct state established,related accept",
@@ -1231,6 +1264,12 @@ class KaliManger:
             ports_str = f" dport {{ {', '.join(map(str,target.ports))} }}"
 
         if target.ipv4 is not None:
+            await self.execute(
+                f"nft add rule ip MOMOS_IPv4 OUTPUT meta skuid momos ip daddr {target.ipv4} "
+                f"tcp dport {FTP_CONTROL_PORT} ct helper set \"ftp-helper\"",
+                user=KALI_USERS.root,
+            )
+
             # Allow rule for outgoing traffic to target
             for protocol, l4proto in [("tcp", L4PROTO_TCP), ("udp", L4PROTO_UDP)]:
                 # "tcp"/"udp" alone isn't valid nft syntax - it must be followed
@@ -1278,6 +1317,12 @@ class KaliManger:
             user=KALI_USERS.root,
         )
 
+        # FTP conntrack helper - same reasoning as the IPv4 table above.
+        await self.execute(
+            "nft 'add ct helper ip6 MOMOS_IPv6 ftp-helper { type \"ftp\" protocol tcp; }'",
+            user=KALI_USERS.root,
+        )
+
         # Allow traffic to comeback
         await self.execute(
             "nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ct state established,related accept",
@@ -1285,6 +1330,12 @@ class KaliManger:
         )
 
         if target.ipv6 is not None:
+            await self.execute(
+                f"nft add rule ip6 MOMOS_IPv6 OUTPUT meta skuid momos ip6 daddr {target.ipv6} "
+                f"tcp dport {FTP_CONTROL_PORT} ct helper set \"ftp-helper\"",
+                user=KALI_USERS.root,
+            )
+
             # Allow tcp and udp for ipv6
             for protocol, l4proto in [("tcp", L4PROTO_TCP), ("udp", L4PROTO_UDP)]:
                 # Same "tcp"/"udp" alone isn't valid nft syntax fix as above.

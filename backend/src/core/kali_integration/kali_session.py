@@ -92,6 +92,24 @@ class KaliSession:
     # program (including any real reverse or foreign shell) - these
     # deliberately get no content-based confusion detection at all.
     active_program: Optional[str] = None
+    # Whether this session has completed at least one _session_io call
+    # before (poll or real send, either counts). Distinguishes two cases
+    # that otherwise look identical to _session_io's active_program
+    # retagging (KaliManger._session_io): the default bash session's user
+    # later typing a foreign program's name - always this session's SECOND
+    # _session_io call or later, since new_session's own initial read is a
+    # bare poll first (a genuine shell->program transition, where retagging
+    # active_program from what was just typed is correct) - vs. a session
+    # opened directly with its own non-bash command (ftp/telnet/msfconsole/
+    # ...) receiving its very first _session_io call ever - e.g.
+    # ftp_connect's passive-mode toggle immediately after a freshly opened
+    # ftp session. That first send used to get misread as a shell->program
+    # transition and retag active_program to "passive" instead of leaving
+    # the correct "ftp" tag (already set by open_session from the launch
+    # command), permanently disabling ftp's own confusion-streak detection
+    # for that session (see _CONFUSION_SIGNATURES: "passive" is not a
+    # curated key).
+    had_prior_io: bool = False
     # Whether agent_tools.py's _send_ftp_passive has already toggled this
     # exact ftp session into passive mode - lives on the session object
     # itself (not a per-run/per-Agent closure) specifically because ftp

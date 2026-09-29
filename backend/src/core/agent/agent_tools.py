@@ -1899,6 +1899,34 @@ def _ftp_data_connection_stalled(raw_output: str) -> bool:
     )
 
 
+# The classic ftp client's own local (no server round-trip) confirmation of
+# the "passive" toggle - "Passive mode on." exactly, printed the instant the
+# client processes the command. Used to verify _send_ftp_passive actually
+# took effect before trusting KaliSession.ftp_passive = True, rather than
+# assuming it always works.
+_FTP_PASSIVE_CONFIRMED_PATTERN = re.compile(r"Passive mode on", re.IGNORECASE)
+
+# Observed in production on a session that HAD been toggled passive
+# (ftp_passive True, confirmed on) but still fell back to an active-mode
+# PORT for an individual data-connection command - the server rejected the
+# PORT ("500 Illegal PORT command.") and/or the client failed to bind its
+# own local data socket for it ("Can't bind for data connection..."). This
+# is a different failure than _ftp_data_connection_stalled above (that one
+# never even gets an initial "150" reply) - here the client is unmistakably
+# back in active mode for this one transfer, despite the session-level
+# toggle. Root cause not fully confirmed (client-specific PASV/EPSV
+# fallback behavior against this target could not be verified without a
+# live client) - detecting the symptom is what actually matters here, since
+# the raw output otherwise just looks like meaningless noise to the agent.
+_FTP_ACTIVE_FALLBACK_PATTERN = re.compile(
+    r"Illegal PORT command|Can.?t bind for data connection", re.IGNORECASE
+)
+
+
+def _ftp_active_mode_fallback(raw_output: str) -> bool:
+    return bool(_FTP_ACTIVE_FALLBACK_PATTERN.search(raw_output))
+
+
 # The classic ftp client's own real command set (from its `?`/`help`
 # listing), trimmed to what's actually useful/safe for ftp_command to send
 # - checked BEFORE anything reaches the session, so a typo/hallucinated
@@ -2062,7 +2090,10 @@ def create_guided_session_tools(
         authenticated, so use ftp_command for everything else (ls, get,
         pwd, cd, ...) instead of calling this again. Only retry this tool
         if the previous call actually failed (login failed, connection
-        dropped) or you need to try different credentials.
+        dropped), you need to try different credentials, or an
+        ftp_command result explicitly told you to (e.g. after an
+        active-mode fallback) - it's safe to call again on an already-open
+        session, it just confirms that rather than re-authenticating.
 
         Args:
             username: FTP username to try. Defaults to "anonymous".
@@ -2091,6 +2122,7 @@ def create_guided_session_tools(
         # a version of ftp_connect that predates it) - gating on
         # freshly_opened alone left exactly that session stuck in ftp's
         # active mode forever.
+        passive_raw = ""
         if not current_session.ftp_passive:
             passive_condensed, passive_raw = await _send_ftp_passive(
                 manager,
@@ -2106,23 +2138,60 @@ def create_guided_session_tools(
             if passive_raw is None:
                 return passive_condensed, None
             current_session = manager.get_current_session(target_id)
-            current_session.ftp_passive = True
+            # Only trust the toggle if the client's own local confirmation
+            # ("Passive mode on.") actually came back - previously this was
+            # set unconditionally, which papered over the toggle silently
+            # not landing and left ftp_passive stuck True forever (nothing
+            # else ever retries it once set, so every future data-connection
+            # command on this session would keep hitting active mode with
+            # no way to recover short of closing the session outright).
+            current_session.ftp_passive = bool(
+                _FTP_PASSIVE_CONFIRMED_PATTERN.search(passive_raw)
+            )
 
         if freshly_opened:
             _ftp_logged_in[target_id] = False
         elif _ftp_logged_in.get(target_id):
-            # Observed in production: re-sending `user` into an already-
-            # authenticated session gets a real but misleading "530 Can't
-            # change from guest user" - vsftpd correctly refusing
-            # re-authentication mid-session, which the (correct) reply-code
-            # regex below reads as "Login failed", even though the session
-            # was in fact already logged in and working.
-            return (
-                "Already connected and logged in on this FTP session - no "
-                "need to reconnect. Use ftp_command for anything else "
-                "(ls, get, pwd, cd, ...).",
-                None,
+            # Don't just trust the cached flag - observed in production: the
+            # target's own idle timeout closes the control connection
+            # ("421 Timeout") without the wrapper session ever closing (the
+            # ftp CLI process stays alive, just replying "Not connected."
+            # to everything), so _ftp_logged_in silently went stale. Without
+            # this probe, every later ftp_connect call kept claiming
+            # "already connected" forever while every ftp_command kept
+            # getting "Not connected." - a dead end with no way to recover.
+            # A cheap read-only command (not `user` - see below) is enough
+            # to tell a live session from a dead one.
+            probe_condensed, probe_raw = await _send_and_condense(
+                manager,
+                project_id,
+                target_id,
+                current_session,
+                "pwd",
+                FTP_COMMAND_READ_SECONDS,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
             )
+            if probe_raw is not None and "Not connected." not in probe_raw:
+                return (
+                    "Already connected and logged in on this FTP session - "
+                    "no need to reconnect. Use ftp_command for anything "
+                    "else (ls, get, pwd, cd, ...).",
+                    None,
+                )
+            # The session is actually dead - fall through to the normal
+            # login flow below. Re-sending `user` into an already-
+            # authenticated (but still alive) session gets a real but
+            # misleading "530 Can't change from guest user" - vsftpd
+            # correctly refusing re-authentication mid-session, which the
+            # (correct) reply-code regex below reads as "Login failed" even
+            # though the session is fine - that's exactly why this branch
+            # only reaches `user` after confirming the session is dead, not
+            # unconditionally.
+            _ftp_logged_in[target_id] = False
 
         # Sent as two separate lines, mirroring exactly what a human typing
         # at ftp's own interactive Name:/Password: prompts would send - NOT
@@ -2179,7 +2248,9 @@ def create_guided_session_tools(
             if passive_raw is None:
                 return passive_condensed, None
             current_session = manager.get_current_session(target_id)
-            current_session.ftp_passive = True
+            current_session.ftp_passive = bool(
+                _FTP_PASSIVE_CONFIRMED_PATTERN.search(passive_raw)
+            )
             condensed, raw_output = await _send_and_condense(
                 manager,
                 project_id,
@@ -2243,6 +2314,24 @@ def create_guided_session_tools(
             _ftp_logged_in[target_id] = False
         else:
             prefix = "Login outcome unclear from the response - check the raw output below."
+
+        if not current_session.ftp_passive:
+            prefix = (
+                f"{prefix} Passive mode could not be confirmed for this "
+                "session - data-connection commands (ls, get, ...) may "
+                "fall back to active mode and fail; a later ftp_command "
+                "hitting 'Illegal PORT command'/'Can't bind for data "
+                "connection' means this needs another ftp_connect."
+            )
+
+        # Appended purely for visibility/debugging (never affects the
+        # login-outcome classification above, which only looks at the
+        # user/password exchange) - passive_raw was previously discarded
+        # entirely, leaving no way to tell after the fact whether the
+        # client's own "Passive mode on." confirmation ever actually came
+        # back.
+        if passive_raw:
+            raw_output = f"{passive_raw}\n{raw_output}"
 
         return f"{prefix}\n\n{condensed}", raw_output
 
@@ -2321,6 +2410,23 @@ def create_guided_session_tools(
                 "be established (e.g. an active-mode callback this sandbox "
                 "can't receive, or a firewalled passive-mode port). Retrying "
                 "the same command is unlikely to help on its own.]\n\n"
+                + condensed
+            )
+        elif raw_output is not None and _ftp_active_mode_fallback(raw_output):
+            # Marks the session for a fresh passive-mode retry - the next
+            # ftp_connect call will re-send "passive" (see its own
+            # `if not current_session.ftp_passive:` check) instead of
+            # trusting the toggle that evidently isn't holding for every
+            # data-connection command on this session.
+            current_session.ftp_passive = False
+            condensed = (
+                "[This command fell back to ACTIVE-mode FTP (the client "
+                "tried to open its own inbound-callback data connection) "
+                "even though passive mode was supposed to already be on "
+                "for this session - it isn't reliably sticking for every "
+                "data-connection command against this server. Call "
+                "ftp_connect again (it will re-toggle passive mode) before "
+                "retrying this command.]\n\n"
                 + condensed
             )
         return condensed, raw_output
