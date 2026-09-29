@@ -1901,6 +1901,7 @@ def create_pentest_tools(
 
         safe_args = _safe_join_args(exploit_args) if exploit_args else ""
         if exploit_args and safe_args is None:
+            mark_tested()
             return "Could not parse `exploit_args` - check for unbalanced quotes.", None
 
         command = f"{interpreter} {shlex.quote(path)} {safe_args}".strip()

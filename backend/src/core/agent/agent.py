@@ -140,6 +140,39 @@ _INTERRUPT_GATED_TOOL_NAMES = _MODE_GATE_WRITER_TOOL_NAMES - {agent_tools.SWITCH
 _ALWAYS_INTERRUPT_TOOL_NAMES = {agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME}
 
 
+def _mode_gate_conflict(names: set) -> tuple:
+    """Returns (writers, reader_like) for one turn's tool-call names.
+    reader_like is empty when there's no same-turn conflict; otherwise
+    it's the set of tool(s) that must NOT run in the same turn as the
+    other writer(s) they're paired with here, because they read state a
+    writer only sets after an await (mark_tested()) - so they'd reliably
+    read it stale if run concurrently (asyncio.gather) in the same batch.
+
+    Two cases collapse into this one helper because they're the same race
+    shape: the real _MODE_GATE_READER_TOOL_NAMES members (report_
+    vulnerability/log_attack_attempt), and switch_mode itself when paired
+    with any OTHER writer - switch_mode is bucketed as a writer (a
+    successful switch resets _tested_since_mode_switch), but its own body
+    is also a reader of that exact state (has_tested()), with no await
+    before that read, so it reliably wins the race against whatever writer
+    it's paired with. Used by both _tools_node (the actual per-turn
+    dispatch gate) and start_agent's batch_will_be_rejected pre-check
+    (which must reject the identical set of turns _tools_node will, or an
+    operator can be asked to approve a batch that's rejected anyway the
+    moment it's resumed) - kept as one function specifically so those two
+    checks can't drift apart the way they briefly did for the switch_mode
+    case."""
+    writers = names & _MODE_GATE_WRITER_TOOL_NAMES
+    readers = names & _MODE_GATE_READER_TOOL_NAMES
+    if readers:
+        return writers, readers
+    if agent_tools.SWITCH_MODE_TOOL_NAME in names:
+        other_writers = writers - {agent_tools.SWITCH_MODE_TOOL_NAME}
+        if other_writers:
+            return writers, {agent_tools.SWITCH_MODE_TOOL_NAME}
+    return writers, set()
+
+
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     target_scope: AgentTargetScope
@@ -574,32 +607,39 @@ class Agent:
     async def _tools_node(self, state: AgentState, config: RunnableConfig):
         """Wraps the real ToolNode with a pre-dispatch check for the race
         described above _MODE_GATE_WRITER_TOOL_NAMES: a turn whose
-        tool_calls mix a writer (run/new_session/switch_mode) with a reader
-        (report_vulnerability/log_attack_attempt) is rejected outright -
-        NONE of that turn's calls execute for real, and every one gets a
-        synthetic ToolMessage explaining why, so the model can retry them
-        as separate turns instead. This removes the race by construction
-        (a writer and a reader can never actually run concurrently against
-        each other) rather than trying to out-time asyncio.gather."""
+        tool_calls mix a writer (run/new_session/switch_mode/...) with a
+        reader (report_vulnerability/log_attack_attempt), OR pair
+        switch_mode with any other writer, is rejected outright - NONE of
+        that turn's calls execute for real, and every one gets a synthetic
+        ToolMessage explaining why, so the model can retry them as separate
+        turns instead. This removes the race by construction (a writer and
+        a reader - including switch_mode's own read of has_tested() - can
+        never actually run concurrently against each other) rather than
+        trying to out-time asyncio.gather."""
         last_message: AIMessage = state["messages"][-1]
         tool_calls = last_message.tool_calls
 
         names = {tc["name"] for tc in tool_calls}
-        writers = names & _MODE_GATE_WRITER_TOOL_NAMES
-        readers = names & _MODE_GATE_READER_TOOL_NAMES
+        writers, reader_like = _mode_gate_conflict(names)
 
-        if writers and readers:
+        if reader_like:
+            # reader_like must run AFTER writers - writers (minus
+            # reader_like itself, for the switch_mode-vs-writer case where
+            # switch_mode is a member of both sets) is what needs to go
+            # first. See _mode_gate_conflict's own docstring for why
+            # switch_mode can end up as reader_like here.
             rejection = (
                 "Rejected: this turn called "
                 f"{', '.join(sorted(writers))} together with "
-                f"{', '.join(sorted(readers))} in the SAME turn - none of "
-                "these calls ran. Tool calls in one turn execute "
+                f"{', '.join(sorted(reader_like))} in the SAME turn - none "
+                "of these calls ran. Tool calls in one turn execute "
                 "concurrently, so a report_vulnerability/log_attack_attempt "
-                "call can't reliably see a run()/new_session()/switch_mode "
-                "result from the very same turn. See the result of "
-                f"{', '.join(sorted(writers))} on its own turn FIRST, then "
-                "call "
-                f"{', '.join(sorted(readers))} on a later turn."
+                "call (or switch_mode) can't reliably see a run()/"
+                "new_session()/searchsploit_run/... result from the very "
+                "same turn. See the result of "
+                f"{', '.join(sorted(writers - reader_like))} on its own "
+                f"turn FIRST, then call {', '.join(sorted(reader_like))} "
+                "on a later turn."
             )
             return {
                 "messages": [
@@ -1395,17 +1435,20 @@ class Agent:
                 # _INTERRUPT_GATED_TOOL_NAMES).
                 tool_call_names = {tc["name"] for tc in tool_calls}
                 # _tools_node rejects this exact turn outright (see its own
-                # docstring) whenever it mixes a writer with a reader -
-                # don't ask the user to approve a run()/new_session() call
-                # that's going to be rejected the moment it's resumed
-                # regardless of their answer; that made an approval look
-                # like a silent no-op. Let it flow straight through to
-                # _tools_node instead, which explains the rejection to the
-                # model directly.
-                batch_will_be_rejected = bool(
-                    tool_call_names & _MODE_GATE_WRITER_TOOL_NAMES
-                    and tool_call_names & _MODE_GATE_READER_TOOL_NAMES
-                )
+                # docstring and _mode_gate_conflict) whenever it mixes a
+                # writer with a reader-like tool (a real reader, or
+                # switch_mode paired with another writer) - don't ask the
+                # user to approve a run()/new_session() call that's going
+                # to be rejected the moment it's resumed regardless of
+                # their answer; that made an approval look like a silent
+                # no-op. Let it flow straight through to _tools_node
+                # instead, which explains the rejection to the model
+                # directly. Uses the exact same _mode_gate_conflict helper
+                # _tools_node itself calls, specifically so this pre-check
+                # can't drift out of sync with what _tools_node will
+                # actually reject.
+                _, reader_like = _mode_gate_conflict(tool_call_names)
+                batch_will_be_rejected = bool(reader_like)
                 # request_port_access must pause for approval unconditionally
                 # - see _ALWAYS_INTERRUPT_TOOL_NAMES - even on a project that
                 # has should_interrupt turned off entirely.
