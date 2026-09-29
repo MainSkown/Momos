@@ -324,6 +324,16 @@ def _message_to_log_specs(
     elif isinstance(message, ToolMessage):
         content = _stringify_content(message.content)
         artifact = getattr(message, "artifact", None)
+        # AgentLog.raw_output is Optional[str] - some content_and_artifact
+        # tools put non-string data there instead (request_port_access's
+        # artifact is a List[int] of newly-authorized ports, consumed
+        # directly from message.artifact by agent.py's port-application
+        # logic, never meant to be persisted/displayed as text). Passing
+        # that straight through used to reach AgentLogResponse.model_validate
+        # in _persist_and_broadcast and raise a pydantic ValidationError
+        # there, crashing log persistence for the very turn a port grant
+        # was just approved - confirmed by reproducing it directly.
+        artifact_str = artifact if isinstance(artifact, str) else None
 
         # artifact is populated for tools using response_format=
         # "content_and_artifact" (run/new_session/switch_session, see
@@ -342,10 +352,10 @@ def _message_to_log_specs(
         # agent_tools.py), so here - and only here - that's what gets
         # displayed; the full source is kept as raw_output instead of
         # being discarded.
-        if message.name == agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME and artifact:
-            display_content, raw_output = artifact, content
+        if message.name == agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME and artifact_str:
+            display_content, raw_output = artifact_str, content
         else:
-            display_content, raw_output = content, artifact
+            display_content, raw_output = content, artifact_str
 
         if display_content.strip():
             specs.append(("action", display_content, None, raw_output))
