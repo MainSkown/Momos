@@ -111,12 +111,31 @@ export const en = {
         user_options: "User Options",
         should_interrupt: "Should Interrupt",
         enable_interruption: "Enable interruption handling",
+        choose_tools: "Choose Tools",
+        tools_dialog_title: "Choose Agent Tools",
+        max_context_window: "Max Context Window",
+        max_context_window_placeholder: "Default",
         allow_shell: "Allow Shell",
-        enable_allow_shell: "Allow raw terminal commands (run/new_session/...)",
+        allow_shell_tooltip: "Lets the agent execute arbitrary commands inside the sandbox.",
+        enable_allow_shell: "Raw terminal commands",
         allow_install_packages: "Allow Installing Packages",
-        enable_allow_install_packages: "Allow installing new Kali packages (requires Allow Shell)",
+        enable_allow_install_packages: "Install new Kali packages",
         starting_prompt: "Starting Prompt",
-        available_placeholders: "Available placeholders"
+        available_placeholders: "Available placeholders",
+        tool_groups: {
+            hydra: "Hydra",
+            hydra_desc: "Brute-force login credentials for a network service.",
+            gobuster: "Gobuster",
+            gobuster_desc: "Brute-force directories/files on a web server.",
+            searchsploit_run: "Run Exploits",
+            searchsploit_run_desc: "Execute a matched Exploit-DB script against the target.",
+            ftp: "FTP",
+            ftp_desc: "Connect to and browse an FTP service.",
+            ssh: "SSH",
+            ssh_desc: "Test SSH credentials and run commands over SSH.",
+            telnet: "Telnet",
+            telnet_desc: "Probe a Telnet service."
+        }
     },
 
     console: {

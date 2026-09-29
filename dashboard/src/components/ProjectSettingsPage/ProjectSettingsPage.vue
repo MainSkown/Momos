@@ -18,6 +18,18 @@
         </div>
 
         <div class="field-group">
+          <label class="text-bold">{{ $t("settings.choose_tools") }}</label>
+          <button
+            type="button"
+            class="button border full-width model-select-button"
+            :disabled="isScanRunning"
+            @click="showToolsDialog = true"
+          >
+            {{ $t("settings.choose_tools") }}
+          </button>
+        </div>
+
+        <div class="field-group">
           <label class="text-bold">{{ $t("models.base_model") }}</label>
           <button
             type="button"
@@ -27,6 +39,20 @@
           >
             {{ project_settings.base_model_name || $t("models.select_model") }}
           </button>
+        </div>
+
+        <div class="field-group">
+          <label class="text-bold">{{ $t("settings.max_context_window") }}</label>
+          <input
+            v-model="maxContextWindowInput"
+            @blur="handleMaxContextWindowBlur"
+            type="number"
+            min="1"
+            inputmode="numeric"
+            :placeholder="$t('settings.max_context_window_placeholder')"
+            class="input-field border full-width"
+            :disabled="isScanRunning"
+          />
         </div>
 
         <div class="field-group">
@@ -44,12 +70,14 @@
         <div class="field-group">
           <label class="text-bold">{{ $t("settings.allow_shell") }}</label>
           <div class="row gap-low flex-center">
-            <input
-              v-model="project_settings.allow_shell"
-              class="checkbox-input"
-              type="checkbox"
-              @change="onAllowShellChanged"
-            />
+            <Tooltip :message="$t('settings.allow_shell_tooltip')">
+              <input
+                v-model="project_settings.allow_shell"
+                class="checkbox-input"
+                type="checkbox"
+                @change="onAllowShellChanged"
+              />
+            </Tooltip>
             <span class="text-gray">{{ $t("settings.enable_allow_shell") }}</span>
           </div>
         </div>
@@ -156,6 +184,12 @@
     :selected-model-name="project_settings.parsing_model_name"
     @select="onParsingModelSelected"
   />
+
+  <ToolsPickerDialog
+    v-if="project_settings !== null"
+    v-model:visible="showToolsDialog"
+    v-model:enabled-tools="project_settings.enabled_tools"
+  />
 </template>
 
 <script setup lang="ts">
@@ -169,7 +203,9 @@ import "@/assets/md-editor.css";
 
 import { MdEditor } from "md-editor-v3";
 import Dialog from "@/components/reusable/Dialog.vue";
+import Tooltip from "@/components/reusable/Tooltip.vue";
 import ModelPickerDialog from "./ModelPickerDialog.vue";
+import ToolsPickerDialog from "./ToolsPickerDialog.vue";
 
 const store = useMomosStore();
 const { t } = useI18n();
@@ -179,6 +215,46 @@ const isDeleting = ref(false);
 const showDeleteDialog = ref(false);
 const showBaseModelDialog = ref(false);
 const showParsingModelDialog = ref(false);
+const showToolsDialog = ref(false);
+const maxContextWindowInput = ref<string>("");
+
+// Mirrors TargetSettingsDialog.vue's durationInput/handleDurationBlur idea
+// for a nullable numeric field - a plain v-model.number on max_context_window
+// directly can't distinguish "cleared" from "0", so it's tracked as its own
+// string ref and reconciled on blur instead. project_settings itself
+// reloads in place (this page isn't remounted per project - see
+// load_settings/the openedProject watcher below), so this needs its own
+// watcher to re-sync whenever a different project's settings load in.
+watch(
+  () => project_settings.value?.max_context_window,
+  (value) => {
+    maxContextWindowInput.value = value != null ? String(value) : "";
+  },
+  { immediate: true },
+);
+
+function handleMaxContextWindowBlur() {
+  if (project_settings.value === null) return;
+
+  const trimmed = maxContextWindowInput.value.trim();
+  if (!trimmed) {
+    project_settings.value.max_context_window = null;
+    return;
+  }
+
+  const parsed = Number(trimmed);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    project_settings.value.max_context_window = Math.floor(parsed);
+  }
+
+  // Re-format the field from the canonical value - clears out anything
+  // that didn't parse (e.g. a negative number/garbage) back to whatever
+  // was last actually saved to project_settings.
+  maxContextWindowInput.value =
+    project_settings.value.max_context_window != null
+      ? String(project_settings.value.max_context_window)
+      : "";
+}
 
 const isScanRunning = computed(
   () => store.getRunningTarget(store.openedProject) !== null,
@@ -349,6 +425,25 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A bare <button> gets the browser's own UA padding instead of
+     .input-field's explicit --spacing-sm/--spacing-md - without this,
+     every button in .settings-left renders shorter than the inputs next
+     to it. */
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+
+/* Chrome/Safari/Edge's number-input step arrows - not useful for a value
+   like context window nobody increments one at a time, and removing them
+   avoids the extra width they'd otherwise reserve next to max-context's
+   input-field. */
+.settings-left input[type="number"]::-webkit-outer-spin-button,
+.settings-left input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.settings-left input[type="number"] {
+  -moz-appearance: textfield;
 }
 
 .prompt-legend {

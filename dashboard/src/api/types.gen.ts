@@ -511,6 +511,10 @@ export type ProjectSettings = {
      */
     allow_install_packages?: boolean;
     /**
+     * Enabled Tools
+     */
+    enabled_tools?: Array<string> | null;
+    /**
      * Project Id
      */
     project_id: string;
@@ -548,6 +552,10 @@ export type ProjectSettingsBody = {
      * Allow Install Packages
      */
     allow_install_packages?: boolean;
+    /**
+     * Enabled Tools
+     */
+    enabled_tools?: Array<string> | null;
     /**
      * Project Id
      */
