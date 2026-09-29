@@ -323,15 +323,32 @@ def _message_to_log_specs(
 
     elif isinstance(message, ToolMessage):
         content = _stringify_content(message.content)
+        artifact = getattr(message, "artifact", None)
 
-        if content.strip():
-            # artifact is populated for tools using response_format=
-            # "content_and_artifact" (run/new_session/switch_session, see
-            # agent_tools.py) - None for every other tool, and never sent
-            # back to the model either way (LangChain only resends
-            # .content/.tool_calls, not .artifact).
-            raw_output = getattr(message, "artifact", None)
-            specs.append(("action", content, None, raw_output))
+        # artifact is populated for tools using response_format=
+        # "content_and_artifact" (run/new_session/switch_session, see
+        # agent_tools.py) - None for every other tool, and never sent
+        # back to the model either way (LangChain only resends
+        # .content/.tool_calls, not .artifact). It's persisted as
+        # AgentLog.raw_output but never rendered by the frontend, so in
+        # every other case `content` is both what the agent sees next
+        # turn AND what the user sees in the log.
+        #
+        # searchsploit_view is the one deliberate exception: its `content`
+        # must stay the exploit's full raw source (the agent needs it
+        # verbatim - see its own docstring), which is too much to dump
+        # into the user-facing chat log. Its artifact holds a short,
+        # parsed summary instead (see _summarize_exploit_source in
+        # agent_tools.py), so here - and only here - that's what gets
+        # displayed; the full source is kept as raw_output instead of
+        # being discarded.
+        if message.name == agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME and artifact:
+            display_content, raw_output = artifact, content
+        else:
+            display_content, raw_output = content, artifact
+
+        if display_content.strip():
+            specs.append(("action", display_content, None, raw_output))
 
     return specs
 

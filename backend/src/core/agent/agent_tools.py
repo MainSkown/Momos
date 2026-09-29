@@ -1492,6 +1492,40 @@ async def _looks_like_metasploit_module(project_id: str, path: str) -> bool:
     return ok and any(marker in head for marker in _METASPLOIT_MODULE_MARKERS)
 
 
+# Exploit-db scripts conventionally carry a leading comment-block header
+# with a handful of "Key: value" fields (# Exploit Title: ..., # Date:
+# ..., # Exploit Author: ..., # Vulnerable App: ..., # CVE : ..., etc).
+# Matched deterministically (not via the LLM condenser - see
+# searchsploit_view's own comment on why it can't risk paraphrasing the
+# actual source) and only over the first few lines, so it can't run away
+# matching arbitrary "#"-prefixed text deeper in the script body.
+_EXPLOIT_HEADER_FIELD = re.compile(
+    r"^[#;]{1,3}\s*(Exploit Title|Exploit Author|Author|Date|Vulnerable App|"
+    r"Software Link|Version|Tested on|CVE|Type|Platform|Category)\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_EXPLOIT_HEADER_LINES_SCANNED = 20
+
+
+def _summarize_exploit_source(edb_id: str, path: str, source: str) -> str:
+    """Builds the short, user-facing display string for searchsploit_view -
+    deliberately NOT what's returned to the agent (see its own docstring:
+    the agent needs the exact source, e.g. to catch a hardcoded backdoor
+    port, so full source always stays in the tool's `content`). This is
+    only ever used for the display/artifact side."""
+    header = "\n".join(source.splitlines()[:_EXPLOIT_HEADER_LINES_SCANNED])
+    fields = _EXPLOIT_HEADER_FIELD.findall(header)
+    if fields:
+        field_lines = "\n".join(f"{key.strip()}: {value.strip()}" for key, value in fields)
+        return f"Exploit source for EDB-ID {edb_id} ({path}):\n{field_lines}"
+    total_lines = len(source.splitlines())
+    _, ext = os.path.splitext(path)
+    return (
+        f"Read exploit source for EDB-ID {edb_id} ({path}, {total_lines} "
+        f"lines, {ext or 'unknown'} script) - no recognizable header found."
+    )
+
+
 def create_pentest_tools(
     project_id: str,
     target_id: str,
@@ -1799,7 +1833,16 @@ def create_pentest_tools(
         if not ok:
             return output, None
         on_raw_output(output)
-        return output, output
+        # content (slot 0) is the full raw source, unchanged - the agent
+        # needs it verbatim per this tool's own docstring (e.g. to catch a
+        # hardcoded backdoor port before running it), so it can't go
+        # through the LLM condenser other tools use. The artifact (slot 1)
+        # is a short, deterministic parsed summary instead - see
+        # agent_service.py's _message_to_log_specs, which special-cases
+        # this tool to display THIS in the chat log rather than the full
+        # source dump every other tool's artifact would get (artifact is
+        # otherwise never rendered to the user, only persisted).
+        return output, _summarize_exploit_source(edb_id, path, output)
 
     @tool(SEARCHSPLOIT_RUN_TOOL_NAME, response_format="content_and_artifact")
     async def searchsploit_run(edb_id: str, exploit_args: str = "") -> str:
