@@ -154,8 +154,19 @@ const { t: $t } = useI18n();
 const ws_client = useWebSocketClient();
 
 const props = defineProps<{ target: tTarget }>();
+// Lets a parent list (Targets.vue) know this target's run status without
+// polling/loading it a second time itself - used to keep the settings/
+// delete buttons blocked for the whole lifetime of a run (running, paused,
+// AND interrupted), not just while it's actively executing. Emitted
+// whenever `run` changes below, immediately on mount included.
+const emit = defineEmits<{ "update:status": [status: string | null] }>();
 
 const run = ref<AgentRunResponse | null>(null);
+watch(
+  () => run.value?.status ?? null,
+  (status) => emit("update:status", status),
+  { immediate: true },
+);
 const isHovering = ref(false);
 const displayNow = ref(Date.now());
 const isBuilding = ref(false);

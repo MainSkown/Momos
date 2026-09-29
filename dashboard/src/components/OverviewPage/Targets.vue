@@ -55,14 +55,17 @@
 
             <!-- Start/pause target scan -->
             <div class="border run-cell">
-              <AgentRunButton :target="t" />
+              <AgentRunButton
+                :target="t"
+                @update:status="(s) => (runStatusByTarget[t.id] = s)"
+              />
             </div>
 
             <!-- Settings button -->
             <div
               class="button border small-cell"
-              :class="{ disabled: isRunning(t) }"
-              @click="!isRunning(t) && (showDialogFor = t.id)"
+              :class="{ disabled: isTargetBusy(t) }"
+              @click="!isTargetBusy(t) && (showDialogFor = t.id)"
             >
               <span class="material-icons-outlined" data-fallback="✕">
                 settings
@@ -72,8 +75,8 @@
             <!-- Delete button-->
             <div
               class="button border small-cell"
-              :class="{ disabled: isRunning(t) }"
-              @click="!isRunning(t) && (toDelete = t.id)"
+              :class="{ disabled: isTargetBusy(t) }"
+              @click="!isTargetBusy(t) && (toDelete = t.id)"
             >
               <span class="material-icons-outlined" data-fallback="✕">
                 delete_outline
@@ -141,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
 import { getTarget, type tTarget } from "@/types";
 import { toast } from "vue3-toastify";
@@ -156,12 +159,32 @@ const store = useMomosStore();
 const showDialogFor = ref<string>("");
 const toDelete = ref<string>("");
 
+// Populated from each row's own AgentRunButton (@update:status) - the
+// store's isRunning() below only reflects a target actively executing
+// (cleared the instant a run pauses, see AgentService._run_agent's
+// finally block), which used to leave the settings/delete buttons
+// clickable on a merely-paused-or-interrupted run. Editing (e.g. clearing
+// task_duration) or deleting a target out from under a paused run is what
+// this map exists to block - keyed by target id since each row tracks its
+// own target's run independently.
+const runStatusByTarget = reactive<Record<string, string | null>>({});
+const BLOCKING_RUN_STATUSES = new Set(["running", "paused", "interrupted"]);
+
 function loadTargets() {
   store.loadTargets(store.openedProject);
 }
 
 function isRunning(t: tTarget): boolean {
   return store.getRunningTarget(store.openedProject) === t.id;
+}
+
+// Whether the settings/delete buttons should be blocked for this target -
+// true for the whole lifetime of a run (running, paused, or interrupted),
+// not just while it's actively executing. isRunning(t) is kept alongside
+// runStatusByTarget as a defensive fallback (it's driven by a separate,
+// already-reliable websocket/poll path) rather than replaced by it.
+function isTargetBusy(t: tTarget): boolean {
+  return isRunning(t) || BLOCKING_RUN_STATUSES.has(runStatusByTarget[t.id] ?? "");
 }
 
 onMounted(() => {
