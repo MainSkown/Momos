@@ -164,7 +164,7 @@ def _mode_gate_conflict(names: set) -> tuple:
     case."""
     writers = names & _MODE_GATE_WRITER_TOOL_NAMES
     readers = names & _MODE_GATE_READER_TOOL_NAMES
-    if readers:
+    if writers and readers:
         return writers, readers
     if agent_tools.SWITCH_MODE_TOOL_NAME in names:
         other_writers = writers - {agent_tools.SWITCH_MODE_TOOL_NAME}
