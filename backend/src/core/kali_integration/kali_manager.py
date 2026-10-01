@@ -758,7 +758,7 @@ class KaliManger:
         # has no .recv()/.settimeout(). The actually-usable raw socket is
         # the wrapper's private ._sock. This is a docker-py internal, not a
         # stable public API - confirmed against the version pinned in
-        # poetry.lock; re-verify if that pin is ever bumped.
+        # uv.lock; re-verify if that pin is ever bumped.
         wrapper = self.client.api.exec_start(exec_id, socket=True, tty=True)
         return exec_id, wrapper._sock
 

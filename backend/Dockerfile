@@ -1,38 +1,25 @@
-# Stage 1: Base - Setup Python and Poetry environment variables
+# Stage 1: Base - Python, uv and the locked dependency manifests
 FROM python:3.12-slim AS base
 
+# The venv lives outside /app so the ./backend:/app bind mount can't hide it
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_NO_INTERACTION=1 \
-    PYSETUP_PATH="/opt/pysetup" \
-    VENV_PATH="/opt/pysetup/.venv"
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH="/opt/venv/bin:$PATH"
 
-# Add Poetry and Virtualenv to PATH
-ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /usr/local/bin/uv
 
-# Install system dependencies needed for building packages or interacting with Docker
-RUN apt-get update \
-    && apt-get install --no-install-recommends -y \
-    curl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 -
-
-# Set up working directory for dependencies
-WORKDIR $PYSETUP_PATH
-COPY poetry.lock pyproject.toml ./
+WORKDIR /opt/pysetup
+COPY pyproject.toml uv.lock ./
 
 
 # Stage 2: Development - Installs ALL dependencies (including dev)
 FROM base AS dev
-WORKDIR $PYSETUP_PATH
 
-# Install all dependencies
-RUN poetry install --no-root
+RUN uv sync --frozen --no-install-project
 
 # Set working directory for application code
 WORKDIR /app
@@ -43,10 +30,8 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Stage 3: Production - Installs only main dependencies and copies code
 FROM base AS prod
-WORKDIR $PYSETUP_PATH
 
-# Install only production dependencies
-RUN poetry install --only main --no-root
+RUN uv sync --frozen --no-install-project --no-dev
 
 WORKDIR /app
 COPY . /app

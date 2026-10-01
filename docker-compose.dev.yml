@@ -38,6 +38,8 @@ services:
             - ".venv"
         - action: rebuild
           path: ./backend/pyproject.toml
+        - action: rebuild
+          path: ./backend/uv.lock
   db:
     ports:
       - "5432:5432"
