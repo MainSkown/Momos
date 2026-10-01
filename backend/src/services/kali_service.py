@@ -1,4 +1,5 @@
-from src.schemas import KaliUser, KaliStatusResponse
+from typing import List
+from src.schemas import KaliUser, KaliStatusResponse, ConsoleSessionInfo
 from src.core.kali_integration import kali_user_registry, kali_registry
 
 
@@ -38,6 +39,19 @@ class KaliService:
     async def create_client(project_id: str) -> KaliUser:
         client_id = await kali_user_registry.create_user(project_id)
         return KaliUser(client_id=client_id)
+
+    @staticmethod
+    async def list_sessions(project_id: str) -> List[ConsoleSessionInfo]:
+        """Live console-session state for reload recovery - KaliManger.
+        sessions is the only source of truth (in-memory, same as the
+        agent's own sessions - nothing here is persisted to the DB), so
+        this is a live read, not a query. Empty (not an error) whenever
+        the project has no active console client at all."""
+        user = kali_user_registry.get_active_user_for_project(project_id)
+        if user is None:
+            return []
+        sessions = await user.list_sessions()
+        return [ConsoleSessionInfo(name=s.name, user=s.user) for s in sessions]
 
     @staticmethod
     def get_status(project_id: str) -> KaliStatusResponse:

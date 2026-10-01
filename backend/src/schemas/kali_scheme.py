@@ -1,10 +1,22 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from enum import Enum
 
 class KaliUser(BaseModel):
     client_id: str
     pending: Optional[bool] = None
+
+
+class ConsoleSessionInfo(BaseModel):
+    """One active User Console session - see kali_user.py's
+    CONSOLE_TARGET_ID/create_session. name carries the "root-"/"momos-"
+    prefix create_session assigns (e.g. "root-1") to stay unique within
+    the shared console namespace, and is also what SendCommandMessage.
+    session/CloseConsoleSessionMessage.session expect - the frontend
+    strips the prefix itself before using it as the tab label."""
+
+    name: str
+    user: Literal["root", "momos"]
 
 
 class KaliCreationStage(str, Enum):

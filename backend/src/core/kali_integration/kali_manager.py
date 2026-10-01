@@ -7,7 +7,7 @@ import socket as socket_module
 import time
 from docker.errors import DockerException
 import logging
-from typing import Callable, Dict, Final, List, Optional, Sequence
+from typing import Awaitable, Callable, Dict, Final, List, Optional, Sequence
 from src.schemas import Target, KaliCreationStage
 from enum import Enum
 from .kali_session import (
@@ -36,15 +36,31 @@ class KALI_USERS(str, Enum):
 
 MOMOS_USER: Final = KALI_USERS.momos
 
-# Detects whether a session's latest output ended at the default session's
-# own plain shell prompt (e.g. "momos@bd30a780249c:~$ ") rather than some
-# other program's prompt (ftp's "ftp> ", mysql's "mysql> ", a Python
-# ">>> ", msfconsole's "msf6 > ", ...). Confirmed against a real leaked
-# prompt in production - see KaliManger._session_io's use of this.
+# Detects whether a session's latest output ended at its own plain shell
+# prompt (e.g. "momos@bd30a780249c:~$ " or "root@bd30a780249c:~# ") rather
+# than some other program's prompt (ftp's "ftp> ", mysql's "mysql> ", a
+# Python ">>> ", msfconsole's "msf6 > ", ...). Confirmed against a real
+# leaked prompt in production - see KaliManger._session_io's use of this.
 # Terminal escape sequences (bracketed-paste toggles, colors, ...) are
 # stripped first since a tty=True exec can emit them around the prompt.
+# Built from every KALI_USERS member (not just momos) - the User Console's
+# root sessions need their own "root@...#" prompt recognized too, or a
+# root session's read-window early-exit never fires and every command
+# silently pays the full wait_seconds instead of returning as soon as the
+# prompt reappears.
+#
+# Also matches Kali's own decorated root prompt's bottom line ("└─# "/
+# "└─$ ") directly, rather than relying on the plain "user@host:path$"
+# alternative above - root's default PS1 in this image renders as TWO
+# physical lines ("┌──(root㉿<host>)-[<cwd>]" then "└─# "), and that
+# bottom line never contains "root@" at all (it uses "㉿", not a literal
+# "@", on the line above). Confirmed in production: without this, a root
+# session's early-exit never fired and every root command silently paid
+# the full wait_seconds, even a near-instant one like "ls".
 _ANSI_ESCAPE_PATTERN: Final = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
-_SHELL_PROMPT_PATTERN: Final = re.compile(rf"{re.escape(str(MOMOS_USER))}@\S+:.*[$#]\s*$")
+_SHELL_PROMPT_PATTERN: Final = re.compile(
+    rf"(?:(?:{'|'.join(re.escape(str(u)) for u in KALI_USERS)})@\S+:.*[$#]|└─[#$])\s*$"
+)
 
 
 def _looks_like_shell_prompt(output: str) -> bool:
@@ -129,6 +145,16 @@ _PROMPT_TAIL_CHECK_BYTES: Final = 256
 # comment. Still wait this much longer (rather than returning the instant
 # it's seen) in case a little more output is still trailing right behind it.
 _PROMPT_REAPPEAR_GRACE_SECONDS: Final = 2.0
+# Same idea, but for the User Console specifically (see run_in_session) -
+# a human typing commands one at a time expects near-instant feedback like
+# a real terminal, where _PROMPT_REAPPEAR_GRACE_SECONDS's 2s floor on every
+# single command reads as sluggish. The agent's own calls (run_in_current_
+# session/interrupt_session) deliberately keep the longer default instead -
+# its commands are often scan-like and can legitimately trail a little more
+# output right behind the prompt, which the agent's parsing pipeline needs
+# intact; a human watching the screen can just press Enter again if a
+# command is still genuinely finishing up.
+_CONSOLE_PROMPT_REAPPEAR_GRACE_SECONDS: Final = 0.3
 
 # Same early-exit idea as _SHELL_PROMPT_PATTERN, but for interactive
 # programs whose OWN prompt never matches the plain bash pattern (ftp's
@@ -419,6 +445,23 @@ class KaliManger:
         # see open_session's TOCTOU fix.
         self._pending_sessions: set[tuple[str, str]] = set()
         self._session_sweep_task: Optional[asyncio.Task] = None
+        # Monotonic (target_id, user) -> next session number to hand out -
+        # see next_session_number. Lives here (not derived from `sessions`
+        # at call time) specifically so a number is never reused: `sessions`
+        # also doubles as "currently open" state, and a name freed by a
+        # close that's still unwinding (see _close_session's own comment -
+        # _remove_from_registry runs before the socket is actually closed)
+        # could otherwise be handed out again to a brand-new, unrelated
+        # session while the old one's last read is still in flight.
+        self._session_numbers: Dict[str, int] = {}
+        # Optional async hook, set by whoever owns this manager's project-
+        # level identity (kali_user.py) - called with (target_id, name)
+        # whenever the idle sweep below closes a session on its own
+        # initiative, not in response to an explicit close_session call.
+        # None by default: an agent-driven session needs no such
+        # notification (nothing agent-side listens for one), only the
+        # console does, to keep a tab from silently going stale in the UI.
+        self.session_closed_notifier: Optional[Callable[[str, str], Awaitable[None]]] = None
 
         try:
             self.client = docker.from_env()
@@ -633,6 +676,25 @@ class KaliManger:
         # target in a project, so the dict key namespaces by target_id.
         return f"{target_id}::{name}"
 
+    async def next_session_number(self, target_id: str, user: str) -> int:
+        """Hands out the next number for an auto-numbered session (the
+        User Console's "root-1", "root-2", ... - see kali_user.py's
+        create_session), scoped to (target_id, user) so root's and momos's
+        own numbers count independently. Deliberately a standalone counter
+        rather than `max(existing session suffixes) + 1` computed from
+        `list_sessions` at call time - that version raced with a session
+        being closed (see _close_session: the name is freed from `sessions`
+        before the socket is actually closed) and could hand out an
+        already-in-use number to a brand-new, unrelated session while the
+        old one's last read was still unwinding. This only ever increments,
+        for as long as this manager (i.e. this project's container) is
+        tracked in-process - a number is never handed out twice."""
+        key = self._session_key(target_id, user)
+        async with self.sessions_lock:
+            next_number = self._session_numbers.get(key, 0) + 1
+            self._session_numbers[key] = next_number
+            return next_number
+
     def _get_session(self, target_id: str, name: str) -> KaliSession:
         session = self.sessions.get(self._session_key(target_id, name))
         if session is None:
@@ -773,6 +835,7 @@ class KaliManger:
         data: Optional[bytes],
         wait_seconds: float,
         extra_ready_pattern: Optional["re.Pattern"] = None,
+        prompt_reappear_grace_seconds: float = _PROMPT_REAPPEAR_GRACE_SECONDS,
     ) -> str:
         """Runs in the executor thread. Optionally writes `data`, then
         drains whatever arrives until `wait_seconds` pass with NO new data
@@ -857,7 +920,7 @@ class KaliManger:
 
                 tail = chunks[-_PROMPT_TAIL_CHECK_BYTES:].decode(errors="replace")
                 if _looks_ready(tail, extra_ready_pattern):
-                    next_timeout = _PROMPT_REAPPEAR_GRACE_SECONDS
+                    next_timeout = prompt_reappear_grace_seconds
                 else:
                     # Either ordinary output, or more data arrived right
                     # after what looked like a prompt (a false match inside
@@ -880,6 +943,37 @@ class KaliManger:
         data = (input + "\n").encode() if input is not None else None
         session = self._get_current_session(target_id)
         return await self._session_io(session, data, wait_seconds)
+
+    async def run_in_session(
+        self,
+        target_id: str,
+        name: str,
+        input: Optional[str],
+        wait_seconds: float = DEFAULT_READ_WINDOW_SECONDS,
+    ) -> str:
+        """Like run_in_current_session, but resolves the session by NAME
+        directly instead of through current_session's "whatever's current
+        for this target_id" pointer - for a caller (the User Console) that
+        can have several sessions open and visible at once, where sending
+        a command to one must never depend on, or silently change, which
+        session another one would resume into. current_session is a
+        single-focus affordance that only makes sense for a caller (the
+        agent) that's only ever "in" one session at a time - this
+        deliberately bypasses it rather than switch_session-ing first.
+
+        Also uses the shorter _CONSOLE_PROMPT_REAPPEAR_GRACE_SECONDS once
+        the prompt reappears - this is the only caller driven by a human
+        watching the screen in real time rather than an agent's own
+        tool-call loop, so it's also the only one worth trading away a
+        little trailing-output margin for a snappier feel."""
+        data = (input + "\n").encode() if input is not None else None
+        session = self._get_session(target_id, name)
+        return await self._session_io(
+            session,
+            data,
+            wait_seconds,
+            prompt_reappear_grace_seconds=_CONSOLE_PROMPT_REAPPEAR_GRACE_SECONDS,
+        )
 
     def _write_to_session_sync(self, sock: socket_module.socket, data: bytes) -> None:
         sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
@@ -921,7 +1015,11 @@ class KaliManger:
         return await self._session_io(session, b"\x03", DEFAULT_READ_WINDOW_SECONDS)
 
     async def _session_io(
-        self, session: KaliSession, data: Optional[bytes], wait_seconds: float
+        self,
+        session: KaliSession,
+        data: Optional[bytes],
+        wait_seconds: float,
+        prompt_reappear_grace_seconds: float = _PROMPT_REAPPEAR_GRACE_SECONDS,
     ) -> str:
         wait_seconds = max(0.5, min(wait_seconds, MAX_READ_WINDOW_SECONDS))
         loop = asyncio.get_running_loop()
@@ -936,6 +1034,7 @@ class KaliManger:
                     data,
                     wait_seconds,
                     extra_ready_pattern,
+                    prompt_reappear_grace_seconds,
                 )
             except EOFError:
                 exit_info = await loop.run_in_executor(
@@ -1125,16 +1224,30 @@ class KaliManger:
             else:
                 self.current_session.pop(target_id, None)
 
-    async def close_session(self, target_id: str, name: str) -> bool:
+    async def close_session(
+        self, target_id: str, name: str, force: bool = False
+    ) -> bool:
         """Closes a session by name. Returns True if a session with that
         name actually existed and was closed, False if there was nothing to
         close (already gone - explicitly, idle-swept, or its process
         exited) - callers should report this accurately rather than always
-        claiming success."""
+        claiming success.
+
+        `force` controls what happens if a foreground command is currently
+        blocking a read on this exact session (see _close_session) - it
+        only ever makes sense for an explicit, single-session "close THIS
+        one, now" request (the console's own close/exit, or the agent's
+        own close_session tool), where blocking until that read's own
+        wait_seconds elapses would defeat the point of asking to close it
+        at all. Left False (the original, safe-wait behavior) for every
+        other caller here - bulk/background cleanup (agent run ending,
+        container stopping, the idle sweep) has no such urgency, and
+        forcibly severing a session's socket while a legitimate, still-
+        progressing command is mid-read is worse than just waiting for it."""
         session = self.sessions.get(self._session_key(target_id, name))
         if session is None:
             return False
-        await self._close_session(session, reason="closed by agent")
+        await self._close_session(session, reason="closed by agent", force=force)
         await self._reassign_current_after_close(target_id, name)
         return True
 
@@ -1153,12 +1266,61 @@ class KaliManger:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, session.sock.close)
 
-    async def _close_session(self, session: KaliSession, reason: str) -> None:
+    def _force_close_socket_sync(self, session: KaliSession, reason: str) -> None:
+        """Like _close_session_locked, but doesn't wait for (or hold)
+        session.io_lock first - see _close_session's own comment for why.
+        Runs in the executor thread, same as the normal close - socket.
+        close() itself is a fast, non-blocking syscall, but routing it
+        through the same executor as every other socket op here keeps
+        this consistent rather than a special case."""
+        if session.closed:
+            return
+        session.closed = True
+        session.close_reason = reason
+        session.sock.close()
+
+    async def _close_session(
+        self, session: KaliSession, reason: str, force: bool = False
+    ) -> None:
         await self._remove_from_registry(session)
-        # Wait out any in-flight read/write on this session rather than
-        # closing the socket out from under it.
-        async with session.io_lock:
-            await self._close_session_locked(session, reason)
+        if force and session.io_lock.locked():
+            # A foreground command that never exits AND has gone quiet
+            # (a `nc -lvp` listener sitting idle waiting for a connection
+            # is the concrete case this was reported against) can hold a
+            # run_in_session call - and its io_lock - for as long as its
+            # own wait_seconds allows, up to MAX_READ_WINDOW_SECONDS.
+            # Waiting for that lock here (the normal path below) would
+            # make closing/exiting the session - the one thing meant to
+            # always work, even on a stuck session - queue up behind the
+            # exact read it's meant to escape, locking the user out of
+            # their own "exit" for as long as that read is still open.
+            # Instead, close the socket directly, unlocked - the same
+            # underlying guarantee interrupt_session's own lock-busy
+            # branch already relies on for a plain write: closing a
+            # socket out from under another thread's blocking recv() make
+            # that recv() return/raise right away, and _session_io's own
+            # EOFError/OSError handling (already written for exactly this
+            # shape of failure) takes it from there - it'll see
+            # session.closed already True below and no-op its own close
+            # attempt rather than double-closing or overwriting this
+            # close_reason.
+            #
+            # Gated on `force` (only close_session's explicit single-
+            # session callers pass it) rather than applying whenever the
+            # lock happens to be held - close_sessions_for_target/
+            # close_all_sessions/the idle sweep below all call this
+            # unforced, and a session they're closing can legitimately
+            # still be mid-read on a perfectly normal, still-progressing
+            # command; those callers are fine waiting for it, same as
+            # they always have, rather than severing it out from under
+            # itself just because the timing happened to overlap.
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, self._force_close_socket_sync, session, reason
+            )
+        else:
+            async with session.io_lock:
+                await self._close_session_locked(session, reason)
 
     async def close_sessions_for_target(self, target_id: str) -> None:
         async with self.sessions_lock:
@@ -1221,6 +1383,16 @@ class KaliManger:
                     await self._reassign_current_after_close(
                         session.target_id, session.name
                     )
+                    # Unlike an explicit close_session call, nothing else
+                    # tells a caller this happened - without this, a
+                    # console tab for an idle-swept session stayed open
+                    # in the UI forever (the backend session was long
+                    # gone), only ever surfacing as an error on the next
+                    # command sent to it.
+                    if self.session_closed_notifier is not None:
+                        await self.session_closed_notifier(
+                            session.target_id, session.name
+                        )
         except asyncio.CancelledError:
             pass
 

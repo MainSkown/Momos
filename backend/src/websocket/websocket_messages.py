@@ -16,6 +16,10 @@ class WsTypes(str, Enum):
     WebSocketMessage = "WebSocketMessage"
     SendCommandMessage = "SendCommandMessage"
     ReceiveCommandOutputMessage = "ReceiveCommandOutputMessage"
+    CreateConsoleSessionMessage = "CreateConsoleSessionMessage"
+    ConsoleSessionCreatedMessage = "ConsoleSessionCreatedMessage"
+    CloseConsoleSessionMessage = "CloseConsoleSessionMessage"
+    ConsoleSessionClosedMessage = "ConsoleSessionClosedMessage"
     CreatedKaliUserMessage = "CreatedKaliUserMessage"
     KaliCreationStage = "KaliCreationStage"
     KaliContainerActive = "KaliContainerActive"
@@ -69,7 +73,20 @@ class SendCommandMessage(InboundMessage):
     project_id: str
     type: Literal[WsTypes.SendCommandMessage]
     command: str
+    # Which console session to run this in - the session's own user
+    # (root/momos) was already fixed when it was created
+    # (CreateConsoleSessionMessage), so it's not re-sent per command.
+    session: str
+
+class CreateConsoleSessionMessage(InboundMessage):
+    project_id: str
+    type: Literal[WsTypes.CreateConsoleSessionMessage]
     user: Literal["root", "momos"]
+
+class CloseConsoleSessionMessage(InboundMessage):
+    project_id: str
+    type: Literal[WsTypes.CloseConsoleSessionMessage]
+    session: str
 
 class AgentInterruptResponseMessage(InboundMessage):
     project_id: str
@@ -83,7 +100,19 @@ class ReceiveCommandOutputMessage(OutboundMessage):
     project_id: str
     type: Literal[WsTypes.ReceiveCommandOutputMessage]
     output: str
-    
+    session: str
+
+class ConsoleSessionCreatedMessage(OutboundMessage):
+    project_id: str
+    type: Literal[WsTypes.ConsoleSessionCreatedMessage]
+    session: str
+    user: Literal["root", "momos"]
+
+class ConsoleSessionClosedMessage(OutboundMessage):
+    project_id: str
+    type: Literal[WsTypes.ConsoleSessionClosedMessage]
+    session: str
+
 class CreatedKaliUserMessage(OutboundMessage):
     project_id: str
     type: Literal[WsTypes.CreatedKaliUserMessage]

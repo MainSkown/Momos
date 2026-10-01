@@ -251,7 +251,7 @@ export type HttpValidationError = {
 /**
  * InboundTraffic
  */
-export type InboundTraffic = SendCommandMessage | AgentInterruptResponseMessage;
+export type InboundTraffic = SendCommandMessage | CreateConsoleSessionMessage | CloseConsoleSessionMessage | AgentInterruptResponseMessage;
 
 /**
  * KaliContainerActiveMessage
@@ -337,6 +337,20 @@ export type KaliUser = {
      * Pending
      */
     pending?: boolean | null;
+};
+
+/**
+ * ConsoleSessionInfo
+ */
+export type ConsoleSessionInfo = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
 };
 
 /**
@@ -444,7 +458,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
+export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
 
 /**
  * ProjectRequest
@@ -579,6 +593,52 @@ export type ReceiveCommandOutputMessage = {
      * Output
      */
     output: string;
+    /**
+     * Session
+     */
+    session: string;
+};
+
+/**
+ * ConsoleSessionCreatedMessage
+ */
+export type ConsoleSessionCreatedMessage = {
+    /**
+     * Type
+     */
+    type: 'ConsoleSessionCreatedMessage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
+};
+
+/**
+ * ConsoleSessionClosedMessage
+ */
+export type ConsoleSessionClosedMessage = {
+    /**
+     * Type
+     */
+    type: 'ConsoleSessionClosedMessage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
 };
 
 /**
@@ -682,9 +742,45 @@ export type SendCommandMessage = {
      */
     command: string;
     /**
+     * Session
+     */
+    session: string;
+};
+
+/**
+ * CreateConsoleSessionMessage
+ */
+export type CreateConsoleSessionMessage = {
+    /**
+     * Type
+     */
+    type: 'CreateConsoleSessionMessage';
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
      * User
      */
     user: 'root' | 'momos';
+};
+
+/**
+ * CloseConsoleSessionMessage
+ */
+export type CloseConsoleSessionMessage = {
+    /**
+     * Type
+     */
+    type: 'CloseConsoleSessionMessage';
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
 };
 
 /**
@@ -1103,6 +1199,36 @@ export type GetProjectKaliClientResponses = {
 };
 
 export type GetProjectKaliClientResponse = GetProjectKaliClientResponses[keyof GetProjectKaliClientResponses];
+
+export type GetConsoleSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/kali_client/sessions';
+};
+
+export type GetConsoleSessionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleSessionsError = GetConsoleSessionsErrors[keyof GetConsoleSessionsErrors];
+
+export type GetConsoleSessionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Array<ConsoleSessionInfo>;
+};
+
+export type GetConsoleSessionsResponse = GetConsoleSessionsResponses[keyof GetConsoleSessionsResponses];
 
 export type CreateKaliUserData = {
     body?: never;

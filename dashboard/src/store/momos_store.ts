@@ -18,7 +18,7 @@ import {
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
 
-type tCmd = { line: string; type: "cmd" | "error" | "user"; user?: string };
+type tCmd = { line: string; type: "cmd" | "error" | "user" | "system"; user?: string };
 
 type tDownloadObject = {
   model_name: string;
@@ -33,7 +33,7 @@ interface State {
   projects: tProject[];
   targets: tTarget[];
   cmd_outputs: {
-    [project_id: string]: tCmd[];
+    [project_id: string]: { [session: string]: tCmd[] };
   };
   download_queue: tDownloadObject[];
   running_targets: {
@@ -253,17 +253,29 @@ export const useMomosStore = defineStore("momos", {
     /* --- Commands --- */
     pushCmdLine(
       project_id: string,
+      session: string,
       line: string,
       type: tCmd["type"],
       user?: string,
     ) {
-      if (!this.cmd_outputs[project_id]) this.cmd_outputs[project_id] = [];
+      if (!this.cmd_outputs[project_id]) this.cmd_outputs[project_id] = {};
+      if (!this.cmd_outputs[project_id][session]) this.cmd_outputs[project_id][session] = [];
 
-      this.cmd_outputs[project_id].push({
+      this.cmd_outputs[project_id][session].push({
         line,
         type,
         user,
       });
+    },
+
+    /** Drops a closed session's own output history - called when a tab
+     * closes (its own explicit close, or "exit"). Session names are never
+     * reused (see kali_user.py's auto-numbering), so this is just plain
+     * cleanup, not needed to avoid a future session inheriting stale
+     * output - without it cmd_outputs would just grow forever across a
+     * long console lifetime. */
+    clearCmdLines(project_id: string, session: string) {
+      delete this.cmd_outputs[project_id]?.[session];
     },
 
     /* --- Managing Ollama --- */

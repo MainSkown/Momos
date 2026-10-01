@@ -3482,6 +3482,14 @@ def create_terminal_tools(
         session (if any) automatically becomes current. Close a session
         once you're done with it - a small number can be open at once."""
         manager = await kali_registry.get_manager(project_id)
+        # Deliberately NOT force=True (unlike the console's own close) -
+        # LangGraph's ToolNode runs a turn's tool calls concurrently
+        # (asyncio.gather - see agent.py's own comment on this), so a turn
+        # that calls both interrupt_session() and close_session() on the
+        # same session would otherwise race: force-closing could sever the
+        # socket out from under interrupt_session's own still-in-flight
+        # read instead of letting it finish first, as the safe-wait
+        # default always has.
         existed = await manager.close_session(target_id, name)
         if not existed:
             return (
