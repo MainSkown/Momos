@@ -1,16 +1,18 @@
-"""Pentesting role: one agent-run per assigned attack vector - test
-exactly that one vector, then report_outcome. No mode concept, no
-report_vulnerability (that's the reporting role's job, from this run's
-own full transcript - not a free-text claim pentesting itself hands
-over). A legitimate fork of agent.py's Agent, not a parametrization of
-it - see the "Each role is its own file/class" decision in the
-implementation plan. Only truly generic plumbing (token trimming, the
-turn-conflict guard, the stream-and-stop loop) is pulled from
+"""Scouting role: one agent-run per target, one job - thorough enumeration,
+then propose_attack_vector for everything worth testing. No mode concept
+(that split is now a role boundary, not something this role self-manages),
+no report_vulnerability (not its job), no log_attack_attempt (it never
+exploits anything). A legitimate fork of agent.py's Agent, not a
+parametrization of it - see the "Each role is its own file/class" decision
+in the implementation plan. Only truly generic plumbing (token trimming,
+the turn-conflict guard, the stream-and-stop loop) is pulled from
 roles/common.py; agent.py itself is never imported from here."""
 
+import uuid
 from typing import (
     Annotated,
     AsyncGenerator,
+    Dict,
     List,
     Optional,
     TypedDict,
@@ -26,17 +28,21 @@ from src.core import settings
 from src.core.agent import agent_tools
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
-from . import common
-from . import pentesting_tools
+from .. import common
+from ..tools import scouting_tools
+
+_MAX_ENUMERATION_PROPOSED_SHOWN = 40
 
 
-class PentestingState(TypedDict):
+class ScoutingState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     target_scope: AgentTargetScope
+    enumeration: Dict[str, Dict[str, str]]
+    proposed_vectors: List[str]
     finish_summary: Optional[str]
 
 
-class PentestingAgent:
+class ScoutingAgent:
     def __init__(
         self,
         model_name: str,
@@ -44,8 +50,6 @@ class PentestingAgent:
         project_id: str,
         target_id: str,
         agent_run_id: str,
-        attack_vector_id: str,
-        attack_vector_description: str,
         reasoning: Optional[bool] = None,
         context_window: Optional[int] = None,
         allow_shell: bool = True,
@@ -55,11 +59,8 @@ class PentestingAgent:
         self.project_id = project_id
         self.target_id = target_id
         self.agent_run_id = agent_run_id
-        self.attack_vector_id = attack_vector_id
-        self.attack_vector_description = attack_vector_description
         self.checkpointer = checkpointer
         self.finish_summary: Optional[str] = None
-        self.outcome: Optional[dict] = None
         self.context_window = context_window or common.DEFAULT_CONTEXT_WINDOW_FALLBACK
         self.allow_shell = allow_shell
 
@@ -68,25 +69,29 @@ class PentestingAgent:
         self._at_shell_prompt: bool = True
         self._authorized_ports_override: Optional[List[int]] = None
         self._last_raw_output: Optional[str] = None
-        # Monotonic - a single report_outcome call per run, unlike the
-        # Single Agent flow's per-claim has_tested/clear_tested cycle.
+        # Monotonic - never cleared, unlike the Single Agent flow's per-
+        # claim has_tested/clear_tested cycle. See
+        # scouting_tools.create_propose_attack_vector_tool's own docstring
+        # for why that's the right gate shape here (one scan, several
+        # proposals from it - not one proposal per tool call).
         self._has_real_action: bool = False
-        self._pending_enumeration: dict = {}
+        self._pending_enumeration: Dict[str, dict] = {}
+        self._pending_proposed_vectors: List[str] = []
 
-        self.tools = agent_tools.build_pentesting_agent_tools(
+        self._get_model_name = lambda: getattr(self, "model_name", "")
+
+        self.tools = agent_tools.build_scouting_agent_tools(
             project_id,
             target_id,
             agent_run_id,
-            attack_vector_id,
             self._record_enumeration,
             self._mark_tested,
-            self._get_mode,
             self._has_tested,
             self._set_current_session,
             self._set_at_shell_prompt,
             self._set_last_raw_output,
             self._set_authorized_ports,
-            self._on_outcome_reported,
+            self._mark_finished,
             allow_shell,
             allow_install_packages,
             enabled_tools,
@@ -95,15 +100,10 @@ class PentestingAgent:
         self.changeModel(model_name=model_name, reasoning=reasoning)
         self.app = self._build_graph()
 
-    def _get_mode(self) -> str:
-        # Constant, never "scouting" - reused purely so
-        # agent_tools._require_tested's mode check (built for the Single
-        # Agent flow's real scouting/exploiting split) trivially always
-        # passes here; pentesting has no mode of its own at all - see
-        # pentesting_tools.create_report_outcome_tool's own docstring.
-        return "exploiting"
+    def _mark_finished(self, summary: str):
+        self.finish_summary = summary
 
-    def _record_enumeration(self, entries: dict):
+    def _record_enumeration(self, entries: Dict[str, dict]):
         self._pending_enumeration.update(entries)
 
     def _mark_tested(self):
@@ -125,10 +125,6 @@ class PentestingAgent:
     def _set_authorized_ports(self, new_ports: List[int]):
         self._authorized_ports_override = new_ports
 
-    def _on_outcome_reported(self, outcome: str, summary: str, new_vectors: List[str]):
-        self.outcome = {"outcome": outcome, "summary": summary, "new_vectors": new_vectors}
-        self.finish_summary = summary
-
     async def _apply_granted_ports(self, config: RunnableConfig, new_ports: list[int]):
         current_state = await self.app.aget_state(config)
         scope = dict(current_state.values.get("target_scope") or {})
@@ -136,13 +132,13 @@ class PentestingAgent:
         await self.app.aupdate_state(config, {"target_scope": scope})
 
     def _build_graph(self):
-        workflow = StateGraph(PentestingState)
+        workflow = StateGraph(ScoutingState)
         workflow.add_node("agent", self._call_model)
         tool_node = ToolNode(self.tools)
         workflow.add_node(
             "tools",
             common.make_guarded_tools_node(
-                tool_node, pentesting_tools.WRITER_TOOL_NAMES, pentesting_tools.READER_TOOL_NAMES
+                tool_node, scouting_tools.WRITER_TOOL_NAMES, scouting_tools.READER_TOOL_NAMES
             ),
         )
         workflow.add_edge(START, "agent")
@@ -150,24 +146,18 @@ class PentestingAgent:
         workflow.add_edge("tools", "agent")
         return workflow.compile(checkpointer=self.checkpointer, interrupt_before=["tools"])
 
-    def _render_context_message(self, state: PentestingState) -> SystemMessage:
+    def _render_context_message(self, state: ScoutingState) -> SystemMessage:
         target_scope = state.get("target_scope")
         if self._authorized_ports_override is not None and target_scope:
             target_scope = {**target_scope, "ports": self._authorized_ports_override}
         scope_reminder = common.render_target_scope_reminder(target_scope)
         lines = [scope_reminder, ""] if scope_reminder else []
 
-        lines.append(f"### Your assigned attack vector\n{self.attack_vector_description}")
         lines.append(
-            "\nTest ONLY this vector. If you notice something else worth testing, "
-            "mention it in report_outcome's new_vectors - don't chase it yourself."
+            "### Your job: enumerate this target thoroughly, then call "
+            "propose_attack_vector for every service worth testing. You "
+            "do not exploit anything yourself."
         )
-        if not self._has_real_action:
-            lines.append(
-                "\nYou have NOT yet run anything against the target - "
-                "report_outcome will be refused until you do. Make the real "
-                "attempt first."
-            )
 
         if self._current_session_name is not None:
             lines.append("")
@@ -182,29 +172,59 @@ class PentestingAgent:
                     "Exit it first before running further shell commands."
                 )
 
+        enumeration = state.get("enumeration") or {}
+        proposed_vectors = state.get("proposed_vectors") or []
+        if enumeration or proposed_vectors:
+            lines.append("")
+            lines.append(
+                "### Known so far (auto-maintained - trust this over your "
+                "own memory of earlier turns):"
+            )
+            if enumeration:
+                lines.append("Enumeration:")
+                for port in sorted(enumeration):
+                    info = enumeration[port]
+                    detail = " ".join(
+                        part
+                        for part in (info.get("service", ""), info.get("version", ""))
+                        if part
+                    )
+                    line = f"- {port}: {detail}" if detail else f"- {port}"
+                    if info.get("notes"):
+                        line += f" ({info['notes']})"
+                    lines.append(line)
+            if proposed_vectors:
+                lines.append("Attack vectors already proposed - don't repeat these:")
+                shown = proposed_vectors[-_MAX_ENUMERATION_PROPOSED_SHOWN:]
+                for v in shown:
+                    lines.append(f"- {v}")
+
         return SystemMessage(content="\n".join(lines))
 
-    async def _call_model(self, state: PentestingState):
+    async def _call_model(self, state: ScoutingState):
         messages = list(state["messages"])
         context_message = self._render_context_message(state)
         trimmed = common.trim_messages_for_model(messages, self.context_window, self.tools)
         response = await self.llm_with_tools.ainvoke(trimmed + [context_message])
 
-        # on_enumeration (wired into the shared Tier-1 tools, e.g.
-        # gobuster_scan/hydra_bruteforce) still buffers into
-        # _pending_enumeration, same as every other role - pentesting just
-        # has nowhere to surface an enumeration table (it's testing one
-        # already-identified vector, not broadly enumerating), so this
-        # discards the buffer each turn rather than threading a field
-        # PentestingState doesn't declare.
+        enumeration = dict(state.get("enumeration") or {})
+        for port, fact in self._pending_enumeration.items():
+            merged = {**enumeration.get(port, {}), **{k: v for k, v in fact.items() if v}}
+            enumeration[port] = merged
         self._pending_enumeration = {}
+
+        proposed_vectors = list(state.get("proposed_vectors") or [])
+        proposed_vectors.extend(self._pending_proposed_vectors)
+        self._pending_proposed_vectors = []
 
         return {
             "messages": [response],
+            "enumeration": enumeration,
+            "proposed_vectors": proposed_vectors,
             "finish_summary": self.finish_summary,
         }
 
-    def _should_continue(self, state: PentestingState):
+    def _should_continue(self, state: ScoutingState):
         last_message = state["messages"][-1]
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
             return "tools"
@@ -228,7 +248,7 @@ class PentestingAgent:
         thread_id: str,
         should_interrupt: bool,
         stop_event,
-        max_turns: int = 25,
+        max_turns: int = 40,
     ) -> AsyncGenerator:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
         existing_state = await self.app.aget_state(config)
@@ -272,16 +292,14 @@ class PentestingAgent:
 
         def requires_interrupt(tool_call_names) -> bool:
             _, readers = common.turn_conflict(
-                tool_call_names,
-                pentesting_tools.WRITER_TOOL_NAMES,
-                pentesting_tools.READER_TOOL_NAMES,
+                tool_call_names, scouting_tools.WRITER_TOOL_NAMES, scouting_tools.READER_TOOL_NAMES
             )
             if readers:
                 return False
-            always = bool(tool_call_names & pentesting_tools.ALWAYS_INTERRUPT_TOOL_NAMES)
+            always = bool(tool_call_names & scouting_tools.ALWAYS_INTERRUPT_TOOL_NAMES)
             return always or (
                 should_interrupt
-                and bool(tool_call_names & pentesting_tools.INTERRUPT_GATED_TOOL_NAMES)
+                and bool(tool_call_names & scouting_tools.INTERRUPT_GATED_TOOL_NAMES)
             )
 
         async def on_tool_message(message: ToolMessage, cfg: RunnableConfig):

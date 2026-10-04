@@ -2,7 +2,7 @@
 and finish_scouting - plus the tool-name-set constants agent_tools.py's
 build_scouting_agent_tools (the actual gatherer - see its own docstring
 for why that lives there, centralized alongside every other role's
-gatherer, rather than here) and roles/scouting_agent.py (the race-guard/
+gatherer, rather than here) and roles/agents/scouting_agent.py (the race-guard/
 interrupt-gating wiring) both need. Every tool that's genuinely shared
 with the Single Agent flow (nmap_scan, the terminal tools, ...) stays
 defined once in agent_tools.py - nothing here duplicates a tool body."""
