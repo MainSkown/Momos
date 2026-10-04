@@ -516,6 +516,17 @@ const onRunTimer: tCallback = (message) => {
   isBuilding.value = false;
   run.value = timerMessage.run;
   displayNow.value = Date.now();
+
+  // Mirrors the old single-ref behavior this replaced: once the root run's
+  // own status moves off "interrupted" through any path other than a local
+  // respondToInterrupt click (e.g. resolved from another client, or the run
+  // finishing/failing while an approval was outstanding), drop its stale
+  // card instead of leaving it stuck on screen with nothing left to approve.
+  if (timerMessage.run.status !== "interrupted") {
+    pendingInterrupts.value = pendingInterrupts.value.filter(
+      (e) => e.agent_run_id !== timerMessage.run.id,
+    );
+  }
 };
 
 const onInterruptRequest: tCallback = (message) => {

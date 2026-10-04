@@ -37,6 +37,8 @@ WRITER_TOOL_NAMES = {
     agent_tools.NEW_SESSION_TOOL_NAME,
     agent_tools.NMAP_SCAN_TOOL_NAME,
     agent_tools.GOBUSTER_SCAN_TOOL_NAME,
+    agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
+    agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
 }
 READER_TOOL_NAMES = {PROPOSE_ATTACK_VECTOR_TOOL_NAME}
 # Every writer is target-touching here, so the same set doubles as the

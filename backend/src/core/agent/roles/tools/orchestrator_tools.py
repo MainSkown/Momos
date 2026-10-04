@@ -237,7 +237,7 @@ def create_dispatch_pentest_batch_tool(
 
         async def run_one(vector_id: str) -> str:
             vector = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)
-            if vector is None:
+            if vector is None or str(vector.target_id) != str(target_id):
                 return f"{vector_id}: not found - skipped."
             # TESTING is also accepted, not just PENDING - a genuinely
             # live pentesting sub-run can never appear here in the first
@@ -365,7 +365,7 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
 
         loop = asyncio.get_running_loop()
         vector = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)
-        if vector is None:
+        if vector is None or str(vector.target_id) != str(target_id):
             return f"{vector_id}: not found."
         if vector.status != AttackVectorStatus.TESTED_VULNERABLE:
             return f"{vector_id}: status is {vector.status}, not tested_vulnerable - nothing to report."

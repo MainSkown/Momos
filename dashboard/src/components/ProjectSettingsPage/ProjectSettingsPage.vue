@@ -445,7 +445,7 @@
 
 <script setup lang="ts">
 import { getProjectSettings, updateProjectSettings } from "@/api";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
 import { useI18n } from "vue-i18n";
@@ -517,7 +517,14 @@ const isScanRunning = computed(
 );
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
-let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+// Keyed by project id, not a single shared timer - this component is reused
+// across project switches without unmounting (MainPage.vue only unmounts it
+// on a tool switch), so a single shared timer would let editing project B
+// cancel a still-pending save for project A instead of debouncing its own.
+const pendingAutosaves = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; settings: ProjectSettings }
+>();
 // Set right before load_settings() assigns a freshly-fetched object into
 // project_settings - without this, the deep watch below would see that
 // assignment as "the user changed something" and immediately queue a
@@ -541,14 +548,28 @@ watch(
     const projectID = store.openedProject;
     const settingsSnapshot = project_settings.value;
 
-    if (autosaveTimer) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = null;
+    const existing = pendingAutosaves.get(projectID);
+    if (existing) clearTimeout(existing.timer);
+
+    const timer = setTimeout(() => {
+      pendingAutosaves.delete(projectID);
       saveSettings(projectID, settingsSnapshot);
     }, AUTOSAVE_DEBOUNCE_MS);
+    pendingAutosaves.set(projectID, { timer, settings: settingsSnapshot });
   },
   { deep: true },
 );
+
+// Switching tools unmounts this component outright (unlike a project
+// switch, which reuses it) - flush every still-pending debounced save
+// immediately instead of losing it when its timer never gets to fire.
+onUnmounted(() => {
+  for (const [projectID, { timer, settings }] of pendingAutosaves) {
+    clearTimeout(timer);
+    saveSettings(projectID, settings);
+  }
+  pendingAutosaves.clear();
+});
 
 const saveStatusText = computed(() => {
   switch (saveStatus.value) {
@@ -689,6 +710,7 @@ async function saveSettings(projectID: string, settings: ProjectSettings) {
     if (result.error) {
       console.error("Failed to update settings:", result.error);
       saveStatus.value = "error";
+      toast.error(t("settings.autosave_error"));
       return;
     }
 
@@ -697,6 +719,11 @@ async function saveSettings(projectID: string, settings: ProjectSettings) {
   } catch (error) {
     console.error("Failed to update settings:", error);
     saveStatus.value = "error";
+    // The saveStatus text is teleported into this page's own header, so a
+    // failure here is otherwise invisible once the user has navigated away
+    // (saveSettings can still be reached from a flushed autosave above) -
+    // toast is global and survives this component unmounting.
+    toast.error(t("settings.autosave_error"));
   }
 }
 

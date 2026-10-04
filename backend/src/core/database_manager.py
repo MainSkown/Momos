@@ -281,10 +281,13 @@ class DatabaseManager:
         with Session(self.engine) as session:
             # Children referencing target/project via a FK must go before
             # their parents, or Postgres rejects the parent delete.
+            # AttackVector itself references Vulnerability/AgentRun
+            # (linked_vulnerability_id/discovered_by_run_id/assigned_run_id),
+            # so it must go before both of those, not after.
+            session.exec(delete(AttackVector).where(AttackVector.project_id == parsed_uuid))
             session.exec(delete(Vulnerability).where(Vulnerability.related_to_project == parsed_uuid))
             session.exec(delete(AgentLog).where(AgentLog.project_id == parsed_uuid))
             session.exec(delete(AgentRun).where(AgentRun.project_id == parsed_uuid))
-            session.exec(delete(AttackVector).where(AttackVector.project_id == parsed_uuid))
             session.exec(delete(Target).where(Target.project_id == parsed_uuid))
             session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
             session.exec(delete(Project).where(Project.id == parsed_uuid))
@@ -307,10 +310,12 @@ class DatabaseManager:
         with Session(self.engine) as session:
             # Same ordering requirement as delete_project - clear rows that
             # reference this target before deleting the target itself.
+            # AttackVector references Vulnerability/AgentRun, so it must go
+            # before both of those, not after.
+            session.exec(delete(AttackVector).where(AttackVector.target_id == parsed_uuid))
             session.exec(delete(Vulnerability).where(Vulnerability.found_in == parsed_uuid))
             session.exec(delete(AgentLog).where(AgentLog.target_id == parsed_uuid))
             session.exec(delete(AgentRun).where(AgentRun.target_id == parsed_uuid))
-            session.exec(delete(AttackVector).where(AttackVector.target_id == parsed_uuid))
             session.exec(delete(Target).where(Target.id == parsed_uuid))
             session.commit()
 

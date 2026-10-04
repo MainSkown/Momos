@@ -29,6 +29,15 @@ defineProps<{ title: string }>();
   gap: var(--spacing-sm);
 }
 
+/* A flex item's default min-width:auto stops .truncate-text's own
+   overflow/ellipsis rules from taking effect - without this, a long or
+   translated title can push the teleported status text out instead of
+   truncating. Scoped to this row rather than changing the shared rule
+   itself, which other call sites rely on outside a flex context. */
+.context-header-row > .truncate-text {
+  min-width: 0;
+}
+
 .context-header-extra {
   display: flex;
   align-items: center;

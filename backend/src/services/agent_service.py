@@ -587,7 +587,9 @@ class AgentService:
         if any_signaled:
             return
 
-        existing_run = db_manager.get_agent_run(target_id)
+        project_settings = db_manager.get_project_settings(project_id)
+        role = "orchestrator" if project_settings.pipeline_mode == "multi_agent" else "single_agent"
+        existing_run = db_manager.get_agent_run(target_id, role=role)
         if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
             await run_registry.persist_run_state(
                 project_id=project_id,
