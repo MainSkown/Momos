@@ -284,9 +284,19 @@ class Agent:
         allow_shell: bool = True,
         allow_install_packages: bool = True,
         enabled_tools: Optional[List[str]] = None,
+        agent_run_id: Optional[str] = None,
     ):
         self.project_id = project_id
         self.target_id = target_id
+        # Identifies this Agent instance's own Kali sessions, independent
+        # of any sibling agent concurrently running on the same target -
+        # see kali_manager.py's _session_key/_owner_key. None (every
+        # existing caller, today's single-agent flow) falls back to
+        # target_id itself, which reproduces the exact session cardinality
+        # this had before agent_run_id existed - single-agent mode is,
+        # structurally, "the one agent run this target will ever have at
+        # once," so its own target_id already uniquely identifies it.
+        self.agent_run_id = agent_run_id or target_id
         self.checkpointer = checkpointer
         self.ollama_url = settings.ollama_url
         self.finish_summary: Optional[str] = None
@@ -439,6 +449,7 @@ class Agent:
         self.tools = agent_tools.build_agent_tools(
             project_id,
             target_id,
+            self.agent_run_id,
             self._mark_finished,
             self._record_enumeration,
             self._record_attack_attempt,
@@ -1285,10 +1296,11 @@ class Agent:
         # only happen if the container isn't actually ready yet), the run
         # tool itself opens "default" defensively on its first call anyway.
         manager = await kali_registry.get_manager(self.project_id)
-        if not manager.has_current_session(self.target_id):
+        if not manager.has_current_session(self.target_id, self.agent_run_id):
             try:
                 await manager.open_session(
                     self.target_id,
+                    self.agent_run_id,
                     agent_tools.DEFAULT_SESSION_NAME,
                     agent_tools.DEFAULT_SESSION_COMMAND,
                 )
@@ -1300,7 +1312,7 @@ class Agent:
         # current right now (just pre-opened above, already open from
         # before this call, or still none if the pre-open itself failed)
         # becomes the value _render_context_message shows from turn one.
-        current = manager.get_current_session(self.target_id)
+        current = manager.get_current_session(self.target_id, self.agent_run_id)
         self._set_current_session(
             current.name if current else None,
             current.command if current else None,

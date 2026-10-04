@@ -923,25 +923,31 @@ async def _maybe_condense(
     return await _parse_output(project_id, label, capped, on_enumeration)
 
 
-async def _resolve_current_session(manager: KaliManger, target_id: str, on_session_change):
-    """Ensures target_id has a current session, opening a fresh default one
-    if every session somehow ended up closed (idle timeout, process exit,
-    ...) - start_agent() already opens "default" before the first turn, so
-    this is only a defensive fallback. Returns (session, was_replaced) -
-    was_replaced is True exactly when this call itself had to silently open
-    the replacement, so the caller can tell the model its previous session
-    is gone. Raises KaliSessionError if even opening a fresh one fails."""
-    was_replaced = not manager.has_current_session(target_id)
+async def _resolve_current_session(
+    manager: KaliManger, target_id: str, agent_run_id: str, on_session_change
+):
+    """Ensures target_id/agent_run_id has a current session, opening a
+    fresh default one if every session somehow ended up closed (idle
+    timeout, process exit, ...) - start_agent() already opens "default"
+    before the first turn, so this is only a defensive fallback. Returns
+    (session, was_replaced) - was_replaced is True exactly when this call
+    itself had to silently open the replacement, so the caller can tell the
+    model its previous session is gone. Raises KaliSessionError if even
+    opening a fresh one fails."""
+    was_replaced = not manager.has_current_session(target_id, agent_run_id)
     if was_replaced:
-        await manager.open_session(target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
+        await manager.open_session(
+            target_id, agent_run_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
+        )
         on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
-    return manager.get_current_session(target_id), was_replaced
+    return manager.get_current_session(target_id, agent_run_id), was_replaced
 
 
 async def _send_and_condense(
     manager: KaliManger,
     project_id: str,
     target_id: str,
+    agent_run_id: str,
     current_session,
     input: Optional[str],
     wait_seconds: int,
@@ -966,7 +972,7 @@ async def _send_and_condense(
     internally-constructed input."""
     try:
         raw_output = await manager.run_in_current_session(
-            target_id, input, wait_seconds=wait_seconds
+            target_id, agent_run_id, input, wait_seconds=wait_seconds
         )
     except KaliSessionError as e:
         return str(e), None
@@ -990,7 +996,7 @@ async def _send_and_condense(
     promoted_name = None
     if current_session is not None and current_session.confusion_streak >= 2:
         promoted_name = await manager.promote_stuck_session(
-            target_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
+            target_id, agent_run_id, DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND
         )
         if promoted_name:
             on_session_change(DEFAULT_SESSION_NAME, DEFAULT_SESSION_COMMAND)
@@ -2211,31 +2217,34 @@ _FTP_ALLOWED_COMMANDS = frozenset(
 )
 
 
-async def _ensure_ftp_session(manager: KaliManger, target_id: str, host: str, on_session_change):
-    """Opens target_id's 'ftp' session if it doesn't exist yet (running
-    `ftp -n {host}` - -n suppresses ftp's own immediate auto-login prompt,
-    since login is driven explicitly via the `user` command in
+async def _ensure_ftp_session(
+    manager: KaliManger, target_id: str, agent_run_id: str, host: str, on_session_change
+):
+    """Opens target_id/agent_run_id's 'ftp' session if it doesn't exist yet
+    (running `ftp -n {host}` - -n suppresses ftp's own immediate auto-login
+    prompt, since login is driven explicitly via the `user` command in
     ftp_connect below, not the interactive Name:/Password: exchange), or
     switches to it if it already exists - either way, returns the
     now-current KaliSession for it, plus whether this call itself opened a
     brand-new session (vs. reusing an already-open, possibly already-
     authenticated one - see ftp_connect's _ftp_logged_in tracking)."""
     command = f"ftp -n {host}"
-    sessions = await manager.list_sessions(target_id)
+    sessions = await manager.list_sessions(target_id, agent_run_id)
     existing = next((s for s in sessions if s.name == FTP_SESSION_NAME and not s.closed), None)
     freshly_opened = existing is None
     if existing is None:
-        await manager.open_session(target_id, FTP_SESSION_NAME, command)
-    elif manager.get_current_session_name(target_id) != FTP_SESSION_NAME:
-        await manager.switch_session(target_id, FTP_SESSION_NAME)
+        await manager.open_session(target_id, agent_run_id, FTP_SESSION_NAME, command)
+    elif manager.get_current_session_name(target_id, agent_run_id) != FTP_SESSION_NAME:
+        await manager.switch_session(target_id, agent_run_id, FTP_SESSION_NAME)
     on_session_change(FTP_SESSION_NAME, command)
-    return manager.get_current_session(target_id), freshly_opened
+    return manager.get_current_session(target_id, agent_run_id), freshly_opened
 
 
 async def _send_ftp_passive(
     manager: KaliManger,
     project_id: str,
     target_id: str,
+    agent_run_id: str,
     current_session,
     on_enumeration: Callable[[dict], None],
     mark_tested: Callable[[], None],
@@ -2263,6 +2272,7 @@ async def _send_ftp_passive(
         manager,
         project_id,
         target_id,
+        agent_run_id,
         current_session,
         "passive",
         SESSION_OPEN_READ_SECONDS,
@@ -2277,6 +2287,7 @@ async def _send_ftp_passive(
 def create_guided_session_tools(
     project_id: str,
     target_id: str,
+    agent_run_id: str,
     on_enumeration: Callable[[dict], None],
     mark_tested: Callable[[], None],
     on_session_change: Callable[[Optional[str], Optional[str]], None],
@@ -2331,7 +2342,7 @@ def create_guided_session_tools(
         manager = await kali_registry.get_manager(project_id)
         try:
             current_session, freshly_opened = await _ensure_ftp_session(
-                manager, target_id, host, on_session_change
+                manager, target_id, agent_run_id, host, on_session_change
             )
         except KaliSessionError as e:
             return str(e), None
@@ -2349,6 +2360,7 @@ def create_guided_session_tools(
                 manager,
                 project_id,
                 target_id,
+                agent_run_id,
                 current_session,
                 on_enumeration,
                 mark_tested,
@@ -2358,7 +2370,7 @@ def create_guided_session_tools(
             )
             if passive_raw is None:
                 return passive_condensed, None
-            current_session = manager.get_current_session(target_id)
+            current_session = manager.get_current_session(target_id, agent_run_id)
             # Only trust the toggle if the client's own local confirmation
             # ("Passive mode on.") actually came back - previously this was
             # set unconditionally, which papered over the toggle silently
@@ -2387,6 +2399,7 @@ def create_guided_session_tools(
                 manager,
                 project_id,
                 target_id,
+                agent_run_id,
                 current_session,
                 "pwd",
                 FTP_COMMAND_READ_SECONDS,
@@ -2425,6 +2438,7 @@ def create_guided_session_tools(
             manager,
             project_id,
             target_id,
+            agent_run_id,
             current_session,
             f"user {username}",
             SESSION_OPEN_READ_SECONDS,
@@ -2447,10 +2461,10 @@ def create_guided_session_tools(
         # close+reopen+retry here, rather than reporting a dead session as
         # just another "unclear" login outcome.
         if "Not connected." in raw_output:
-            await manager.close_session(target_id, FTP_SESSION_NAME)
+            await manager.close_session(target_id, agent_run_id, FTP_SESSION_NAME)
             try:
                 current_session, _ = await _ensure_ftp_session(
-                    manager, target_id, host, on_session_change
+                    manager, target_id, agent_run_id, host, on_session_change
                 )
             except KaliSessionError as e:
                 return str(e), None
@@ -2459,6 +2473,7 @@ def create_guided_session_tools(
                 manager,
                 project_id,
                 target_id,
+                agent_run_id,
                 current_session,
                 on_enumeration,
                 mark_tested,
@@ -2468,7 +2483,7 @@ def create_guided_session_tools(
             )
             if passive_raw is None:
                 return passive_condensed, None
-            current_session = manager.get_current_session(target_id)
+            current_session = manager.get_current_session(target_id, agent_run_id)
             current_session.ftp_passive = bool(
                 _FTP_PASSIVE_CONFIRMED_PATTERN.search(passive_raw)
             )
@@ -2476,6 +2491,7 @@ def create_guided_session_tools(
                 manager,
                 project_id,
                 target_id,
+                agent_run_id,
                 current_session,
                 f"user {username}",
                 SESSION_OPEN_READ_SECONDS,
@@ -2502,12 +2518,13 @@ def create_guided_session_tools(
         # this early, but possible if the session was already stuck from an
         # earlier attempt) would otherwise send the password into whatever
         # session became current instead.
-        if manager.get_current_session_name(target_id) == FTP_SESSION_NAME:
-            current_session = manager.get_current_session(target_id)
+        if manager.get_current_session_name(target_id, agent_run_id) == FTP_SESSION_NAME:
+            current_session = manager.get_current_session(target_id, agent_run_id)
             condensed2, raw_output2 = await _send_and_condense(
                 manager,
                 project_id,
                 target_id,
+                agent_run_id,
                 current_session,
                 password,
                 SESSION_OPEN_READ_SECONDS,
@@ -2597,21 +2614,22 @@ def create_guided_session_tools(
             ), None
 
         manager = await kali_registry.get_manager(project_id)
-        sessions = await manager.list_sessions(target_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
         existing = next((s for s in sessions if s.name == FTP_SESSION_NAME and not s.closed), None)
         if existing is None:
             return "No FTP session is currently open - call ftp_connect first.", None
-        if manager.get_current_session_name(target_id) != FTP_SESSION_NAME:
+        if manager.get_current_session_name(target_id, agent_run_id) != FTP_SESSION_NAME:
             try:
-                await manager.switch_session(target_id, FTP_SESSION_NAME)
+                await manager.switch_session(target_id, agent_run_id, FTP_SESSION_NAME)
             except KaliSessionError as e:
                 return str(e), None
-        current_session = manager.get_current_session(target_id)
+        current_session = manager.get_current_session(target_id, agent_run_id)
 
         condensed, raw_output = await _send_and_condense(
             manager,
             project_id,
             target_id,
+            agent_run_id,
             current_session,
             command,
             FTP_COMMAND_READ_SECONDS,
@@ -3115,6 +3133,7 @@ def create_switch_mode_tool(
 def create_terminal_tools(
     project_id: str,
     target_id: str,
+    agent_run_id: str,
     on_enumeration: Callable[[dict], None],
     mark_tested: Callable[[], None],
     on_session_change: Callable[[Optional[str], Optional[str]], None],
@@ -3159,8 +3178,8 @@ def create_terminal_tools(
 
         try:
             manager = await kali_registry.get_manager(project_id)
-            current_name = manager.get_current_session_name(target_id)
-            sessions = await manager.list_sessions(target_id=target_id)
+            current_name = manager.get_current_session_name(target_id, agent_run_id)
+            sessions = await manager.list_sessions(target_id, agent_run_id)
             current = next((s for s in sessions if s.name == current_name), None)
             if (
                 current is None
@@ -3276,7 +3295,7 @@ def create_terminal_tools(
 
         try:
             current_session, session_was_replaced = await _resolve_current_session(
-                manager, target_id, on_session_change
+                manager, target_id, agent_run_id, on_session_change
             )
         except KaliSessionError as e:
             return str(e), None
@@ -3303,6 +3322,7 @@ def create_terminal_tools(
             manager,
             project_id,
             target_id,
+            agent_run_id,
             current_session,
             input,
             wait_seconds,
@@ -3381,9 +3401,9 @@ def create_terminal_tools(
         """
         manager = await kali_registry.get_manager(project_id)
         try:
-            await manager.open_session(target_id, name, command)
+            await manager.open_session(target_id, agent_run_id, name, command)
             initial_output = await manager.run_in_current_session(
-                target_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
+                target_id, agent_run_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
             )
         except KaliSessionError as e:
             return str(e), None
@@ -3415,10 +3435,10 @@ def create_terminal_tools(
         list_sessions if you've lost track of what's open."""
         manager = await kali_registry.get_manager(project_id)
         try:
-            await manager.switch_session(target_id, name)
+            await manager.switch_session(target_id, agent_run_id, name)
         except KaliSessionError as e:
             return f"{e} Use list_sessions to see what's currently open.", None
-        current = manager.get_current_session(target_id)
+        current = manager.get_current_session(target_id, agent_run_id)
         if current is None:
             return f"Switched to session '{name}'.", None
 
@@ -3431,7 +3451,7 @@ def create_terminal_tools(
         # whether it's still alive.
         try:
             initial_output = await manager.run_in_current_session(
-                target_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
+                target_id, agent_run_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
             )
         except KaliSessionError as e:
             return f"Switched to session '{name}'.\n\n{e}", None
@@ -3450,10 +3470,10 @@ def create_terminal_tools(
         """Lists your open terminal sessions (name and the command each is
         running), marking which one is current."""
         manager = await kali_registry.get_manager(project_id)
-        sessions = await manager.list_sessions(target_id=target_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
         if not sessions:
             return "No open sessions."
-        current = manager.get_current_session_name(target_id)
+        current = manager.get_current_session_name(target_id, agent_run_id)
         return "\n".join(
             f"{s.name}{' (current)' if s.name == current else ''}: {s.command}"
             for s in sessions
@@ -3473,13 +3493,13 @@ def create_terminal_tools(
         # socket out from under interrupt_session's own still-in-flight
         # read instead of letting it finish first, as the safe-wait
         # default always has.
-        existed = await manager.close_session(target_id, name)
+        existed = await manager.close_session(target_id, agent_run_id, name)
         if not existed:
             return (
                 f"No such session '{name}' - nothing to close (it may "
                 "already be closed, idle-timed-out, or never existed)."
             )
-        current = manager.get_current_session(target_id)
+        current = manager.get_current_session(target_id, agent_run_id)
         on_session_change(
             current.name if current else None, current.command if current else None
         )
@@ -3499,7 +3519,7 @@ def create_terminal_tools(
         because a command is taking a while."""
         manager = await kali_registry.get_manager(project_id)
         try:
-            raw_output = await manager.interrupt_session(target_id)
+            raw_output = await manager.interrupt_session(target_id, agent_run_id)
         except KaliSessionError as e:
             return str(e)
         return await _maybe_condense(
@@ -3512,6 +3532,7 @@ def create_terminal_tools(
 def build_agent_tools(
     project_id: str,
     target_id: str,
+    agent_run_id: str,
     on_finish: Callable[[str], None],
     on_enumeration: Callable[[dict], None],
     on_attempt: Callable[[dict], None],
@@ -3542,6 +3563,7 @@ def build_agent_tools(
         *create_guided_session_tools(
             project_id,
             target_id,
+            agent_run_id,
             on_enumeration,
             mark_tested,
             on_session_change,
@@ -3579,6 +3601,7 @@ def build_agent_tools(
             create_terminal_tools(
                 project_id,
                 target_id,
+                agent_run_id,
                 on_enumeration,
                 mark_tested,
                 on_session_change,

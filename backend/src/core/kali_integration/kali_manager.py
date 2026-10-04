@@ -429,21 +429,28 @@ class KaliManger:
         # command_lock above, since a long-lived session must never block
         # one-shot execute() calls or vice versa. This lock only guards
         # dict membership; each KaliSession has its own io_lock for its
-        # actual socket I/O. Keyed by _session_key(target_id, name), not by
-        # name alone - one manager is shared across every target in a
-        # project, so names (e.g. "default") are only unique per target.
+        # actual socket I/O. Keyed by _session_key(target_id, agent_run_id,
+        # name), not by name alone - one manager is shared across every
+        # target in a project (and, within one target, across every
+        # concurrently-running agent on it - see agent_run_id's own
+        # comment on KaliSession), so names (e.g. "default") are only
+        # unique per (target, owning agent run).
         self.sessions: Dict[str, KaliSession] = {}
         self.sessions_lock = asyncio.Lock()
-        # target_id -> name of that target's current session (the one
-        # run()/interrupt_session() act on unless the agent switch_session's
-        # elsewhere first).
+        # _owner_key(target_id, agent_run_id) -> name of THAT owner's
+        # current session (the one run()/interrupt_session() act on unless
+        # the agent switch_session's elsewhere first). Per-owner, not just
+        # per-target, so two concurrently-running agents on the same target
+        # each have their own independent "current" pointer and can never
+        # see or move each other's.
         self.current_session: Dict[str, str] = {}
-        # (target_id, name) pairs currently being opened - validated (name
-        # not colliding, under MAX_SESSIONS_PER_TARGET) but not yet in
-        # `sessions` because the slow docker exec_create/exec_start hasn't
-        # finished. Guarded by sessions_lock, same as `sessions` itself -
-        # see open_session's TOCTOU fix.
-        self._pending_sessions: set[tuple[str, str]] = set()
+        # (target_id, agent_run_id, name) triples currently being opened -
+        # validated (name not colliding FOR THIS OWNER, target under
+        # MAX_SESSIONS_PER_TARGET) but not yet in `sessions` because the
+        # slow docker exec_create/exec_start hasn't finished. Guarded by
+        # sessions_lock, same as `sessions` itself - see open_session's
+        # TOCTOU fix.
+        self._pending_sessions: set[tuple[str, str, str]] = set()
         self._session_sweep_task: Optional[asyncio.Task] = None
         # Monotonic (target_id, user) -> next session number to hand out -
         # see next_session_number. Lives here (not derived from `sessions`
@@ -670,11 +677,28 @@ class KaliManger:
     # one-shot execute_kali_command + session_id-keyed tool set - see
     # kali_session.py for the KaliSession dataclass and tunables.
 
-    def _session_key(self, target_id: str, name: str) -> str:
+    def _session_key(self, target_id: str, agent_run_id: str, name: str) -> str:
         # Sessions are named by the agent (e.g. "default", "ftp") and only
-        # need to be unique per target - one manager is shared across every
-        # target in a project, so the dict key namespaces by target_id.
-        return f"{target_id}::{name}"
+        # need to be unique per (target, owning agent run) - one manager is
+        # shared across every target in a project, AND, within one target,
+        # across every concurrently-running agent on it (see
+        # KaliSession.agent_run_id), so the dict key namespaces by both.
+        return f"{target_id}::{agent_run_id}::{name}"
+
+    def _owner_key(self, target_id: str, agent_run_id: str) -> str:
+        # Key into self.current_session - one independent "current session"
+        # pointer per (target, owning agent run), so concurrent agents on
+        # the same target can never see or move each other's.
+        return f"{target_id}::{agent_run_id}"
+
+    def _session_number_key(self, target_id: str, user: str) -> str:
+        # Deliberately its OWN key shape, not _session_key reused - this
+        # counter is scoped to (target_id, OS user), an axis that has
+        # nothing to do with agent_run_id (the console's auto-numbered
+        # tabs, the only caller, has no agent run at all). Keeping this
+        # decoupled means widening _session_key for session ownership can
+        # never silently change what this counter is keyed by.
+        return f"{target_id}::{user}"
 
     async def next_session_number(self, target_id: str, user: str) -> int:
         """Hands out the next number for an auto-numbered session (the
@@ -689,14 +713,14 @@ class KaliManger:
         old one's last read was still unwinding. This only ever increments,
         for as long as this manager (i.e. this project's container) is
         tracked in-process - a number is never handed out twice."""
-        key = self._session_key(target_id, user)
+        key = self._session_number_key(target_id, user)
         async with self.sessions_lock:
             next_number = self._session_numbers.get(key, 0) + 1
             self._session_numbers[key] = next_number
             return next_number
 
-    def _get_session(self, target_id: str, name: str) -> KaliSession:
-        session = self.sessions.get(self._session_key(target_id, name))
+    def _get_session(self, target_id: str, agent_run_id: str, name: str) -> KaliSession:
+        session = self.sessions.get(self._session_key(target_id, agent_run_id, name))
         if session is None:
             raise KaliSessionError(
                 f"No such session '{name}' - it may have already been closed "
@@ -706,21 +730,23 @@ class KaliManger:
             raise KaliSessionError(f"Session '{name}' is closed: {session.close_reason}")
         return session
 
-    def _get_current_session(self, target_id: str) -> KaliSession:
-        name = self.current_session.get(target_id)
+    def _get_current_session(self, target_id: str, agent_run_id: str) -> KaliSession:
+        name = self.current_session.get(self._owner_key(target_id, agent_run_id))
         if name is None:
             raise KaliSessionError(
                 "No current session for this target - open one with new_session."
             )
-        return self._get_session(target_id, name)
+        return self._get_session(target_id, agent_run_id, name)
 
-    def has_current_session(self, target_id: str) -> bool:
-        return target_id in self.current_session
+    def has_current_session(self, target_id: str, agent_run_id: str) -> bool:
+        return self._owner_key(target_id, agent_run_id) in self.current_session
 
-    def get_current_session_name(self, target_id: str) -> Optional[str]:
-        return self.current_session.get(target_id)
+    def get_current_session_name(self, target_id: str, agent_run_id: str) -> Optional[str]:
+        return self.current_session.get(self._owner_key(target_id, agent_run_id))
 
-    def get_current_session(self, target_id: str) -> Optional[KaliSession]:
+    def get_current_session(
+        self, target_id: str, agent_run_id: str
+    ) -> Optional[KaliSession]:
         """Non-raising counterpart to _get_current_session - returns None
         (rather than raising) whenever there's no current session, or it's
         somehow missing/closed, so a caller that just wants to know "what's
@@ -728,10 +754,10 @@ class KaliManger:
         a tool wrapper reporting the session it just switched to) doesn't
         need to handle KaliSessionError for what isn't really an error case
         for it."""
-        name = self.current_session.get(target_id)
+        name = self.current_session.get(self._owner_key(target_id, agent_run_id))
         if name is None:
             return None
-        session = self.sessions.get(self._session_key(target_id, name))
+        session = self.sessions.get(self._session_key(target_id, agent_run_id, name))
         if session is None or session.closed:
             return None
         return session
@@ -765,36 +791,42 @@ class KaliManger:
     async def open_session(
         self,
         target_id: str,
+        agent_run_id: str,
         name: str,
         command: str,
         user: KALI_USERS = KALI_USERS.momos,
     ) -> KaliSession:
-        key = self._session_key(target_id, name)
+        key = self._session_key(target_id, agent_run_id, name)
         async with self.sessions_lock:
             if (
                 (key in self.sessions and not self.sessions[key].closed)
-                or (target_id, name) in self._pending_sessions
+                or (target_id, agent_run_id, name) in self._pending_sessions
             ):
                 raise KaliSessionError(
                     f"A session named '{name}' is already open - close it "
                     "first, or switch_session to it instead of opening another."
                 )
+            # Deliberately summed across every owner of this target (not
+            # just agent_run_id) - this is a shared-container resource cap,
+            # not a per-agent-run one; several concurrently-running agents
+            # on the same target still share one MAX_SESSIONS_PER_TARGET
+            # budget.
             open_for_target = sum(
                 1 for s in self.sessions.values() if s.target_id == target_id
-            ) + sum(1 for (t, _) in self._pending_sessions if t == target_id)
+            ) + sum(1 for (t, _, _) in self._pending_sessions if t == target_id)
             if open_for_target >= MAX_SESSIONS_PER_TARGET:
                 raise KaliSessionError(
                     f"Too many open sessions ({MAX_SESSIONS_PER_TARGET} max) - "
                     "close an existing one with close_session before opening another."
                 )
-            # Reserve this (target_id, name) for the duration of the slow
-            # exec below, still inside the same locked section as the
-            # checks above - a concurrent open_session for the same name
-            # (ToolNode runs a turn's tool calls concurrently) now sees the
-            # reservation and fails validation immediately, instead of both
-            # calls passing the check here and one silently clobbering the
-            # other's `sessions` entry once the exec finishes.
-            self._pending_sessions.add((target_id, name))
+            # Reserve this (target_id, agent_run_id, name) for the duration
+            # of the slow exec below, still inside the same locked section
+            # as the checks above - a concurrent open_session for the same
+            # name (ToolNode runs a turn's tool calls concurrently) now sees
+            # the reservation and fails validation immediately, instead of
+            # both calls passing the check here and one silently clobbering
+            # the other's `sessions` entry once the exec finishes.
+            self._pending_sessions.add((target_id, agent_run_id, name))
 
         try:
             loop = asyncio.get_running_loop()
@@ -803,13 +835,14 @@ class KaliManger:
             )
         except Exception:
             async with self.sessions_lock:
-                self._pending_sessions.discard((target_id, name))
+                self._pending_sessions.discard((target_id, agent_run_id, name))
             raise
 
         session = KaliSession(
             name=name,
             command=command,
             target_id=target_id,
+            agent_run_id=agent_run_id,
             exec_id=exec_id,
             sock=raw_sock,
             user=str(user),
@@ -823,8 +856,8 @@ class KaliManger:
 
         async with self.sessions_lock:
             self.sessions[key] = session
-            self.current_session[target_id] = name
-            self._pending_sessions.discard((target_id, name))
+            self.current_session[self._owner_key(target_id, agent_run_id)] = name
+            self._pending_sessions.discard((target_id, agent_run_id, name))
 
         self._ensure_session_sweep_running()
         return session
@@ -935,18 +968,20 @@ class KaliManger:
     async def run_in_current_session(
         self,
         target_id: str,
+        agent_run_id: str,
         input: Optional[str],
         wait_seconds: float = DEFAULT_READ_WINDOW_SECONDS,
     ) -> str:
         # tty=True means the program on the other end expects a line
         # terminator to treat this as "Enter was pressed".
         data = (input + "\n").encode() if input is not None else None
-        session = self._get_current_session(target_id)
+        session = self._get_current_session(target_id, agent_run_id)
         return await self._session_io(session, data, wait_seconds)
 
     async def run_in_session(
         self,
         target_id: str,
+        agent_run_id: str,
         name: str,
         input: Optional[str],
         wait_seconds: float = DEFAULT_READ_WINDOW_SECONDS,
@@ -967,7 +1002,7 @@ class KaliManger:
         tool-call loop, so it's also the only one worth trading away a
         little trailing-output margin for a snappier feel."""
         data = (input + "\n").encode() if input is not None else None
-        session = self._get_session(target_id, name)
+        session = self._get_session(target_id, agent_run_id, name)
         return await self._session_io(
             session,
             data,
@@ -979,7 +1014,7 @@ class KaliManger:
         sock.settimeout(SOCKET_WRITE_TIMEOUT_SECONDS)
         sock.sendall(data)
 
-    async def interrupt_session(self, target_id: str) -> str:
+    async def interrupt_session(self, target_id: str, agent_run_id: str) -> str:
         """Sends Ctrl-C to the current session's foreground process, and
         reads back whatever it produces in response (e.g. "^C" echoed plus
         a fresh shell prompt) - the replacement for the automatic `timeout`
@@ -998,7 +1033,7 @@ class KaliManger:
         just queue this call up behind the exact same stuck read it's
         meant to recover from, defeating the one documented escape hatch
         for that scenario."""
-        session = self._get_current_session(target_id)
+        session = self._get_current_session(target_id, agent_run_id)
 
         if session.io_lock.locked():
             loop = asyncio.get_running_loop()
@@ -1112,7 +1147,7 @@ class KaliManger:
         return output if output else NO_OUTPUT_MESSAGE
 
     async def promote_stuck_session(
-        self, target_id: str, default_name: str, default_command: str
+        self, target_id: str, agent_run_id: str, default_name: str, default_command: str
     ) -> Optional[str]:
         """If target_id's CURRENT session - whatever it's named, whether
         that's the plain default one or one opened via new_session (e.g.
@@ -1153,11 +1188,14 @@ class KaliManger:
         the full reasoning (including why an unrecognized/uncurated
         program, e.g. any real reverse shell, gets none of this and relies
         on the existing idle-timeout sweep instead)."""
+        owner_key = self._owner_key(target_id, agent_run_id)
         async with self.sessions_lock:
-            current_name = self.current_session.get(target_id)
+            current_name = self.current_session.get(owner_key)
             if current_name is None:
                 return None
-            session = self.sessions.get(self._session_key(target_id, current_name))
+            session = self.sessions.get(
+                self._session_key(target_id, agent_run_id, current_name)
+            )
             if session is None or session.closed or session.confusion_streak < 2:
                 return None
 
@@ -1166,42 +1204,44 @@ class KaliManger:
                 # Renaming "default" out from under itself, so the fresh
                 # replacement below has a clear name to occupy.
                 n = 1
-                while self._session_key(target_id, f"recovered-{n}") in self.sessions:
+                while self._session_key(target_id, agent_run_id, f"recovered-{n}") in self.sessions:
                     n += 1
                 stuck_name = f"recovered-{n}"
                 session.name = stuck_name
-                del self.sessions[self._session_key(target_id, current_name)]
-                self.sessions[self._session_key(target_id, stuck_name)] = session
+                del self.sessions[self._session_key(target_id, agent_run_id, current_name)]
+                self.sessions[self._session_key(target_id, agent_run_id, stuck_name)] = session
             # else: already has its own distinct name (e.g. "ftptest") -
             # leave it exactly where it is, just stop it being current.
 
             session.confusion_streak = 0
 
             existing_default = self.sessions.get(
-                self._session_key(target_id, default_name)
+                self._session_key(target_id, agent_run_id, default_name)
             )
             reuse_existing_default = (
                 existing_default is not None and not existing_default.closed
             )
             if reuse_existing_default:
-                self.current_session[target_id] = default_name
+                self.current_session[owner_key] = default_name
 
         if not reuse_existing_default:
             # Outside the lock - open_session's own slow exec_create needs
             # to run unlocked (see its own comments), and it re-acquires
             # sessions_lock itself for the actual registration.
-            await self.open_session(target_id, default_name, default_command)
+            await self.open_session(target_id, agent_run_id, default_name, default_command)
 
         return stuck_name
 
-    async def switch_session(self, target_id: str, name: str) -> None:
+    async def switch_session(self, target_id: str, agent_run_id: str, name: str) -> None:
         # Raises KaliSessionError if unknown/closed - validated before
         # actually switching, so a bad name leaves the current pointer alone.
-        self._get_session(target_id, name)
+        self._get_session(target_id, agent_run_id, name)
         async with self.sessions_lock:
-            self.current_session[target_id] = name
+            self.current_session[self._owner_key(target_id, agent_run_id)] = name
 
-    async def _reassign_current_after_close(self, target_id: str, name: str) -> None:
+    async def _reassign_current_after_close(
+        self, target_id: str, agent_run_id: str, name: str
+    ) -> None:
         """If `name` was target_id's current session, falls back to any
         other still-open session for that target, or clears the pointer if
         none remain - the terminal tools layer (agent_tools.py) re-opens
@@ -1210,22 +1250,31 @@ class KaliManger:
         below - the sweep previously cleared the pointer unconditionally
         even when another session was alive and untouched, which could
         make a later new_session("default", ...)/run()'s defensive re-open
-        fail on a stale name collision instead of actually falling back."""
+        fail on a stale name collision instead of actually falling back.
+
+        Filters the fallback by agent_run_id too, not just target_id - or
+        this owner's pointer could get reassigned to a SIBLING concurrently-
+        running agent's session on the same target, which that sibling
+        never opened this pointer for and may itself switch_session away
+        from at any time."""
+        owner_key = self._owner_key(target_id, agent_run_id)
         async with self.sessions_lock:
-            if self.current_session.get(target_id) != name:
+            if self.current_session.get(owner_key) != name:
                 return
             remaining = [
                 s.name
                 for s in self.sessions.values()
-                if s.target_id == target_id and not s.closed
+                if s.target_id == target_id
+                and s.agent_run_id == agent_run_id
+                and not s.closed
             ]
             if remaining:
-                self.current_session[target_id] = remaining[0]
+                self.current_session[owner_key] = remaining[0]
             else:
-                self.current_session.pop(target_id, None)
+                self.current_session.pop(owner_key, None)
 
     async def close_session(
-        self, target_id: str, name: str, force: bool = False
+        self, target_id: str, agent_run_id: str, name: str, force: bool = False
     ) -> bool:
         """Closes a session by name. Returns True if a session with that
         name actually existed and was closed, False if there was nothing to
@@ -1244,16 +1293,19 @@ class KaliManger:
         container stopping, the idle sweep) has no such urgency, and
         forcibly severing a session's socket while a legitimate, still-
         progressing command is mid-read is worse than just waiting for it."""
-        session = self.sessions.get(self._session_key(target_id, name))
+        session = self.sessions.get(self._session_key(target_id, agent_run_id, name))
         if session is None:
             return False
         await self._close_session(session, reason="closed by agent", force=force)
-        await self._reassign_current_after_close(target_id, name)
+        await self._reassign_current_after_close(target_id, agent_run_id, name)
         return True
 
     async def _remove_from_registry(self, session: KaliSession) -> None:
         async with self.sessions_lock:
-            self.sessions.pop(self._session_key(session.target_id, session.name), None)
+            self.sessions.pop(
+                self._session_key(session.target_id, session.agent_run_id, session.name),
+                None,
+            )
 
     async def _close_session_locked(self, session: KaliSession, reason: str) -> None:
         """Actually closes the socket. Caller must already hold
@@ -1323,14 +1375,41 @@ class KaliManger:
                 await self._close_session_locked(session, reason)
 
     async def close_sessions_for_target(self, target_id: str) -> None:
+        """Closes EVERY session on this target, regardless of which agent
+        run owns it. Still used as-is where that's genuinely the intent
+        (the container itself going away, or a caller that predates
+        per-run ownership) - but a single concurrent agent run ending must
+        use close_sessions_for_run below instead, or it would tear down
+        every OTHER still-running agent's sessions on this same target too."""
         async with self.sessions_lock:
             to_close = [
                 s for s in self.sessions.values() if s.target_id == target_id
             ]
+            owner_prefix = f"{target_id}::"
         for session in to_close:
             await self._close_session(session, reason="agent run ended")
         async with self.sessions_lock:
-            self.current_session.pop(target_id, None)
+            for owner_key in [
+                k for k in self.current_session if k.startswith(owner_prefix)
+            ]:
+                del self.current_session[owner_key]
+
+    async def close_sessions_for_run(self, target_id: str, agent_run_id: str) -> None:
+        """Like close_sessions_for_target, but scoped to exactly one owning
+        agent run - what a single pentesting/scouting/... sub-run's own
+        cleanup must call once more than one agent can be live on the same
+        target at once, so ending it never touches a sibling run's
+        sessions."""
+        async with self.sessions_lock:
+            to_close = [
+                s
+                for s in self.sessions.values()
+                if s.target_id == target_id and s.agent_run_id == agent_run_id
+            ]
+        for session in to_close:
+            await self._close_session(session, reason="agent run ended")
+        async with self.sessions_lock:
+            self.current_session.pop(self._owner_key(target_id, agent_run_id), None)
 
     async def close_all_sessions(self) -> None:
         async with self.sessions_lock:
@@ -1340,9 +1419,13 @@ class KaliManger:
         async with self.sessions_lock:
             self.current_session.clear()
 
-    async def list_sessions(self, target_id: str) -> List[KaliSession]:
+    async def list_sessions(self, target_id: str, agent_run_id: str) -> List[KaliSession]:
         async with self.sessions_lock:
-            return [s for s in self.sessions.values() if s.target_id == target_id]
+            return [
+                s
+                for s in self.sessions.values()
+                if s.target_id == target_id and s.agent_run_id == agent_run_id
+            ]
 
     def _ensure_session_sweep_running(self):
         if self._session_sweep_task is None or self._session_sweep_task.done():
@@ -1381,7 +1464,7 @@ class KaliManger:
                     )
                     await self._close_session(session, reason="idle timeout")
                     await self._reassign_current_after_close(
-                        session.target_id, session.name
+                        session.target_id, session.agent_run_id, session.name
                     )
                     # Unlike an explicit close_session call, nothing else
                     # tells a caller this happened - without this, a

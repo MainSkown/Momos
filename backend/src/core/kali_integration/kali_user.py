@@ -131,6 +131,16 @@ def _strip_terminal_control_sequences(text: str, sent_command: Optional[str] = N
 # keeps close_sessions_for_target (called when an *agent* run ends) from
 # ever touching console sessions, since it's a completely different key.
 CONSOLE_TARGET_ID = "console"
+# Fixed sentinel for the "owning agent run" dimension KaliManger's session
+# keying now has (see kali_manager.py's _session_key/_owner_key, added for
+# concurrent agent-run isolation) - a console session has no agent run at
+# all, so it gets its own fixed value here, the same way CONSOLE_TARGET_ID
+# itself is a fixed sentinel on the target_id axis. Deliberately the same
+# literal as CONSOLE_TARGET_ID (not a second distinct string) - there's no
+# meaningful difference between the two axes for the console, and reusing
+# it avoids introducing a second magic constant that would always have to
+# be kept in sync with the first.
+CONSOLE_AGENT_RUN_ID = CONSOLE_TARGET_ID
 # Same literal as agent_tools.py's DEFAULT_SESSION_COMMAND - can't import
 # it directly, agent_tools.py imports FROM kali_integration, not the
 # reverse (would cycle).
@@ -319,7 +329,7 @@ class KaliUser:
         next_number = await manager.next_session_number(CONSOLE_TARGET_ID, str(user))
         name = f"{user}-{next_number}"
         session = await manager.open_session(
-            CONSOLE_TARGET_ID, name, CONSOLE_SESSION_COMMAND, user
+            CONSOLE_TARGET_ID, CONSOLE_AGENT_RUN_ID, name, CONSOLE_SESSION_COMMAND, user
         )
         try:
             # Drain the shell's own startup banner/prompt before handing
@@ -335,7 +345,11 @@ class KaliUser:
             # _strip_terminal_control_sequences would reduce it to nothing
             # but blank lines anyway.
             await manager.run_in_session(
-                CONSOLE_TARGET_ID, name, None, wait_seconds=CONSOLE_SESSION_OPEN_READ_SECONDS
+                CONSOLE_TARGET_ID,
+                CONSOLE_AGENT_RUN_ID,
+                name,
+                None,
+                wait_seconds=CONSOLE_SESSION_OPEN_READ_SECONDS,
             )
         except Exception:
             # open_session above already succeeded and registered this
@@ -350,7 +364,9 @@ class KaliUser:
             # OSError handling already cleans up a session that died
             # mid-drain before this exception even reaches here - this is
             # just the backstop for whatever that doesn't cover).
-            await manager.close_session(CONSOLE_TARGET_ID, name, force=True)
+            await manager.close_session(
+                CONSOLE_TARGET_ID, CONSOLE_AGENT_RUN_ID, name, force=True
+            )
             raise
         return session
 
@@ -358,11 +374,13 @@ class KaliUser:
         manager = await kali_registry.get_manager(self.project_id)
         # force=True - see kali_manager.py's close_session for why this
         # explicit close/exit request must not wait.
-        return await manager.close_session(CONSOLE_TARGET_ID, name, force=True)
+        return await manager.close_session(
+            CONSOLE_TARGET_ID, CONSOLE_AGENT_RUN_ID, name, force=True
+        )
 
     async def list_sessions(self) -> List[KaliSession]:
         manager = await kali_registry.get_manager(self.project_id)
-        return await manager.list_sessions(CONSOLE_TARGET_ID)
+        return await manager.list_sessions(CONSOLE_TARGET_ID, CONSOLE_AGENT_RUN_ID)
 
     async def _create_session_hook(self, message: CreateConsoleSessionMessage):
         project_id = message.project_id
@@ -429,7 +447,7 @@ class KaliUser:
         manager = await kali_registry.get_manager(project_id)
         try:
             result = await manager.run_in_session(
-                CONSOLE_TARGET_ID, message.session, message.command
+                CONSOLE_TARGET_ID, CONSOLE_AGENT_RUN_ID, message.session, message.command
             )
         except Exception as e:
             output_message = ReceiveCommandOutputMessage(

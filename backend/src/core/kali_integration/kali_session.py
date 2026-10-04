@@ -54,6 +54,14 @@ class KaliSession:
     name: str
     command: str
     target_id: str
+    # Which agent run owns this session - "console" (CONSOLE_AGENT_RUN_ID)
+    # for a human User Console session, otherwise the owning Agent
+    # instance's own agent_run_id (== target_id itself for single_agent
+    # mode, a real distinct id for a multi_agent pentesting sub-run). This
+    # is what lets concurrent pentesting agents on the SAME target each
+    # get their own isolated "default" session/current-session pointer -
+    # see KaliManger._session_key/_owner_key.
+    agent_run_id: str
     exec_id: str
     sock: socket_module.socket
     user: str
