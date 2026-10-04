@@ -500,8 +500,13 @@ class Agent:
             # end the run while any remain outstanding.
             self._unresolved_vulnerable_claims.discard(key)
 
-    def _mark_vulnerability_reported(self):
-        # No shared key between report_vulnerability's args and an
+    def _mark_vulnerability_reported(self, vulnerability=None):
+        # `vulnerability` (the created Vulnerability row) is unused here -
+        # only the reporting role's own on_reported closure needs it (to
+        # link it back onto an AttackVector). Accepted so
+        # create_vulnerability_tool's on_reported callback can have one
+        # signature shared by both callers. No shared key between
+        # report_vulnerability's args and an
         # attack-log entry to resolve the exact matching claim - popping an
         # arbitrary one is an accepted, scoped imprecision, still strictly
         # better than the previous plain counter (which never deduped

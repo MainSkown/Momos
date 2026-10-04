@@ -2829,7 +2829,7 @@ def create_vulnerability_tool(
     get_mode: Callable[[], str],
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
-    on_reported: Callable[[], None],
+    on_reported: Callable[[Vulnerability], None],
     get_last_raw_output: Callable[[], Optional[str]],
     get_model_name: Callable[[], str],
 ):
@@ -2911,7 +2911,7 @@ def create_vulnerability_tool(
         # Resolves one outstanding "vulnerable" log_attack_attempt claim
         # (see Agent._unresolved_vulnerable_claims) - a real, PoC-backed
         # report now exists for a human to actually review.
-        on_reported()
+        on_reported(saved)
 
         return (
             f"Recorded vulnerability '{saved.name}' "
@@ -3796,3 +3796,37 @@ def build_pentesting_agent_tools(
         )
     )
     return tools
+
+
+def build_reporting_agent_tools(
+    project_id: str,
+    target_id: str,
+    get_mode: Callable[[], str],
+    has_tested: Callable[[], bool],
+    clear_tested: Callable[[], None],
+    on_reported: Callable[[Vulnerability], None],
+    get_last_raw_output: Callable[[], Optional[str]],
+    get_model_name: Callable[[], str],
+) -> list:
+    """Reporting gets exactly one tool: report_vulnerability, reused as-is
+    from create_vulnerability_tool (now vector-required per Phase 1, no
+    severity-word fallback) - not reimplemented. get_mode/has_tested are
+    constant closures so its existing _require_tested gate trivially passes
+    (same trick pentesting_tools.create_report_outcome_tool's own gate
+    uses) - reporting's "evidence" is a pentesting run's already-real,
+    already-persisted transcript, not something it freshly tests itself.
+    No shell, no session, no other target-touching tool at all (see the
+    tool matrix in the implementation plan) - reporting never acts on the
+    target directly."""
+    return [
+        create_vulnerability_tool(
+            project_id,
+            target_id,
+            get_mode,
+            has_tested,
+            clear_tested,
+            on_reported,
+            get_last_raw_output,
+            get_model_name,
+        )
+    ]
