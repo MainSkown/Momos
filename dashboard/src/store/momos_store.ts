@@ -14,6 +14,9 @@ import {
   isProjectAgentRunning,
   type AgentRunStatus,
   type ProjectSettings,
+  getTargetAttackVectors,
+  type ResponseAttackVector,
+  type AttackVectorUpdate,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -42,6 +45,9 @@ interface State {
   project_settings: {
     [project_id: string]: ProjectSettings;
   };
+  attack_vectors: {
+    [target_id: string]: ResponseAttackVector[];
+  };
 }
 
 // Registered once for the app's lifetime (not per-component-mount, unlike
@@ -66,6 +72,33 @@ function registerRunningTargetHook() {
   });
 }
 
+// Same singleton-guarded pattern as registerRunningTargetHook above -
+// loadAttackVectors can be called once per Overview mount per target
+// without ever stacking duplicate AttackVectorUpdate hooks.
+let attackVectorHookRegistered = false;
+
+function registerAttackVectorHook() {
+  if (attackVectorHookRegistered) return;
+  attackVectorHookRegistered = true;
+
+  const ws_client = useWebSocketClient();
+  ws_client.add_hook("AttackVectorUpdate", (message) => {
+    if (message.error) return;
+
+    const update = message as AttackVectorUpdate;
+    const store = useMomosStore();
+    const vectors = store.attack_vectors[update.target_id] ?? [];
+    const index = vectors.findIndex((v) => v.id === update.vector.id);
+
+    if (index === -1) {
+      store.attack_vectors[update.target_id] = [...vectors, update.vector];
+    } else {
+      vectors[index] = update.vector;
+      store.attack_vectors[update.target_id] = vectors;
+    }
+  });
+}
+
 export const useMomosStore = defineStore("momos", {
   state: (): State => ({
     projects: [],
@@ -75,6 +108,7 @@ export const useMomosStore = defineStore("momos", {
     download_queue: [],
     running_targets: {},
     project_settings: {},
+    attack_vectors: {},
   }),
 
   getters: {
@@ -85,6 +119,8 @@ export const useMomosStore = defineStore("momos", {
       state.running_targets[projectID] ?? null,
     getProjectSettings: (state) => (projectID: string) =>
       state.project_settings[projectID] ?? null,
+    getAttackVectors: (state) => (targetID: string) =>
+      state.attack_vectors[targetID] ?? [],
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -248,6 +284,20 @@ export const useMomosStore = defineStore("momos", {
       this.running_targets[projectID] = result.data.running
         ? (result.data.target_id ?? null)
         : null;
+    },
+
+    async loadAttackVectors(projectID: string, targetID: string) {
+      registerAttackVectorHook();
+
+      const result = await getTargetAttackVectors({
+        path: { project_id: projectID, target_id: targetID },
+      });
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load attack vectors: " + targetID);
+      }
+
+      this.attack_vectors[targetID] = result.data;
     },
 
     /* --- Commands --- */

@@ -1,7 +1,14 @@
 <template>
 <div class="border">
-    <div class="header-text">
-        {{ title }}
+    <div class="header-text context-header-row">
+        <span class="truncate-text">{{ title }}</span>
+        <!-- A page nested in the default slot below (e.g. ProjectSettingsPage)
+             can Teleport its own status text here - e.g. an autosave
+             indicator - without this component needing to know anything
+             about it (no prop/emit plumbing through MainPage.vue for
+             state that's really only ever local to one tool page). Empty
+             and inert for every other tool, which doesn't use it. -->
+        <div id="context-header-extra" class="context-header-extra"></div>
     </div>
 
     <div class="separator" />
@@ -13,3 +20,18 @@
 <script setup lang="ts">
 defineProps<{ title: string }>();
 </script>
+
+<style scoped>
+.context-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.context-header-extra {
+  display: flex;
+  align-items: center;
+  padding-right: var(--spacing-sm);
+}
+</style>

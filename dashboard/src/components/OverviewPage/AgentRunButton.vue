@@ -77,51 +77,64 @@
     </Tooltip>
   </div>
 
-  <Dialog v-if="pendingInterrupt" :visible="!!pendingInterrupt" :no-close-button="true" :close-on-outside-click="false" :title="$t('targets.agent_wants_to_run')">
-    <div class="column gap-low interrupt-body">
+  <Dialog
+    v-if="pendingInterrupts.length > 0"
+    :visible="pendingInterrupts.length > 0"
+    :no-close-button="true"
+    :close-on-outside-click="false"
+    :title="$t('targets.agent_wants_to_run')"
+  >
+    <div class="column gap-mid interrupt-body scrollable-panel">
       <div
-        v-for="(tc, idx) in pendingInterrupt.tool_calls"
-        :key="idx"
-        class="border interrupt-tool-call"
+        v-for="entry in pendingInterrupts"
+        :key="entry.agent_run_id"
+        class="column gap-low"
       >
-        <div class="row interrupt-tool-header">
-          <span class="material-icons-outlined">terminal</span>
-          <span class="text-bold">{{ tc.name }}</span>
+        <div
+          v-for="(tc, idx) in entry.tool_calls"
+          :key="idx"
+          class="border interrupt-tool-call"
+        >
+          <div class="row interrupt-tool-header">
+            <span class="material-icons-outlined">terminal</span>
+            <span class="text-bold">{{ tc.name }}</span>
+          </div>
+          <div v-if="tc.name === REQUEST_PORT_ACCESS_TOOL_NAME" class="column gap-low interrupt-fields">
+            <div class="row interrupt-field">
+              <span class="interrupt-field-label">{{ $t("targets.request_port_access_port") }}</span>
+              <span class="interrupt-field-value">{{ portAccessArgs(tc.args).port }}</span>
+            </div>
+            <div class="row interrupt-field">
+              <span class="interrupt-field-label">{{ $t("targets.request_port_access_protocol") }}</span>
+              <span class="interrupt-field-value">{{ portAccessArgs(tc.args).protocol }}</span>
+            </div>
+            <div class="row interrupt-field">
+              <span class="interrupt-field-label">{{ $t("targets.request_port_access_reason") }}</span>
+              <span class="interrupt-field-value">{{ portAccessArgs(tc.args).reason }}</span>
+            </div>
+          </div>
+          <div v-else class="interrupt-command">
+            {{ toolCallCommand(tc.args) }}
+          </div>
         </div>
-        <div v-if="tc.name === REQUEST_PORT_ACCESS_TOOL_NAME" class="column gap-low interrupt-fields">
-          <div class="row interrupt-field">
-            <span class="interrupt-field-label">{{ $t("targets.request_port_access_port") }}</span>
-            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).port }}</span>
-          </div>
-          <div class="row interrupt-field">
-            <span class="interrupt-field-label">{{ $t("targets.request_port_access_protocol") }}</span>
-            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).protocol }}</span>
-          </div>
-          <div class="row interrupt-field">
-            <span class="interrupt-field-label">{{ $t("targets.request_port_access_reason") }}</span>
-            <span class="interrupt-field-value">{{ portAccessArgs(tc.args).reason }}</span>
-          </div>
-        </div>
-        <div v-else class="interrupt-command">
-          {{ toolCallCommand(tc.args) }}
+
+        <div class="row flex-center gap-high" style="padding-inline: 10px">
+          <button
+            class="button border interrupt-action-button"
+            style="flex-grow: 1"
+            @click="respondToInterrupt(entry, true)"
+          >
+            <span>{{ $t("universal.yes") }}</span>
+          </button>
+          <button
+            class="button border interrupt-action-button"
+            style="flex-grow: 1"
+            @click="respondToInterrupt(entry, false)"
+          >
+            <span>{{ $t("universal.no") }}</span>
+          </button>
         </div>
       </div>
-    </div>
-    <div class="row flex-center gap-high" style="padding-inline: 10px; margin-top: 16px">
-      <button
-        class="button border interrupt-action-button"
-        style="flex-grow: 1"
-        @click="respondToInterrupt(true)"
-      >
-        <span>{{ $t("universal.yes") }}</span>
-      </button>
-      <button
-        class="button border interrupt-action-button"
-        style="flex-grow: 1"
-        @click="respondToInterrupt(false)"
-      >
-        <span>{{ $t("universal.no") }}</span>
-      </button>
     </div>
   </Dialog>
 </template>
@@ -132,7 +145,7 @@ import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import {
   getTargetAgentRun,
-  getTargetPendingInterrupt,
+  getTargetPendingInterrupts,
   getProjectKaliStatus,
   startAgent,
   pauseAgent,
@@ -140,6 +153,7 @@ import {
   type AgentRunResponse,
   type AgentRunTimer as AgentRunTimerMessage,
   type AgentInterruptRequest as AgentInterruptRequestMessage,
+  type AgentPendingInterruptEntry,
   type KaliCreationStageMessage,
 } from "@/api";
 import {
@@ -221,7 +235,12 @@ const buildingLabel = computed(() => {
     ? $t(`console.stage.${buildingStage.value}`)
     : $t("console.connecting");
 });
-const pendingInterrupt = ref<AgentInterruptRequestMessage | null>(null);
+// One entry per sub-run currently awaiting approval - Single Agent mode
+// only ever has at most one (its agent_run_id always equals target_id),
+// but Multi Agent mode can have several (e.g. two concurrent pentesting
+// sub-runs each independently interrupted). Each is approved/denied on its
+// own, keyed by its own agent_run_id - see respondToInterrupt.
+const pendingInterrupts = ref<AgentPendingInterruptEntry[]>([]);
 
 const hasDuration = computed(
   () => props.target.task_duration !== null && props.target.task_duration > 0,
@@ -280,26 +299,22 @@ async function loadRun() {
   });
   run.value = result.data ?? null;
 
-  // The approval dialog's content (pendingInterrupt) is otherwise only ever
-  // populated by the one-shot AgentInterruptRequest websocket push - a
-  // reload while it's up would miss that push entirely and leave the run
-  // stuck as "interrupted" with no way to approve/deny it. Recover it from
-  // the backend's own in-memory record instead, which survives a reload
-  // (only a full backend restart would drop it).
-  if (run.value?.status === "interrupted") {
-    const interruptResult = await getTargetPendingInterrupt({
-      path: { project_id: props.target.project_id, target_id: props.target.id },
-    });
+  // The approval dialog's content (pendingInterrupts) is otherwise only ever
+  // populated by the one-shot AgentInterruptRequest websocket push(es) - a
+  // reload while one is up would miss that push entirely and leave a
+  // sub-run stuck "interrupted" with no way to approve/deny it. Recover
+  // from the backend's own in-memory record instead, which survives a
+  // reload (only a full backend restart would drop it). Always fetched,
+  // not gated on run.value?.status === "interrupted" - that only reflects
+  // the ROOT run (single_agent, or the orchestrator, which itself never
+  // actually reaches "interrupted" - see OrchestratorAgent's own
+  // requires_interrupt), while a Multi Agent sub-run's own interrupt is
+  // entirely independent of it.
+  const interruptResult = await getTargetPendingInterrupts({
+    path: { project_id: props.target.project_id, target_id: props.target.id },
+  });
 
-    if (interruptResult.data) {
-      pendingInterrupt.value = {
-        type: "AgentInterruptRequest",
-        project_id: props.target.project_id,
-        target_id: props.target.id,
-        tool_calls: interruptResult.data.tool_calls,
-      };
-    }
-  }
+  pendingInterrupts.value = interruptResult.data ?? [];
 }
 
 // Recovers the "container is being built for this target" indicator after
@@ -468,32 +483,39 @@ function handleClick() {
   }
 }
 
-function respondToInterrupt(approved: boolean) {
-  if (!pendingInterrupt.value) return;
-
+function respondToInterrupt(entry: AgentPendingInterruptEntry, approved: boolean) {
   ws_client.send_message({
     type: "AgentInterruptResponse",
     project_id: props.target.project_id,
     target_id: props.target.id,
     approved,
+    agent_run_id: entry.agent_run_id,
   });
 
-  pendingInterrupt.value = null;
+  pendingInterrupts.value = pendingInterrupts.value.filter(
+    (e) => e.agent_run_id !== entry.agent_run_id,
+  );
 }
+
+// The root run this button's timer/status display represents - Single
+// Agent mode's own run (role "single_agent") or Multi Agent mode's
+// orchestrator. A sub-run (scouting/pentesting/reporting) also broadcasts
+// its own AgentRunTimer updates under the same target_id (see
+// run_registry.persist_run_state, called for every role alike) - without
+// this filter, a sub-run finishing/failing would incorrectly overwrite
+// this button's own displayed status.
+const ROOT_RUN_ROLES = new Set(["single_agent", "orchestrator"]);
 
 const onRunTimer: tCallback = (message) => {
   const timerMessage = message as AgentRunTimerMessage;
 
   if (timerMessage.error) return;
   if (timerMessage.run.target_id !== props.target.id) return;
+  if (timerMessage.run.role && !ROOT_RUN_ROLES.has(timerMessage.run.role)) return;
 
   isBuilding.value = false;
   run.value = timerMessage.run;
   displayNow.value = Date.now();
-
-  if (timerMessage.run.status !== "interrupted") {
-    pendingInterrupt.value = null;
-  }
 };
 
 const onInterruptRequest: tCallback = (message) => {
@@ -502,7 +524,20 @@ const onInterruptRequest: tCallback = (message) => {
   if (interruptMessage.error) return;
   if (interruptMessage.target_id !== props.target.id) return;
 
-  pendingInterrupt.value = interruptMessage;
+  const agentRunId = interruptMessage.agent_run_id ?? props.target.id;
+  const entry: AgentPendingInterruptEntry = {
+    agent_run_id: agentRunId,
+    tool_calls: interruptMessage.tool_calls,
+  };
+
+  const existingIndex = pendingInterrupts.value.findIndex(
+    (e) => e.agent_run_id === agentRunId,
+  );
+  if (existingIndex === -1) {
+    pendingInterrupts.value.push(entry);
+  } else {
+    pendingInterrupts.value[existingIndex] = entry;
+  }
 };
 
 const onKaliStage: tCallback = (message) => {
@@ -628,6 +663,7 @@ onUnmounted(() => {
 
 .interrupt-body {
   width: 420px;
+  max-height: 60vh;
 }
 
 .interrupt-tool-call {

@@ -59,8 +59,6 @@ export const en = {
         model_download_failed: 'Failed to download model "{name}"',
         model_downloading: 'Downloading "{name}" in the background...',
         model_downloaded: '"{name}" downloaded and selected',
-        project_settings_saved: 'Project settings saved',
-        project_settings_save_failed: 'Could not save project settings',
         project_deleted: 'Project deleted',
         project_delete_failed: 'Could not delete project'
     },
@@ -73,13 +71,12 @@ export const en = {
         delete: "Delete Project",
         delete_confirm: "Are you sure you want to delete this project?",
         deleting: "Deleting...",
-        save_settings: "Save Settings",
-        saving: "Saving...",
         placeholder_name: "Target's name",
         placeholder_description: "Target's description",
         placeholder_ipv4: "Target's IPv4 address",
         placeholder_ipv6: "Target's IPv6 address",
-        placeholder_ports: "Target's authorized ports"
+        placeholder_ports: "Target's authorized ports",
+        placeholder_attack_vector: "The assigned attack vector's description"
     },
 
     models: {
@@ -92,8 +89,18 @@ export const en = {
         none_selected: "None selected",
         select_base_model: "Select Base Model",
         select_parsing_model: "Select Parsing Model",
+        select_orchestrator_model: "Select Orchestrator Model",
+        select_scouting_model: "Select Scouting Model",
+        select_pentesting_model: "Select Pentesting Model",
+        select_reporting_model: "Select Reporting Model",
         base_model: "Base Model",
         parsing_model: "Parsing Model",
+        orchestrator_model: "Orchestrator Model",
+        scouting_model: "Scouting Model",
+        pentesting_model: "Pentesting Model",
+        reporting_model: "Reporting Model",
+        use_base_model: "Use base model",
+        using_base_model: "Using base model ({model})",
         not_installed_title: "Model not installed",
         not_installed_body: '"{name}" is not installed. Download it now and use it once ready?',
         install: "Install model",
@@ -109,6 +116,21 @@ export const en = {
         settings: "Settings",
         ai: "AI",
         user_options: "User Options",
+        section_pipeline: "Pipeline",
+        section_models: "Models",
+        section_behavior: "Behavior",
+        section_danger_zone: "Danger Zone",
+        autosave_saved: "Saved",
+        autosave_saving: "Saving…",
+        autosave_error: "Save failed",
+        pipeline_mode: "Pipeline Mode",
+        pipeline_mode_single_agent: "Single Agent",
+        pipeline_mode_multi_agent: "Multi Agent",
+        max_concurrent_agents: "Max Concurrent Agents",
+        orchestrator_prompt_tab: "Orchestrator",
+        scouting_prompt_tab: "Scouting",
+        pentesting_prompt_tab: "Pentesting",
+        reporting_prompt_tab: "Reporting",
         should_interrupt: "Should Interrupt",
         enable_interruption: "Enable interruption handling",
         choose_tools: "Choose Tools",
@@ -121,6 +143,8 @@ export const en = {
         allow_install_packages: "Allow Installing Packages",
         enable_allow_install_packages: "Install new Kali packages",
         starting_prompt: "Starting Prompt",
+        edit_prompt: "Edit Starting Prompt",
+        pipeline_prompts_title: "Pipeline Prompts",
         available_placeholders: "Available placeholders",
         tool_groups: {
             hydra: "Hydra",
@@ -165,7 +189,19 @@ export const en = {
 
     overview: {
         summary: "Summary",
-        agent_logs: "Agent Logs"
+        agent_logs: "Agent Logs",
+        attack_vectors: "Attack Vectors"
+    },
+
+    attack_vectors: {
+        no_running_target: "No target is currently running",
+        reported: "Reported as a vulnerability",
+        status_pending: "Pending",
+        status_testing: "Testing",
+        status_tested_vulnerable: "Vulnerable",
+        status_tested_not_vulnerable: "Not Vulnerable",
+        status_inconclusive: "Inconclusive",
+        status_skipped: "Skipped"
     },
 
     agent_logs: {
@@ -180,6 +216,15 @@ export const en = {
         tool_report_vulnerability: "Vulnerability Report",
         tool_log_attack_attempt: "Attack Attempt Logged",
         tool_finish_task: "Task Finished",
+        tool_propose_attack_vector: "Attack Vector Proposed",
+        tool_report_outcome: "Outcome Reported",
+        tool_dispatch_pentest_batch: "Pentest Batch Dispatched",
+        tool_request_report: "Report Requested",
+        tool_run_scouting: "Scouting Run",
+        role_orchestrator: "Orchestrator",
+        role_scouting: "Scouting",
+        role_pentesting: "Pentesting",
+        role_reporting: "Reporting",
         running: "Agent is running",
         no_logs: "No agent activity yet"
     },

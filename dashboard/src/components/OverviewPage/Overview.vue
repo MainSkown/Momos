@@ -7,11 +7,8 @@
       <!-- Targets -->
       <Targets class="field" />      
 
-      <!-- Summary -->
-      <div class="border field">
-        <span class="text-red" style="padding-left: 10px">{{ $t("overview.summary") }}</span>
-        <div class="separator" />
-      </div>
+      <!-- Attack Vectors -->
+      <AttackVectors class="field" />
     </div>
 
     <!-- Second row -->
@@ -30,6 +27,7 @@ import { ref } from "vue";
 import Targets from "./Targets.vue";
 import UserConsole from "./UserConsole.vue";
 import AgentLogs from "./AgentLogs.vue";
+import AttackVectors from "./AttackVectors.vue";
 
 const target = ref<string>();
 </script>

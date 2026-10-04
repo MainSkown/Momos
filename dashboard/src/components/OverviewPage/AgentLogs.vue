@@ -14,43 +14,48 @@
 
     <div class="column log-panel-body">
       <div class="agent-log-screen scrollable-panel" ref="logScreenRef">
-        <div
-          v-for="entry in logEntries"
-          :key="entry.id"
-          class="log-entry"
-        >
-          <!-- Thinking -->
-          <div v-if="entry.type === 'thinking'" class="log-row">
-            <span class="material-icons-outlined log-icon log-icon--thinking"
-              >psychology</span
-            >
-            <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
-            <span class="log-text log-text--thinking">{{ entry.content }}</span>
+        <template v-for="(entry, index) in logEntries" :key="entry.id">
+          <div
+            v-if="dividerLabel(entry, logEntries[index - 1])"
+            class="log-section-divider"
+          >
+            <span>{{ dividerLabel(entry, logEntries[index - 1]) }}</span>
           </div>
 
-          <!-- Narrated action / status update -->
-          <div v-else-if="entry.type === 'action'" class="log-row">
-            <span class="material-icons-outlined log-icon log-icon--action"
-              >bolt</span
-            >
-            <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
-            <span class="log-text">{{ entry.content }}</span>
-          </div>
-
-          <!-- Tool usage -->
-          <div v-else class="tool-card border">
-            <div class="row tool-card-header">
-              <span class="material-icons-outlined log-icon log-icon--tool">{{
-                toolIcon(entry.tool_name)
-              }}</span>
-              <span class="tool-name">{{ toolLabel(entry.tool_name) }}</span>
-              <span class="log-timestamp tool-timestamp">{{
-                formatTimestamp(entry.created_at)
-              }}</span>
+          <div class="log-entry">
+            <!-- Thinking -->
+            <div v-if="entry.type === 'thinking'" class="log-row">
+              <span class="material-icons-outlined log-icon log-icon--thinking"
+                >psychology</span
+              >
+              <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
+              <span class="log-text log-text--thinking">{{ entry.content }}</span>
             </div>
-            <div class="tool-content">{{ entry.content }}</div>
+
+            <!-- Narrated action / status update -->
+            <div v-else-if="entry.type === 'action'" class="log-row">
+              <span class="material-icons-outlined log-icon log-icon--action"
+                >bolt</span
+              >
+              <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
+              <span class="log-text">{{ entry.content }}</span>
+            </div>
+
+            <!-- Tool usage -->
+            <div v-else class="tool-card border">
+              <div class="row tool-card-header">
+                <span class="material-icons-outlined log-icon log-icon--tool">{{
+                  toolIcon(entry.tool_name)
+                }}</span>
+                <span class="tool-name">{{ toolLabel(entry.tool_name) }}</span>
+                <span class="log-timestamp tool-timestamp">{{
+                  formatTimestamp(entry.created_at)
+                }}</span>
+              </div>
+              <div class="tool-content">{{ entry.content }}</div>
+            </div>
           </div>
-        </div>
+        </template>
 
         <div v-if="logEntries.length === 0" class="text-center no-logs">
           {{ $t("agent_logs.no_logs") }}
@@ -97,7 +102,29 @@ type ToolName =
   | "switch_mode"
   | "report_vulnerability"
   | "log_attack_attempt"
-  | "finish_task";
+  | "finish_task"
+  | "propose_attack_vector"
+  | "report_outcome"
+  | "dispatch_pentest_batch"
+  | "request_report"
+  | "run_scouting";
+
+// Multi Agent mode's AgentLogResponse rows carry role/agent_run_id (always
+// "single_agent" for the Single Agent flow, never varying within one run -
+// see agent_service.py's _run_agent) - a divider is only ever meaningful
+// between two different Multi Agent sub-runs.
+type Role = "orchestrator" | "scouting" | "pentesting" | "reporting";
+
+const ROLE_LABELS: Record<Role, string> = {
+  orchestrator: $t("agent_logs.role_orchestrator"),
+  scouting: $t("agent_logs.role_scouting"),
+  pentesting: $t("agent_logs.role_pentesting"),
+  reporting: $t("agent_logs.role_reporting"),
+};
+
+function isKnownRole(role: string): role is Role {
+  return role in ROLE_LABELS;
+}
 
 const logEntries = ref<AgentLogResponse[]>([]);
 const logScreenRef = ref<HTMLElement | null>(null);
@@ -207,6 +234,11 @@ const TOOL_LABELS: Record<ToolName, string> = {
   report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
   log_attack_attempt: $t("agent_logs.tool_log_attack_attempt"),
   finish_task: $t("agent_logs.tool_finish_task"),
+  propose_attack_vector: $t("agent_logs.tool_propose_attack_vector"),
+  report_outcome: $t("agent_logs.tool_report_outcome"),
+  dispatch_pentest_batch: $t("agent_logs.tool_dispatch_pentest_batch"),
+  request_report: $t("agent_logs.tool_request_report"),
+  run_scouting: $t("agent_logs.tool_run_scouting"),
 };
 
 const TOOL_ICONS: Record<ToolName, string> = {
@@ -221,10 +253,32 @@ const TOOL_ICONS: Record<ToolName, string> = {
   report_vulnerability: "bug_report",
   log_attack_attempt: "history_edu",
   finish_task: "task_alt",
+  propose_attack_vector: "flag",
+  report_outcome: "fact_check",
+  dispatch_pentest_batch: "call_split",
+  request_report: "summarize",
+  run_scouting: "travel_explore",
 };
 
 function isKnownTool(toolName: string): toolName is ToolName {
   return toolName in TOOL_LABELS;
+}
+
+// Shows a divider right before the first entry of a new Multi Agent
+// sub-run (grouped by agent_run_id, not just role - two concurrent
+// pentesting sub-runs share the same role but are still two distinct
+// runs). Single Agent mode's role never varies within a run, so this
+// never fires for it.
+function dividerLabel(
+  entry: AgentLogResponse,
+  prevEntry: AgentLogResponse | undefined,
+): string | null {
+  if (!entry.role || !isKnownRole(entry.role)) return null;
+  if (prevEntry && prevEntry.agent_run_id === entry.agent_run_id) return null;
+
+  const label = ROLE_LABELS[entry.role];
+  const shortId = entry.agent_run_id ? entry.agent_run_id.slice(0, 8) : null;
+  return shortId ? `${label} (${shortId}…)` : label;
 }
 
 function toolLabel(toolName?: string | null): string {
@@ -362,6 +416,25 @@ function formatTimestamp(createdAt: string): string {
   color: var(--text-gray-dark);
   margin-top: auto;
   margin-bottom: auto;
+}
+
+.log-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-gray-dark);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-section-divider::before,
+.log-section-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-subtle);
 }
 
 .running-indicator {
