@@ -270,7 +270,7 @@ export type AgentRunningResponse = {
 /**
  * AttackVectorStatus
  */
-export type AttackVectorStatus = 'pending' | 'testing' | 'tested_vulnerable' | 'tested_not_vulnerable' | 'inconclusive' | 'skipped';
+export type AttackVectorStatus = 'pending' | 'testing' | 'tested_vulnerable' | 'tested_not_vulnerable' | 'inconclusive';
 
 /**
  * AttackVectorUpdate

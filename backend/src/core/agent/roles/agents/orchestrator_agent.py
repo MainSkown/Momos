@@ -39,7 +39,6 @@ _STATUS_DISPLAY_ORDER = (
     "tested_vulnerable",
     "tested_not_vulnerable",
     "inconclusive",
-    "skipped",
 )
 
 

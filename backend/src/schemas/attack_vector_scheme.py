@@ -11,8 +11,11 @@ class AttackVectorStatus(str, Enum):
     TESTING = "testing"
     TESTED_VULNERABLE = "tested_vulnerable"
     TESTED_NOT_VULNERABLE = "tested_not_vulnerable"
+    # Also the terminal state for a vector nothing could ever test (e.g. the
+    # pentesting role lacks the tool a vector needs) - reported here with
+    # the reasoning rather than a separate "skipped" bin, since it's the
+    # same "we don't have a verdict" shape as every other inconclusive case.
     INCONCLUSIVE = "inconclusive"
-    SKIPPED = "skipped"
 
 
 class AttackVectorBase(SQLModel):

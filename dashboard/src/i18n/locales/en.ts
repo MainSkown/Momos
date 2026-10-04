@@ -200,8 +200,7 @@ export const en = {
         status_testing: "Testing",
         status_tested_vulnerable: "Vulnerable",
         status_tested_not_vulnerable: "Not Vulnerable",
-        status_inconclusive: "Inconclusive",
-        status_skipped: "Skipped"
+        status_inconclusive: "Inconclusive"
     },
 
     agent_logs: {

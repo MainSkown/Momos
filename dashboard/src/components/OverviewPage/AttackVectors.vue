@@ -59,7 +59,6 @@ const COLUMNS: { status: AttackVectorStatus; labelKey: string }[] = [
   { status: "tested_vulnerable", labelKey: "attack_vectors.status_tested_vulnerable" },
   { status: "tested_not_vulnerable", labelKey: "attack_vectors.status_tested_not_vulnerable" },
   { status: "inconclusive", labelKey: "attack_vectors.status_inconclusive" },
-  { status: "skipped", labelKey: "attack_vectors.status_skipped" },
 ];
 
 // Attack vectors are per-target, but (like AgentLogs/UserConsole) this
