@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .vulnerability_scheme import Vulnerability
     from .agent_log_scheme import AgentLog
     from .agent_run_scheme import AgentRun
+    from .attack_vector_scheme import AttackVector
 
 ValidPort = Annotated[int, PydanticField(ge=1, le=65535)]
 
@@ -38,7 +39,12 @@ class Target(TargetBase, table=True):
     project: Optional["Project"] = Relationship(back_populates="targets")
     vulnerabilities: List["Vulnerability"] = Relationship(back_populates="target")
     agent_logs: List["AgentLog"] = Relationship(back_populates="target")
-    agent_run: Optional["AgentRun"] = Relationship(back_populates="target")
+    # List, not Optional[...] singular - a target's pipeline is now a TREE
+    # of runs (one orchestrator + one scouting + N pentesting + N reporting
+    # in multi_agent mode, still just one in single_agent mode) rather than
+    # the single row this used to be. See agent_run_scheme.py.
+    agent_runs: List["AgentRun"] = Relationship(back_populates="target")
+    attack_vectors: List["AttackVector"] = Relationship(back_populates="target")
 
 
 class ResponseTarget(TargetBase):

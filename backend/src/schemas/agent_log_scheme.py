@@ -21,8 +21,21 @@ class AgentLogBase(SQLModel):
     # itself (LangChain never resends a ToolMessage's artifact back into the
     # conversation) - this exists purely so a human reviewing the log can
     # see what the parsing model actually condensed `content` from, instead
-    # of only ever seeing its (possibly wrong) summary.
+    # of only ever seeing its (possibly wrong) summary. It's also exactly
+    # what the reporting role reads back wholesale (see
+    # get_agent_logs_for_run in database_manager.py) to write an accurate
+    # proof_of_concept from a pentesting run's real transcript, not a
+    # paraphrase of it.
     raw_output: Optional[str] = None
+    # Which agent_run produced this entry, and which role that run was -
+    # both nullable so every pre-existing single-agent-flow log row (and
+    # every new single_agent-mode one, which never bothers setting these)
+    # stays valid without a migration backfill. Multi-agent mode's roles
+    # always set both, so the reporting role can pull exactly one
+    # pentesting run's transcript (get_agent_logs_for_run) and the UI can
+    # group a target's logs by role/run instead of one flat stream.
+    agent_run_id: Optional[uuid.UUID] = None
+    role: Optional[str] = None
 
 
 class AgentLog(AgentLogBase, table=True):

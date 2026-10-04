@@ -14,7 +14,7 @@ from src.core import db_manager, ollama_manager, settings, tool_groups
 from src.core.kali_integration import kali_registry
 from src.core.kali_integration.kali_manager import KaliManger, KALI_USERS
 from src.core.kali_integration.kali_session import KaliSessionError, NO_OUTPUT_MESSAGE
-from src.schemas import Vulnerability, VulnerabilityBase, SEVERITY_LEVELS, Target
+from src.schemas import Vulnerability, VulnerabilityBase, severity_label, Target
 
 KALI_COMMAND_TOOL_NAME = "execute_kali_command"
 REPORT_VULNERABILITY_TOOL_NAME = "report_vulnerability"
@@ -2819,7 +2819,7 @@ def create_vulnerability_tool(
 
     @tool(REPORT_VULNERABILITY_TOOL_NAME)
     async def report_vulnerability(
-        name: str, severity: str = "", proof_of_concept: str = "", cvss4_vector: str = ""
+        name: str, proof_of_concept: str = "", cvss4_vector: str = ""
     ) -> str:
         """Records a confirmed vulnerability found on the current target. Only
         call this once a finding has actually been verified - not for suspected
@@ -2830,22 +2830,17 @@ def create_vulnerability_tool(
 
         Args:
             name: A short, descriptive name for the vulnerability.
-            severity: Your own assessment of impact - one of
-                "informational", "low", "medium", "high", or "critical".
-                This is the field that actually matters here; always give
-                your honest best judgment for it.
             proof_of_concept: Step-by-step instructions describing exactly how to
                 verify or exploit the vulnerability, in enough detail to reproduce it.
-            cvss4_vector: OPTIONAL - leave this empty unless you are
-                confident you can construct a precise, valid CVSS v4.0
-                vector yourself, e.g.
+            cvss4_vector: REQUIRED - a precise, valid CVSS v4.0 vector, e.g.
                 "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N".
-                severity alone is enough to record the finding - a wrong or
-                malformed vector is worse than none, so when unsure, omit
-                it rather than guess. Its score is derived automatically;
-                do not include one. CVSS v4.0 uses different base metric
-                names than v3.x - VC/VI/VA and SC/SI/SA, not a bare C/I/A
-                or a Scope (S) metric.
+                A wrong or malformed vector will be rejected and asked for
+                again rather than silently accepted, so take your time and
+                follow the metric reference below exactly - there is no
+                severity-word shortcut anymore. Its score is derived
+                automatically; do not include one. CVSS v4.0 uses different
+                base metric names than v3.x - VC/VI/VA and SC/SI/SA, not a
+                bare C/I/A or a Scope (S) metric.
         """
         gate_error = _require_tested(get_mode, has_tested, REPORT_VULNERABILITY_TOOL_NAME)
         if gate_error:
@@ -2863,35 +2858,22 @@ def create_vulnerability_tool(
             # then build the table row from the already-validated data.
             validated = VulnerabilityBase(
                 name=name,
-                severity=severity,
-                cvss4_vector=cvss4_vector or None,
+                cvss4_vector=cvss4_vector,
                 proof_of_concept=proof_of_concept,
             )
         except ValidationError as e:
-            # A bad `severity` is now the common failure (name/
-            # proof_of_concept have no format to get wrong). cvss4_vector
-            # is optional, so its simplest fix is usually to just drop it
-            # rather than get the syntax right - only repeat the full
-            # metric reference when a vector was actually supplied, since
-            # that's the only case a vector-specific mistake could be why
-            # this failed.
-            extra = ""
-            if cvss4_vector.strip():
-                extra = (
-                    f"\n\n{CVSS4_METRIC_REFERENCE}\n"
-                    f"Example of a valid vector: {CVSS4_EXAMPLE_VECTOR}\n"
-                    "Or simply omit cvss4_vector entirely and report "
-                    "severity alone - it is optional."
-                )
+            # cvss4_vector is required now, with no severity-word fallback
+            # - always repeat the full metric reference, since a bad/
+            # missing vector is the only way this can fail (name/
+            # proof_of_concept have no format to get wrong).
             return (
                 f"Could not record vulnerability, fix the input and try again: {e}\n\n"
-                f"Valid severities: {', '.join(sorted(SEVERITY_LEVELS))}."
-                f"{extra}"
+                f"{CVSS4_METRIC_REFERENCE}\n"
+                f"Example of a valid vector: {CVSS4_EXAMPLE_VECTOR}"
             )
 
         vulnerability = Vulnerability(
             name=validated.name,
-            severity=validated.severity,
             cvss4_vector=validated.cvss4_vector,
             cvss4_score=validated.cvss4_score,
             proof_of_concept=validated.proof_of_concept,
@@ -2914,7 +2896,8 @@ def create_vulnerability_tool(
         on_reported()
 
         return (
-            f"Recorded vulnerability '{saved.name}' (severity: {saved.severity}, "
+            f"Recorded vulnerability '{saved.name}' "
+            f"(severity: {severity_label(saved.cvss4_score)}, "
             f"CVSS v4.0 score: {saved.cvss4_score})."
         )
 
