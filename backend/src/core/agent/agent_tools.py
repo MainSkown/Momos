@@ -3633,3 +3633,166 @@ def build_agent_tools(
     )
     tools.append(create_finish_task_tool(on_finish, get_unresolved_vulnerable_claims_count))
     return tools
+
+
+# --- Multi-agent pipeline role gatherers ---
+# One builder per role, right alongside build_agent_tools (single_agent
+# mode's own, above) - this is the single place "which tools does role X
+# get" is decided, so that policy never has to be found by reading four
+# different files. Each builder imports its role's OWN new tool
+# implementations from roles/<role>_tools.py - a DEFERRED import (inside
+# the function, not at module level) specifically because those modules
+# import this one (for the shared tool-name constants their own
+# writer/reader sets are built from) - importing them back at this
+# module's own top level would cycle. Every tool that's genuinely shared
+# with the Single Agent flow (nmap_scan, the terminal tools, Tier-1/2
+# tools, request_port_access, file tools, ...) is assembled here from the
+# exact same factories build_agent_tools itself uses - nothing below
+# duplicates a tool body.
+
+
+def build_scouting_agent_tools(
+    project_id: str,
+    target_id: str,
+    agent_run_id: str,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    has_tested: Callable[[], bool],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
+    on_ports_changed: Callable[[List[int]], None],
+    on_finish: Callable[[str], None],
+    allow_shell: bool = True,
+    allow_install_packages: bool = True,
+    enabled_tools: Optional[List[str]] = None,
+) -> list:
+    """Scouting gets enumeration-only tools (nmap_scan/gobuster_scan/
+    searchsploit lookups - not searchsploit_run/hydra/ftp/ssh/telnet/
+    metasploit, pentesting-only, see the tool matrix in the implementation
+    plan) plus the always-available request_port_access/file tools and
+    shell access, and exactly one terminal action of its own,
+    propose_attack_vector (plus finish_scouting)."""
+    from .roles import scouting_tools
+
+    pentest_tools = create_pentest_tools(
+        project_id, target_id, on_enumeration, mark_tested, on_raw_output
+    )
+    allowed_tool_names = tool_groups.tool_names_for(enabled_tools)
+    tools = [
+        t
+        for t in pentest_tools
+        if t.name in scouting_tools.ALLOWED_PENTEST_TOOL_NAMES
+        and (t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names)
+    ]
+
+    tools.append(create_request_port_access_tool(project_id, target_id, on_ports_changed))
+    tools.extend(create_file_tools(project_id))
+    if allow_install_packages:
+        tools.append(create_install_package_tool(project_id))
+    if allow_shell:
+        tools.extend(
+            create_terminal_tools(
+                project_id,
+                target_id,
+                agent_run_id,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+        )
+
+    tools.append(
+        scouting_tools.create_propose_attack_vector_tool(
+            project_id, target_id, agent_run_id, has_tested
+        )
+    )
+    tools.append(scouting_tools.create_finish_scouting_tool(on_finish))
+    return tools
+
+
+def build_pentesting_agent_tools(
+    project_id: str,
+    target_id: str,
+    agent_run_id: str,
+    attack_vector_id: str,
+    on_enumeration: Callable[[dict], None],
+    mark_tested: Callable[[], None],
+    get_mode: Callable[[], str],
+    has_tested: Callable[[], bool],
+    on_session_change: Callable[[Optional[str], Optional[str]], None],
+    on_prompt_state_change: Callable[[bool], None],
+    on_raw_output: Callable[[str], None],
+    on_ports_changed: Callable[[List[int]], None],
+    on_outcome_reported: Callable[[str, str, List[str]], None],
+    allow_shell: bool = True,
+    allow_install_packages: bool = True,
+    enabled_tools: Optional[List[str]] = None,
+) -> list:
+    """Pentesting gets every "vulnerability testing" tool except nmap_scan
+    (scouting-only, see the tool matrix in the implementation plan) -
+    gobuster_scan/searchsploit_run/hydra_bruteforce/metasploit_run (per
+    tool_groups/enabled_tools, same gating as today) plus all of the ftp/
+    ssh/telnet guided tools - and exactly one terminal action of its own,
+    report_outcome."""
+    from .roles import pentesting_tools
+
+    pentest_tools = create_pentest_tools(
+        project_id, target_id, on_enumeration, mark_tested, on_raw_output
+    )
+    allowed_tool_names = tool_groups.tool_names_for(enabled_tools)
+    tools = [
+        t
+        for t in pentest_tools
+        if t.name in pentesting_tools.ALLOWED_PENTEST_TOOL_NAMES
+        and (t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names)
+    ]
+
+    guided_tools = create_guided_session_tools(
+        project_id,
+        target_id,
+        agent_run_id,
+        on_enumeration,
+        mark_tested,
+        on_session_change,
+        on_prompt_state_change,
+        on_raw_output,
+    )
+    tools.extend(
+        t
+        for t in guided_tools
+        if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
+    )
+
+    tools.append(create_request_port_access_tool(project_id, target_id, on_ports_changed))
+    tools.extend(create_file_tools(project_id))
+    if allow_install_packages:
+        tools.append(create_install_package_tool(project_id))
+    if allow_shell:
+        tools.extend(
+            create_terminal_tools(
+                project_id,
+                target_id,
+                agent_run_id,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+        )
+
+    tools.append(
+        pentesting_tools.create_report_outcome_tool(
+            project_id,
+            target_id,
+            agent_run_id,
+            attack_vector_id,
+            get_mode,
+            has_tested,
+            on_outcome_reported,
+        )
+    )
+    return tools

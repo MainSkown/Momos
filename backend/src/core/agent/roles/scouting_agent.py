@@ -80,7 +80,7 @@ class ScoutingAgent:
 
         self._get_model_name = lambda: getattr(self, "model_name", "")
 
-        self.tools = scouting_tools.build_scouting_tools(
+        self.tools = agent_tools.build_scouting_agent_tools(
             project_id,
             target_id,
             agent_run_id,

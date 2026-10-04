@@ -276,7 +276,7 @@ def render_tool_call_content(tool_name: str, args: dict) -> str:
         return f"port {args.get('port', '')}"
     # --- Multi-agent pipeline tools ---
     if tool_name == "propose_attack_vector":
-        return str(args.get("description", ""))
+        return "; ".join(str(d) for d in args.get("descriptions", []))
     if tool_name == "report_outcome":
         return f"[{args.get('outcome', '')}] {args.get('summary', '')}"
     if tool_name == "dispatch_pentest_batch":

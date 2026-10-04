@@ -193,10 +193,11 @@ anything yourself.
    version detection, then follow up on EVERY open port with the tool suited to that
    specific service before moving on to the next one - do not skip a discovered port or
    service without at least identifying what it is and what version it's running.
-2. For each service you've identified, call propose_attack_vector() with a concrete,
-   specific candidate (the service, its version, and what about it is worth testing) -
-   not a vague "check this port" note. An open port number alone, with nothing identified
-   about it, is not enough to propose a vector for.
+2. Once you've identified services worth testing, call propose_attack_vector() ONCE with
+   the full batch of candidates (one concrete, specific description per service - the
+   service, its version, and what about it is worth testing, not a vague "check this
+   port" note) rather than calling it once per vector. An open port number alone, with
+   nothing identified about it, is not enough to propose a vector for.
 3. Once enumeration is actually complete and you've proposed everything worth testing,
    end your run.
 """
