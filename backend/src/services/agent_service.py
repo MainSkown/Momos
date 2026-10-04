@@ -1,18 +1,13 @@
 import asyncio
-from typing import Callable, Dict, List, Optional, Tuple
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    ToolMessage,
-)
+from typing import Dict, List, Optional
 from src.core import db_manager, ollama_manager, settings, tool_groups
-from src.core.agent import Agent, agent_tools
+from src.core.agent import Agent
 from src.core.agent import agent_checkpointer
+from src.core.agent import run_registry
 from src.core.kali_integration import kali_registry
 from src.schemas.target_scheme import Target
 from src.schemas.project_scheme import ProjectSettings
-from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogType
-from src.schemas.agent_run_scheme import AgentRun, AgentRunResponse, AgentRunState
+from src.schemas.agent_run_scheme import AgentRun, AgentRunState
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
@@ -24,118 +19,23 @@ from src.utils.exceptions import (
 from src.websocket import (
     ws_registry,
     WsTypes,
-    AgentMessage,
     AgentInterruptRequest,
     AgentInterruptResponseMessage,
     AgentRunStatus,
-    AgentRunTimer,
     AgentContextUsage,
     KaliCreationStageMessage,
 )
 
-# agent_run_id -> pending interrupt's accept callback. Keyed by agent_run_id,
-# not target_id - in single_agent mode these are always the same value (see
-# Agent.__init__'s own comment on agent_run_id), so every existing call site
-# that looks this up by target_id keeps finding exactly the right entry
-# unchanged; a multi_agent pipeline's several concurrently-running sub-runs
-# (Phase 4) will have genuinely distinct agent_run_ids instead.
-_pending_interrupts: Dict[str, Callable[[bool], None]] = {}
-
-# agent_run_id -> the tool_calls of the interrupt currently pending for that
-# run, same shape as the AgentInterruptRequest websocket message sent below.
-# Kept in lockstep with _pending_interrupts (set/popped together) so a
-# client that reloads mid-approval (missing the one-shot websocket push) can
-# still recover what it needs to render the dialog via
-# AgentService.get_pending_interrupt, instead of being stuck forever with no
-# way to approve/deny an "interrupted" run.
-_pending_interrupt_tool_calls: Dict[str, List[dict]] = {}
-
 # target_id -> project_id, for every target currently running an agent
 # PIPELINE (one root run; in single_agent mode that's the one and only run,
-# in multi_agent mode it will be the orchestrator - Phase 4). Unchanged
-# meaning from before agent_run_id existed - still exactly one entry per
-# running target, still what is_project_running/get_running_target read.
+# in multi_agent mode it's the orchestrator - Phase 5). Stays here, not in
+# run_registry.py - this is the router-facing "is this target's pipeline
+# running at all" contract (is_project_running/get_running_target), a
+# service-layer concern distinct from run_registry's per-agent-run
+# bookkeeping (which a role's own tools also need direct access to,
+# without importing this module - see run_registry.py's own docstring for
+# why that split exists).
 _running_targets: Dict[str, str] = {}
-
-# target_id -> the set of agent_run_ids currently live under that target's
-# pipeline - one entry for single_agent mode, but genuinely several once a
-# multi_agent pipeline can have several sub-runs in flight at once (Phase 4).
-# Populated/depopulated by _run_agent's own registration/cleanup.
-# pause_agent/finish_agent fan their stop signal out across every entry
-# here for a target instead of assuming there's ever just one - built now,
-# even though single_agent mode never puts more than one id in a set, so
-# Phase 4 doesn't need to touch either of those two methods again.
-_live_runs_for_target: Dict[str, set] = {}
-
-# agent_run_id -> the active run's stop_event, so a pause request can trigger it
-_stop_events: Dict[str, asyncio.Event] = {}
-
-# agent_run_id -> the active run's shared time-remaining state (see Agent.start_agent)
-_run_states: Dict[str, dict] = {}
-
-# agent_run_id -> True if the pending stop_event.set() should end the run as
-# FINISHED (not resumable) rather than PAUSED - set by finish_agent(),
-# consumed once in _run_agent's post-loop status decision.
-_finish_intents: Dict[str, bool] = {}
-
-# Process-wide cap on how many agent LLM instances may run at once, across
-# every project - see config.py's GLOBAL_MAX_CONCURRENT_AGENTS. Safe to
-# construct at import time (no running loop needed) - a plain counter under
-# the hood until something actually awaits .acquire().
-_global_agent_semaphore = asyncio.Semaphore(settings.GLOBAL_MAX_CONCURRENT_AGENTS)
-
-# project_id -> how many slots that project currently holds. NOT a plain
-# asyncio.Semaphore per project - a project's own cap
-# (ProjectSettings.max_concurrent_agents) can change at runtime via the
-# settings UI, and re-reading it live on every acquire (rather than baking a
-# fixed size into a Semaphore constructed once, the first time that project
-# ever ran) means a changed setting takes effect on the very next acquire,
-# not just after a process restart.
-_project_slot_counts: Dict[str, int] = {}
-_project_slot_condition = asyncio.Condition()
-
-
-async def _acquire_agent_slot(project_id: str, project_settings: ProjectSettings) -> None:
-    """Blocks until a slot is free for this project - both this project's
-    own configured allowance AND the global hardware ceiling - then holds
-    both. Release with _release_agent_slot exactly once per successful
-    acquire (a try/finally at the call site, gated on this having actually
-    returned - see _run_agent). effective_slots = min(this project's own
-    max_concurrent_agents, the global cap) - see
-    GLOBAL_MAX_CONCURRENT_AGENTS's own comment in config.py for why the
-    global figure always wins when the two disagree.
-
-    All-or-nothing: if the global acquire below is cancelled (or raises)
-    after the per-project slot was already counted, that count is rolled
-    back before re-raising - otherwise a cancelled caller would leak a
-    per-project slot forever, since _release_agent_slot is never reached
-    for an acquire that didn't actually succeed."""
-    effective_slots = max(
-        1, min(project_settings.max_concurrent_agents, settings.GLOBAL_MAX_CONCURRENT_AGENTS)
-    )
-    async with _project_slot_condition:
-        while _project_slot_counts.get(project_id, 0) >= effective_slots:
-            await _project_slot_condition.wait()
-        _project_slot_counts[project_id] = _project_slot_counts.get(project_id, 0) + 1
-    try:
-        # Acquired second, not first - holding the per-project slot while
-        # waiting on the global one is harmless (nothing else needs THIS
-        # project's slot released to make global progress elsewhere), and
-        # keeping one consistent acquire order everywhere this is called
-        # is what actually matters for avoiding a deadlock between the two.
-        await _global_agent_semaphore.acquire()
-    except BaseException:
-        async with _project_slot_condition:
-            _project_slot_counts[project_id] = max(0, _project_slot_counts.get(project_id, 0) - 1)
-            _project_slot_condition.notify_all()
-        raise
-
-
-async def _release_agent_slot(project_id: str) -> None:
-    _global_agent_semaphore.release()
-    async with _project_slot_condition:
-        _project_slot_counts[project_id] = max(0, _project_slot_counts.get(project_id, 0) - 1)
-        _project_slot_condition.notify_all()
 
 
 async def _set_running(project_id: str, target_id: str, running: bool):
@@ -154,38 +54,15 @@ async def _set_running(project_id: str, target_id: str, running: bool):
     )
 
 
-async def _persist_run_state(
-    project_id: str, target_id: str, status: AgentRunState, remaining_seconds: float
-) -> AgentRun:
-    run = AgentRun(
-        status=status,
-        remaining_seconds=max(0, int(remaining_seconds)),
-        project_id=project_id,
-        target_id=target_id,
-    )
-
-    loop = asyncio.get_running_loop()
-    saved = await loop.run_in_executor(None, db_manager.upsert_agent_run, run)
-
-    await ws_registry.send_message(
-        AgentRunTimer(
-            type=WsTypes.AgentRunTimer,
-            run=AgentRunResponse.model_validate(saved),
-        )
-    )
-
-    return saved
-
-
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
-    # These dicts are actually keyed by agent_run_id now (see their own
-    # comments) - this still works unchanged because single_agent mode's
-    # agent_run_id always equals target_id. AgentInterruptResponseMessage
+    # run_registry's dicts are keyed by agent_run_id - this still works
+    # unchanged because single_agent mode's agent_run_id always equals
+    # target_id (see Agent.__init__'s own comment). AgentInterruptResponseMessage
     # has no agent_run_id field yet to look up a multi_agent sub-run's own
     # pending interrupt by - that's Phase 6's job, alongside the rest of
     # the "queue of pending approvals" work.
-    accept = _pending_interrupts.pop(message.target_id, None)
-    _pending_interrupt_tool_calls.pop(message.target_id, None)
+    accept = run_registry.pending_interrupts.pop(message.target_id, None)
+    run_registry.pending_interrupt_tool_calls.pop(message.target_id, None)
 
     if accept is None:
         print(f"No pending interrupt for target {message.target_id}. Ignoring.")
@@ -193,22 +70,18 @@ async def _on_interrupt_response(message: AgentInterruptResponseMessage):
 
     # The agent is about to resume - flip the timer back to running immediately,
     # rather than waiting for the next log message to arrive.
-    run_state = _run_states.get(message.target_id, {})
-    await _persist_run_state(
-        message.project_id,
-        message.target_id,
-        AgentRunState.RUNNING,
-        run_state.get("time_left", 0),
+    run_state = run_registry.run_states.get(message.target_id, {})
+    await run_registry.persist_run_state(
+        project_id=message.project_id,
+        target_id=message.target_id,
+        status=AgentRunState.RUNNING,
+        remaining_seconds=run_state.get("time_left", 0),
     )
 
     accept(message.approved)
 
 
 ws_registry.add_hook(WsTypes.AgentInterruptResponse, _on_interrupt_response)
-
-
-def _stringify_content(content) -> str:
-    return content if isinstance(content, str) else str(content)
 
 
 NOT_DEFINED = "Not defined"
@@ -292,201 +165,6 @@ def _render_start_prompt(
         rendered = rendered.replace(placeholder, value)
 
     return rendered + _capability_note(project_settings)
-
-
-def _render_tool_call_content(tool_name: str, args: dict) -> str:
-    # No branch for agent_tools.KALI_COMMAND_TOOL_NAME here - that tool is
-    # built but deliberately never bound in agent_tools.build_agent_tools
-    # (see create_kali_tool's own docstring), so it can never actually
-    # appear in a real tool call. Revive create_kali_tool's call site there
-    # first if this ever needs to render its args again.
-    if tool_name == agent_tools.INSTALL_PACKAGE_TOOL_NAME:
-        return str(args.get("package", ""))
-
-    if tool_name == agent_tools.ATTACK_LOG_TOOL_NAME:
-        return f"[{args.get('outcome', '')}] {args.get('target', '')}: {args.get('vector', '')}"
-
-    if tool_name == agent_tools.REPORT_VULNERABILITY_TOOL_NAME:
-        severity = args.get("severity", "")
-        return f"[{severity}] {args.get('name', '')}" if severity else str(args.get("name", ""))
-
-    if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
-        return str(args.get("summary", ""))
-
-    if tool_name == agent_tools.SWITCH_MODE_TOOL_NAME:
-        return f"{args.get('mode', '')}: {args.get('reason', '')}"
-
-    if tool_name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME:
-        return f"{args.get('port', '')}/{args.get('protocol', '')}: {args.get('reason', '')}"
-
-    if tool_name == agent_tools.RUN_TOOL_NAME:
-        input_value = args.get("input")
-        return str(input_value) if input_value is not None else "(checking for output)"
-
-    if tool_name == agent_tools.NEW_SESSION_TOOL_NAME:
-        return f"[{args.get('name', '')}] {args.get('command', '')}"
-
-    if tool_name == agent_tools.SWITCH_SESSION_TOOL_NAME:
-        return str(args.get("name", ""))
-
-    if tool_name == agent_tools.CLOSE_SESSION_TOOL_NAME:
-        return str(args.get("name", ""))
-
-    if tool_name == agent_tools.LIST_SESSIONS_TOOL_NAME:
-        return "(list sessions)"
-
-    if tool_name == agent_tools.INTERRUPT_SESSION_TOOL_NAME:
-        return "(Ctrl-C)"
-
-    if tool_name == agent_tools.NMAP_SCAN_TOOL_NAME:
-        extras = []
-        if args.get("run_default_scripts"):
-            extras.append("-sC")
-        if args.get("timing"):
-            extras.append(str(args["timing"]))
-        suffix = f" ({', '.join(extras)})" if extras else ""
-        return f"ports={args.get('ports') or 'default'}{suffix}"
-
-    if tool_name == agent_tools.HYDRA_BRUTEFORCE_TOOL_NAME:
-        user = args.get("username") or args.get("username_list", "")
-        return f"{args.get('service', '')}: {user}"
-
-    if tool_name == agent_tools.GOBUSTER_SCAN_TOOL_NAME:
-        scheme = "https" if args.get("use_tls") else "http"
-        return f"{scheme} port {args.get('port', 80)}"
-
-    if tool_name in (
-        agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
-        agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
-    ):
-        return str(args.get("query") or args.get("edb_id", ""))
-
-    if tool_name == agent_tools.SEARCHSPLOIT_RUN_TOOL_NAME:
-        edb_id = args.get("edb_id", "")
-        run_args = args.get("exploit_args", "")
-        return f"EDB-ID {edb_id} {run_args}".strip()
-
-    if tool_name == agent_tools.FTP_CONNECT_TOOL_NAME:
-        return str(args.get("username", ""))
-
-    if tool_name == agent_tools.FTP_COMMAND_TOOL_NAME:
-        return str(args.get("command", ""))
-
-    if tool_name in (agent_tools.SSH_CHECK_LOGIN_TOOL_NAME, agent_tools.SSH_RUN_TOOL_NAME):
-        username = args.get("username", "")
-        command = args.get("command")
-        return f"{username}: {command}" if command is not None else username
-
-    if tool_name == agent_tools.TELNET_PROBE_TOOL_NAME:
-        return f"port {args.get('port', '')}"
-
-    return ", ".join(f"{k}={v}" for k, v in args.items())
-
-
-def _message_to_log_specs(
-    message: BaseMessage,
-) -> List[Tuple[AgentLogType, str, Optional[str], Optional[str]]]:
-    """Turns one agent message into zero or more (type, content, tool_name,
-    raw_output) specs."""
-    specs: List[Tuple[AgentLogType, str, Optional[str], Optional[str]]] = []
-
-    if isinstance(message, AIMessage):
-        # Prefer additional_kwargs['reasoning_content'] - Agent.changeModel
-        # sets reasoning=True, and that's where a native "thinking" model's
-        # reasoning ends up rather than in .content (see agent.py's
-        # _call_model), so it doesn't get replayed into the model's own
-        # future context. Fall back to .content for a model that puts
-        # substantive text there directly instead (no native reasoning
-        # support, template allows text alongside/instead of a tool call).
-        reasoning_content = message.additional_kwargs.get("reasoning_content")
-        content = (
-            _stringify_content(reasoning_content)
-            if reasoning_content
-            else _stringify_content(message.content)
-        )
-
-        if content.strip():
-            specs.append(("thinking", content, None, None))
-
-        for tc in message.tool_calls:
-            specs.append(
-                ("tool", _render_tool_call_content(tc["name"], tc["args"]), tc["name"], None)
-            )
-
-    elif isinstance(message, ToolMessage):
-        content = _stringify_content(message.content)
-        artifact = getattr(message, "artifact", None)
-        # AgentLog.raw_output is Optional[str] - some content_and_artifact
-        # tools put non-string data there instead (request_port_access's
-        # artifact is a List[int] of newly-authorized ports, consumed
-        # directly from message.artifact by agent.py's port-application
-        # logic, never meant to be persisted/displayed as text). Passing
-        # that straight through used to reach AgentLogResponse.model_validate
-        # in _persist_and_broadcast and raise a pydantic ValidationError
-        # there, crashing log persistence for the very turn a port grant
-        # was just approved - confirmed by reproducing it directly.
-        artifact_str = artifact if isinstance(artifact, str) else None
-
-        # artifact is populated for tools using response_format=
-        # "content_and_artifact" (run/new_session/switch_session, see
-        # agent_tools.py) - None for every other tool, and never sent
-        # back to the model either way (LangChain only resends
-        # .content/.tool_calls, not .artifact). It's persisted as
-        # AgentLog.raw_output but never rendered by the frontend, so in
-        # every other case `content` is both what the agent sees next
-        # turn AND what the user sees in the log.
-        #
-        # searchsploit_view is the one deliberate exception: its `content`
-        # must stay the exploit's full raw source (the agent needs it
-        # verbatim - see its own docstring), which is too much to dump
-        # into the user-facing chat log. Its artifact holds a short,
-        # parsed summary instead (see _summarize_exploit_source in
-        # agent_tools.py), so here - and only here - that's what gets
-        # displayed; the full source is kept as raw_output instead of
-        # being discarded.
-        if message.name == agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME and artifact_str:
-            display_content, raw_output = artifact_str, content
-        else:
-            display_content, raw_output = content, artifact_str
-
-        if display_content.strip():
-            specs.append(("action", display_content, None, raw_output))
-
-    return specs
-
-
-async def _persist_and_broadcast(
-    project_id: str,
-    target_id: str,
-    log_type: AgentLogType,
-    content: str,
-    tool_name: Optional[str] = None,
-    raw_output: Optional[str] = None,
-    agent_run_id: Optional[str] = None,
-    role: Optional[str] = None,
-) -> AgentLog:
-    log = AgentLog(
-        type=log_type,
-        content=content,
-        tool_name=tool_name,
-        raw_output=raw_output,
-        project_id=project_id,
-        target_id=target_id,
-        agent_run_id=agent_run_id,
-        role=role,
-    )
-
-    loop = asyncio.get_running_loop()
-    saved = await loop.run_in_executor(None, db_manager.add_agent_log, log)
-
-    await ws_registry.send_message(
-        AgentMessage(
-            type=WsTypes.AgentMessage,
-            log=AgentLogResponse.model_validate(saved),
-        )
-    )
-
-    return saved
 
 
 class AgentService:
@@ -697,8 +375,11 @@ class AgentService:
             print(f"Could not prepare agent run for target {target_id}: {e}")
             _running_targets.pop(target_id, None)
             kali_registry.clear_build_status(project_id)
-            await _persist_and_broadcast(
-                project_id, target_id, "action", f"Could not start agent: {e}"
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Could not start agent: {e}",
             )
             return
 
@@ -709,13 +390,14 @@ class AgentService:
         """Signals the stop_event of every agent run currently live under
         this target's pipeline - one, in single_agent mode, but genuinely
         several once a multi_agent pipeline can have concurrent sub-runs in
-        flight (Phase 4): pausing the whole pipeline must stop all of them,
-        not just whichever one a caller happened to know about. See
-        _live_runs_for_target's own comment for why this index exists."""
+        flight: pausing the whole pipeline must stop all of them, not just
+        whichever one a caller happened to know about. See
+        run_registry.live_runs_for_target's own comment for why this index
+        exists."""
         AgentService._get_owned_target(project_id, target_id)
 
-        for agent_run_id in list(_live_runs_for_target.get(target_id, ())):
-            stop_event = _stop_events.get(agent_run_id)
+        for agent_run_id in list(run_registry.live_runs_for_target.get(target_id, ())):
+            stop_event = run_registry.stop_events.get(agent_run_id)
             if stop_event is not None:
                 stop_event.set()
 
@@ -728,7 +410,7 @@ class AgentService:
         - RUNNING: signal the active loop's stop_event, same as pause_agent,
           but flagged so the post-loop status decision resolves to FINISHED
           instead of PAUSED. Only effective while the agent is actually in
-          its main loop - a run parked in _pending_interrupts (awaiting
+          its main loop - a run parked in pending_interrupts (awaiting
           interrupt approval, status INTERRUPTED) isn't waiting on
           stop_event at all, so this has no effect until
           _on_interrupt_response resumes it - callers should gate this the
@@ -740,21 +422,21 @@ class AgentService:
         Any other state (no run, already FINISHED/FAILED) is a no-op.
 
         Fans out across every agent run currently live under this target's
-        pipeline (see pause_agent's own comment on _live_runs_for_target) -
-        one, in single_agent mode, but genuinely several once a
-        multi_agent pipeline can have concurrent sub-runs in flight
-        (Phase 4)."""
+        pipeline (see pause_agent's own comment on
+        run_registry.live_runs_for_target) - one, in single_agent mode,
+        but genuinely several once a multi_agent pipeline can have
+        concurrent sub-runs in flight."""
         AgentService._get_owned_target(project_id, target_id)
 
-        live_run_ids = list(_live_runs_for_target.get(target_id, ()))
+        live_run_ids = list(run_registry.live_runs_for_target.get(target_id, ()))
         any_signaled = False
         for agent_run_id in live_run_ids:
-            stop_event = _stop_events.get(agent_run_id)
+            stop_event = run_registry.stop_events.get(agent_run_id)
             if stop_event is not None:
                 # Must be recorded before stop_event.set() - _run_agent's
                 # post-loop status decision reads this once the loop wakes
                 # up and exhausts, immediately after the event fires.
-                _finish_intents[agent_run_id] = True
+                run_registry.finish_intents[agent_run_id] = True
                 stop_event.set()
                 any_signaled = True
 
@@ -763,7 +445,12 @@ class AgentService:
 
         existing_run = db_manager.get_agent_run(target_id)
         if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
-            await _persist_run_state(project_id, target_id, AgentRunState.FINISHED, 0)
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.FINISHED,
+                remaining_seconds=0,
+            )
 
     @staticmethod
     def get_run(project_id: str, target_id: str) -> Optional[AgentRun]:
@@ -780,7 +467,7 @@ class AgentService:
         stuck with a run stuck as INTERRUPTED and nothing to approve/deny."""
         AgentService._get_owned_target(project_id, target_id)
 
-        return _pending_interrupt_tool_calls.get(target_id)
+        return run_registry.pending_interrupt_tool_calls.get(target_id)
 
     @staticmethod
     def is_project_running(project_id: str) -> bool:
@@ -804,17 +491,15 @@ class AgentService:
         project_id = str(target.project_id)
         target_id = str(target.id)
         # == target_id for single_agent mode (see Agent.__init__'s own
-        # comment) - every dict below keyed by agent_run_id therefore keeps
-        # behaving exactly as it did when it was keyed by target_id, for
-        # every call site that still only knows about target_id (pause_agent,
+        # comment) - every run_registry dict therefore keeps behaving
+        # exactly as it did when it was keyed by target_id, for every call
+        # site that still only knows about target_id (pause_agent,
         # get_pending_interrupt, the websocket interrupt-response hook, ...).
-        # A multi_agent pipeline's sub-runs (Phase 4) will have genuinely
-        # distinct ids here instead.
+        # A multi_agent pipeline's sub-runs have genuinely distinct,
+        # database-backed ids here instead (see run_registry.start_sub_run).
         agent_run_id = agent.agent_run_id
         # Hardcoded for now - every caller of _run_agent today is the
-        # single_agent flow. Phase 4's roles log their own role instead,
-        # most likely by generalizing this same function rather than
-        # duplicating it.
+        # single_agent flow.
         role = "single_agent"
 
         stop_event = asyncio.Event()
@@ -824,7 +509,7 @@ class AgentService:
         try:
             # Registration/initial persistence moved inside this try (was
             # previously before it) - a failure in _set_running/
-            # _persist_run_state here used to propagate uncaught out of
+            # persist_run_state here used to propagate uncaught out of
             # _run_agent with no wrapping try/except, skipping the finally
             # block below entirely and leaving _running_targets[target_id]
             # (already claimed in start_agent, before this task was even
@@ -832,32 +517,37 @@ class AgentService:
             # call for that target would then raise
             # AgentAlreadyRunningException with no recovery short of a
             # backend restart.
-            _stop_events[agent_run_id] = stop_event
-            _run_states[agent_run_id] = run_state
-            _live_runs_for_target.setdefault(target_id, set()).add(agent_run_id)
+            run_registry.stop_events[agent_run_id] = stop_event
+            run_registry.run_states[agent_run_id] = run_state
+            run_registry.live_runs_for_target.setdefault(target_id, set()).add(agent_run_id)
 
             # Blocks here, potentially for a while, if this project (or the
             # whole backend) is already at its concurrent-agent ceiling -
-            # see _acquire_agent_slot. Deliberately AFTER the registration
-            # above (so a pause/finish request issued while still queued
-            # for a slot can still flip _finish_intents/set stop_event - the
-            # loop below simply never got to check them yet) but BEFORE
-            # _set_running/_persist_run_state (a run that's still waiting
-            # for a slot hasn't actually started yet, so it shouldn't claim
-            # to be RUNNING until it is).
-            await _acquire_agent_slot(project_id, project_settings)
+            # see run_registry.acquire_agent_slot. Deliberately AFTER the
+            # registration above (so a pause/finish request issued while
+            # still queued for a slot can still flip finish_intents/set
+            # stop_event - the loop below simply never got to check them
+            # yet) but BEFORE _set_running/persist_run_state (a run that's
+            # still waiting for a slot hasn't actually started yet, so it
+            # shouldn't claim to be RUNNING until it is).
+            await run_registry.acquire_agent_slot(
+                project_id, project_settings.max_concurrent_agents
+            )
             slot_acquired = True
 
             await _set_running(project_id, target_id, True)
-            await _persist_run_state(
-                project_id, target_id, AgentRunState.RUNNING, duration_seconds
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.RUNNING,
+                remaining_seconds=duration_seconds,
             )
 
-            await _persist_and_broadcast(
-                project_id,
-                target_id,
-                "action",
-                f"Starting analysis on target: {target.name}",
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Starting analysis on target: {target.name}",
                 agent_run_id=agent_run_id,
                 role=role,
             )
@@ -887,18 +577,18 @@ class AgentService:
 
                 if isinstance(event, dict):
                     # AgentInterruptAction - pause and wait for approval
-                    _pending_interrupts[agent_run_id] = event["accept"]
+                    run_registry.pending_interrupts[agent_run_id] = event["accept"]
                     tool_calls = [
                         {"name": tc["name"], "args": tc["args"]}
                         for tc in event["tool_calls"]
                     ]
-                    _pending_interrupt_tool_calls[agent_run_id] = tool_calls
+                    run_registry.pending_interrupt_tool_calls[agent_run_id] = tool_calls
 
-                    await _persist_run_state(
-                        project_id,
-                        target_id,
-                        AgentRunState.INTERRUPTED,
-                        run_state.get("time_left", 0),
+                    await run_registry.persist_run_state(
+                        project_id=project_id,
+                        target_id=target_id,
+                        status=AgentRunState.INTERRUPTED,
+                        remaining_seconds=run_state.get("time_left", 0),
                     )
 
                     await ws_registry.send_message(
@@ -911,7 +601,9 @@ class AgentService:
                     )
                     continue
 
-                for log_type, content, tool_name, raw_output in _message_to_log_specs(event):
+                for log_type, content, tool_name, raw_output in run_registry.message_to_log_specs(
+                    event
+                ):
                     # Log content is shown as-is now, no summarization pass -
                     # in testing, running the agent's own deliberate
                     # reasoning (from the two-phase _call_model split) back
@@ -920,23 +612,23 @@ class AgentService:
                     # condensed by the parsing model inside the tool itself
                     # (see agent_tools.py) before it ever reaches here.
 
-                    await _persist_and_broadcast(
-                        project_id,
-                        target_id,
-                        log_type,
-                        content,
-                        tool_name,
-                        raw_output,
+                    await run_registry.persist_and_broadcast(
+                        project_id=project_id,
+                        target_id=target_id,
+                        log_type=log_type,
+                        content=content,
+                        tool_name=tool_name,
+                        raw_output=raw_output,
                         agent_run_id=agent_run_id,
                         role=role,
                     )
 
             if agent.finish_summary:
-                await _persist_and_broadcast(
-                    project_id,
-                    target_id,
-                    "action",
-                    f"Agent finished the task: {agent.finish_summary}",
+                await run_registry.persist_and_broadcast(
+                    project_id=project_id,
+                    target_id=target_id,
+                    log_type="action",
+                    content=f"Agent finished the task: {agent.finish_summary}",
                     agent_run_id=agent_run_id,
                     role=role,
                 )
@@ -947,7 +639,7 @@ class AgentService:
             # ran out of time. finish_agent() takes priority over the plain
             # stop_event check below - a held-to-finish stop must never be
             # reclassified as PAUSED (which would make it resumable).
-            finished_by_request = _finish_intents.pop(agent_run_id, False)
+            finished_by_request = run_registry.finish_intents.pop(agent_run_id, False)
             final_status = (
                 AgentRunState.FINISHED
                 if finished_by_request
@@ -959,16 +651,19 @@ class AgentService:
             # deliberate "stop counting" action, not a natural exhaustion
             # that just happens to land near 0.
             final_remaining = 0 if finished_by_request else run_state.get("time_left", 0)
-            await _persist_run_state(
-                project_id, target_id, final_status, final_remaining
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=final_status,
+                remaining_seconds=final_remaining,
             )
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
-            await _persist_and_broadcast(
-                project_id,
-                target_id,
-                "action",
-                f"Agent run failed: {e}",
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Agent run failed: {e}",
                 agent_run_id=agent_run_id,
                 role=role,
             )
@@ -978,11 +673,11 @@ class AgentService:
             # hardcoded 0) - run_state defaults to {} if the failure
             # happened before the agent loop itself ever started, so
             # .get(...) still falls back to 0 sensibly in that case.
-            await _persist_run_state(
-                project_id,
-                target_id,
-                AgentRunState.FAILED,
-                run_state.get("time_left", 0),
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.FAILED,
+                remaining_seconds=run_state.get("time_left", 0),
             )
         finally:
             manager = await kali_registry.get_manager_if_exists(project_id)
@@ -990,24 +685,12 @@ class AgentService:
                 # Scoped to just THIS run's own sessions, not every session
                 # on the target - close_sessions_for_target would tear down
                 # a sibling agent's sessions too, once more than one can be
-                # live on the same target at once (Phase 4). Harmless no-op
+                # live on the same target at once. Harmless no-op
                 # difference for single_agent mode today, where this run is
                 # always the only one.
                 await manager.close_sessions_for_run(target_id, agent_run_id)
 
-            _pending_interrupts.pop(agent_run_id, None)
-            _pending_interrupt_tool_calls.pop(agent_run_id, None)
-            _stop_events.pop(agent_run_id, None)
-            _run_states.pop(agent_run_id, None)
-            # Purely defensive - the try block above already pops this on
-            # the normal-completion path. A finish request that overlaps an
-            # exception/FAILED run is simply dropped, not retried.
-            _finish_intents.pop(agent_run_id, None)
-            live_runs = _live_runs_for_target.get(target_id)
-            if live_runs is not None:
-                live_runs.discard(agent_run_id)
-                if not live_runs:
-                    _live_runs_for_target.pop(target_id, None)
+            run_registry.cleanup_sub_run(target_id, agent_run_id)
             if slot_acquired:
-                await _release_agent_slot(project_id)
+                await run_registry.release_agent_slot(project_id)
             await _set_running(project_id, target_id, False)

@@ -444,6 +444,23 @@ class DatabaseManager:
             session.refresh(merged)
             return merged
 
+    def save_agent_run(self, agent_run: AgentRun) -> AgentRun:
+        """Plain merge-by-id (AgentRun's real PK) - for a multi_agent
+        pipeline's own sub-runs (scouting/pentesting/reporting/
+        orchestrator), which always already know their own row's real id
+        (they mint it via add_to_database once, when the run starts - see
+        the roles/ package's own run-lifecycle helper) and pass it
+        explicitly on every subsequent status update. Deliberately NOT
+        upsert_agent_run's (target_id, role) lookup - several concurrent
+        pentesting sub-runs legitimately share the same (target_id, role)
+        at once, and that lookup would silently collapse them onto one
+        row."""
+        with Session(self.engine) as session:
+            merged = session.merge(agent_run)
+            session.commit()
+            session.refresh(merged)
+            return merged
+
     def get_agent_run(
         self, target_id: str | uuid.UUID, role: str = "single_agent"
     ) -> AgentRun | None:
