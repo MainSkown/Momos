@@ -11,7 +11,7 @@ import asyncio
 from typing import Callable, List
 from langchain_core.tools import tool
 from src.core import db_manager
-from src.core.agent import agent_tools
+from src.core.agent import agent_tools, run_registry
 from src.schemas.attack_vector_scheme import AttackVector
 
 PROPOSE_ATTACK_VECTOR_TOOL_NAME = "propose_attack_vector"
@@ -97,7 +97,9 @@ def create_propose_attack_vector_tool(
                 target_id=target_id,
                 discovered_by_run_id=agent_run_id,
             )
-            saved.append(await loop.run_in_executor(None, db_manager.add_attack_vector, vector))
+            new_vector = await loop.run_in_executor(None, db_manager.add_attack_vector, vector)
+            saved.append(new_vector)
+            await run_registry.broadcast_attack_vector(new_vector)
 
         lines = "\n".join(f"- {v.description}" for v in saved)
         return f"Recorded {len(saved)} attack vector(s):\n{lines}"

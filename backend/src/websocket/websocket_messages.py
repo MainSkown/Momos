@@ -6,6 +6,7 @@ from src.schemas import (
     AgentLogResponse,
     AgentRunResponse,
     KaliCreationStage,
+    ResponseAttackVector,
 )
 
 # Separate registries for cleaner typing definitions
@@ -31,6 +32,7 @@ class WsTypes(str, Enum):
     AgentRunStatus = "AgentRunStatus"
     AgentRunTimer = "AgentRunTimer"
     AgentContextUsage = "AgentContextUsage"
+    AttackVectorUpdate = "AttackVectorUpdate"
 
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -93,6 +95,15 @@ class AgentInterruptResponseMessage(InboundMessage):
     target_id: str
     type: Literal[WsTypes.AgentInterruptResponse]
     approved: bool
+    # Additive, optional - Single Agent mode's existing clients never send
+    # this (its one interrupt is already fully identified by target_id
+    # alone) and keep working unchanged. A Multi Agent client that knows
+    # which sub-run it's answering (see AgentInterruptRequest.agent_run_id
+    # below) should set it - agent_service.py's _on_interrupt_response
+    # resolves by it directly when present, skipping the best-effort
+    # "first pending interrupt under this target" fallback it still falls
+    # back to otherwise.
+    agent_run_id: Optional[str] = None
 
 # --- Outbound Subclasses (Server Sends) ---
 
@@ -145,6 +156,16 @@ class AgentInterruptRequest(OutboundMessage):
     target_id: str
     type: Literal[WsTypes.AgentInterruptRequest]
     tool_calls: list[dict]
+    # Additive, optional - set to the real sub-run agent_run_id that
+    # raised this interrupt for Multi Agent mode (see
+    # orchestrator_tools.py's _drain_sub_agent) or to target_id itself for
+    # Single Agent mode (where agent_run_id always equals target_id - see
+    # Agent.__init__'s own comment). A client that echoes this straight
+    # back on AgentInterruptResponseMessage.agent_run_id resolves
+    # unambiguously; one that doesn't still works via
+    # AgentService.get_pending_interrupt/_on_interrupt_response's own
+    # best-effort "first pending interrupt under this target" fallback.
+    agent_run_id: Optional[str] = None
 
 class AgentRunStatus(OutboundMessage):
     project_id: str
@@ -162,6 +183,17 @@ class AgentContextUsage(OutboundMessage):
     type: Literal[WsTypes.AgentContextUsage]
     used_tokens: int
     context_window: int
+
+class AttackVectorUpdate(OutboundMessage):
+    """Pushed on every AttackVector create/update (see
+    run_registry.broadcast_attack_vector) - the board's live Kanban view
+    (Phase 7) applies this directly instead of polling the
+    .../attack_vectors endpoint, which is only needed for the initial
+    load."""
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.AttackVectorUpdate]
+    vector: ResponseAttackVector
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

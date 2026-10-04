@@ -13,6 +13,7 @@ from src.schemas.project_scheme import (
     orchestrator_starting_prompt as default_orchestrator_prompt,
 )
 from src.schemas.agent_run_scheme import AgentRun, AgentRunState
+from src.schemas.attack_vector_scheme import AttackVector
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
@@ -60,16 +61,21 @@ async def _set_running(project_id: str, target_id: str, running: bool):
 
 
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
-    # run_registry's dicts are keyed by agent_run_id - the direct lookup
-    # below works unchanged for single_agent mode because its agent_run_id
-    # always equals target_id (see Agent.__init__'s own comment).
-    # AgentInterruptResponseMessage has no agent_run_id field yet to say
-    # directly which multi_agent sub-run it's answering - that's Phase 6's
-    # job, alongside the rest of the "queue of pending approvals" work.
-    # Until then, the fallback below resolves it the same way
-    # AgentService.get_pending_interrupt does: the first pending interrupt
-    # found among every run currently live under this target's pipeline.
-    agent_run_id = message.target_id
+    # run_registry's dicts are keyed by agent_run_id. A client that knows
+    # which sub-run it's answering (see AgentInterruptRequest.agent_run_id -
+    # every multi_agent sub-run's own interrupt push now carries its real
+    # one, see orchestrator_tools.py's _drain_sub_agent) should set this
+    # directly, resolved below with no ambiguity. Single Agent mode's
+    # existing clients never send it (its one interrupt is already fully
+    # identified by target_id alone, since its agent_run_id always equals
+    # target_id - see Agent.__init__'s own comment) and fall through to
+    # the direct target_id lookup unchanged. Only a client that sends
+    # neither a matching agent_run_id nor has a direct target_id match
+    # (e.g. an older multi_agent client, from before this field existed)
+    # falls back further, to the first pending interrupt found among every
+    # run currently live under this target's pipeline - the same
+    # best-effort AgentService.get_pending_interrupt itself uses.
+    agent_run_id = message.agent_run_id or message.target_id
     accept = run_registry.pending_interrupts.pop(agent_run_id, None)
     run_registry.pending_interrupt_tool_calls.pop(agent_run_id, None)
 
@@ -613,8 +619,9 @@ class AgentService:
         (the orchestrator itself never raises one, but any
         scouting/pentesting sub-run it spawned might). Only ever surfaces
         ONE at a time even if several sub-runs happen to be interrupted
-        together - a real "list every pending interrupt" endpoint is
-        Phase 6's job."""
+        together - kept only for Single Agent mode's existing clients
+        (which only ever have one to find anyway); see get_pending_interrupts
+        for the plural version a Multi Agent client should actually use."""
         AgentService._get_owned_target(project_id, target_id)
 
         direct = run_registry.pending_interrupt_tool_calls.get(target_id)
@@ -626,6 +633,47 @@ class AgentService:
             if pending is not None:
                 return pending
         return None
+
+    @staticmethod
+    def get_pending_interrupts(project_id: str, target_id: str) -> List[dict]:
+        """Every pending interrupt currently live under this target's
+        pipeline, each tagged with the real agent_run_id that raised it -
+        the plural counterpart to get_pending_interrupt's single best-
+        effort pick, for a Multi Agent client that can show/let a human
+        approve more than one sub-run's interrupt at a time (e.g. two
+        concurrent pentesting sub-runs each waiting on their own
+        request_port_access approval)."""
+        AgentService._get_owned_target(project_id, target_id)
+
+        entries: List[dict] = []
+        seen = set()
+
+        direct = run_registry.pending_interrupt_tool_calls.get(target_id)
+        if direct is not None:
+            entries.append({"agent_run_id": target_id, "tool_calls": direct})
+            seen.add(target_id)
+
+        for agent_run_id in run_registry.live_runs_for_target.get(target_id, ()):
+            if agent_run_id in seen:
+                continue
+            pending = run_registry.pending_interrupt_tool_calls.get(agent_run_id)
+            if pending is not None:
+                entries.append({"agent_run_id": agent_run_id, "tool_calls": pending})
+
+        return entries
+
+    @staticmethod
+    def get_attack_vectors(project_id: str, target_id: str) -> List[AttackVector]:
+        AgentService._get_owned_target(project_id, target_id)
+        return db_manager.get_attack_vectors_for_target(target_id)
+
+    @staticmethod
+    def get_run_tree(project_id: str, target_id: str) -> List[AgentRun]:
+        """Every AgentRun under this target's pipeline (every role, not
+        just the root) - for a Multi Agent client to group logs by run,
+        same as Single Agent mode's one-row equivalent from get_run."""
+        AgentService._get_owned_target(project_id, target_id)
+        return db_manager.get_agent_runs_for_target(target_id)
 
     @staticmethod
     def is_project_running(project_id: str) -> bool:
@@ -755,6 +803,7 @@ class AgentService:
                             project_id=project_id,
                             target_id=target_id,
                             tool_calls=tool_calls,
+                            agent_run_id=agent_run_id,
                         )
                     )
                     continue

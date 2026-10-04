@@ -30,7 +30,8 @@ from src.core import db_manager, settings
 from src.core.agent import agent_tools
 from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogType
 from src.schemas.agent_run_scheme import AgentRun, AgentRunResponse, AgentRunState
-from src.websocket import ws_registry, WsTypes, AgentMessage, AgentRunTimer
+from src.schemas.attack_vector_scheme import AttackVector, ResponseAttackVector
+from src.websocket import ws_registry, WsTypes, AgentMessage, AgentRunTimer, AttackVectorUpdate
 
 # agent_run_id -> pending interrupt's accept callback. See this module's
 # own docstring for why agent_run_id, not target_id.
@@ -354,3 +355,22 @@ async def persist_and_broadcast(
     )
 
     return saved
+
+
+async def broadcast_attack_vector(vector: AttackVector) -> None:
+    """Pushes one AttackVector's current row over the websocket - called
+    by every place in roles/tools/ that creates or updates one
+    (scouting_tools.create_propose_attack_vector_tool,
+    pentesting_tools.create_report_outcome_tool,
+    orchestrator_tools.py's dispatch_pentest_batch/request_report) right
+    after its own db_manager.add_attack_vector/update_attack_vector call,
+    so the board's live Kanban view (Phase 7) never has to poll for a
+    status change."""
+    await ws_registry.send_message(
+        AttackVectorUpdate(
+            type=WsTypes.AttackVectorUpdate,
+            project_id=str(vector.project_id),
+            target_id=str(vector.target_id),
+            vector=ResponseAttackVector.model_validate(vector),
+        )
+    )

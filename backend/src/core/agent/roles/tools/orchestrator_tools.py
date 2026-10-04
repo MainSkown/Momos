@@ -28,6 +28,7 @@ from src.schemas.project_scheme import (
     reporting_starting_prompt as default_reporting_prompt,
     scouting_starting_prompt as default_scouting_prompt,
 )
+from src.websocket import ws_registry, WsTypes, AgentInterruptRequest
 
 RUN_SCOUTING_TOOL_NAME = "run_scouting"
 DISPATCH_PENTEST_BATCH_TOOL_NAME = "dispatch_pentest_batch"
@@ -53,20 +54,56 @@ ALWAYS_INTERRUPT_TOOL_NAMES: set = set()
 
 
 async def _drain_sub_agent(
-    agent_events, project_id: str, target_id: str, agent_run_id: str, role: str
+    agent_events,
+    project_id: str,
+    target_id: str,
+    agent_run_id: str,
+    role: str,
+    parent_run_id: Optional[str] = None,
+    attack_vector_id: Optional[str] = None,
 ) -> None:
     """Shared consumption loop for every sub-agent this role spawns -
     persists/broadcasts every real message exactly like agent_service.py's
-    own _run_agent does for the Single Agent flow, and registers a live
-    interrupt into run_registry's shared registry (resolved by whatever
-    already answers the Single Agent flow's own pending-interrupt
-    websocket messages, keyed by this sub-run's agent_run_id) instead of
-    auto-approving or silently dropping it."""
+    own _run_agent does for the Single Agent flow, and - on an interrupt -
+    registers it into run_registry's shared registry AND pushes a real
+    AgentInterruptRequest over the websocket (tagged with this sub-run's
+    own agent_run_id, resolved by whatever already answers the Single
+    Agent flow's own pending-interrupt messages) instead of auto-approving
+    or silently dropping it. `parent_run_id`/`attack_vector_id` are passed
+    through to every persist_run_state call this makes for the same reason
+    its callers must also pass them to their OWN persist_run_state calls -
+    see this module's run_one/request_report, whose own comment on
+    save_agent_run explains why omitting them would silently wipe them
+    back to None on the very next status update for this row."""
     async for event in agent_events:
         if isinstance(event, dict):
             if event.get("kind") == "interrupt":
                 run_registry.pending_interrupts[agent_run_id] = event["accept"]
-                run_registry.pending_interrupt_tool_calls[agent_run_id] = event["tool_calls"]
+                tool_calls = [
+                    {"name": tc["name"], "args": tc["args"]} for tc in event["tool_calls"]
+                ]
+                run_registry.pending_interrupt_tool_calls[agent_run_id] = tool_calls
+
+                await run_registry.persist_run_state(
+                    project_id=project_id,
+                    target_id=target_id,
+                    status=AgentRunState.INTERRUPTED,
+                    remaining_seconds=0,
+                    agent_run_id=agent_run_id,
+                    role=role,
+                    parent_run_id=parent_run_id,
+                    attack_vector_id=attack_vector_id,
+                )
+
+                await ws_registry.send_message(
+                    AgentInterruptRequest(
+                        type=WsTypes.AgentInterruptRequest,
+                        project_id=project_id,
+                        target_id=target_id,
+                        tool_calls=tool_calls,
+                        agent_run_id=agent_run_id,
+                    )
+                )
             continue
         for log_type, content, tool_name, raw_output in run_registry.message_to_log_specs(event):
             await run_registry.persist_and_broadcast(
@@ -143,6 +180,7 @@ def create_run_scouting_tool(
                 target_id,
                 agent_run_id,
                 "scouting",
+                parent_run_id=orchestrator_run_id,
             )
         finally:
             await run_registry.persist_run_state(
@@ -152,6 +190,7 @@ def create_run_scouting_tool(
                 remaining_seconds=0,
                 agent_run_id=agent_run_id,
                 role="scouting",
+                parent_run_id=orchestrator_run_id,
             )
             run_registry.cleanup_sub_run(target_id, agent_run_id)
 
@@ -230,7 +269,8 @@ def create_dispatch_pentest_batch_tool(
                 agent_run_id = str(run.id)
                 vector.status = AttackVectorStatus.TESTING
                 vector.assigned_run_id = run.id
-                await loop.run_in_executor(None, db_manager.update_attack_vector, vector)
+                vector = await loop.run_in_executor(None, db_manager.update_attack_vector, vector)
+                await run_registry.broadcast_attack_vector(vector)
 
                 stop_event = asyncio.Event()
                 run_registry.stop_events[agent_run_id] = stop_event
@@ -267,6 +307,8 @@ def create_dispatch_pentest_batch_tool(
                     target_id,
                     agent_run_id,
                     "pentesting",
+                    parent_run_id=orchestrator_run_id,
+                    attack_vector_id=vector_id,
                 )
             except Exception as e:
                 # Caught here (not left to propagate out of run_one) so one
@@ -286,6 +328,7 @@ def create_dispatch_pentest_batch_tool(
                         remaining_seconds=0,
                         agent_run_id=agent_run_id,
                         role="pentesting",
+                        parent_run_id=orchestrator_run_id,
                         attack_vector_id=vector_id,
                     )
                     run_registry.cleanup_sub_run(target_id, agent_run_id)
@@ -377,6 +420,8 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
                 target_id,
                 agent_run_id,
                 "reporting",
+                parent_run_id=orchestrator_run_id,
+                attack_vector_id=vector_id,
             )
         finally:
             await run_registry.persist_run_state(
@@ -386,6 +431,7 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
                 remaining_seconds=0,
                 agent_run_id=agent_run_id,
                 role="reporting",
+                parent_run_id=orchestrator_run_id,
                 attack_vector_id=vector_id,
             )
             run_registry.cleanup_sub_run(target_id, agent_run_id)
@@ -394,7 +440,8 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
             return f"{vector_id}: reporting did not produce a vulnerability within its turn limit."
 
         vector.linked_vulnerability_id = agent.created_vulnerability.id
-        await loop.run_in_executor(None, db_manager.update_attack_vector, vector)
+        vector = await loop.run_in_executor(None, db_manager.update_attack_vector, vector)
+        await run_registry.broadcast_attack_vector(vector)
 
         return (
             f"{vector_id}: recorded vulnerability '{agent.created_vulnerability.name}' "

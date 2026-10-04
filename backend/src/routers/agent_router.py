@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from src.core import db_manager
-from src.schemas import AgentLogResponse, AgentRunResponse
+from src.schemas import AgentLogResponse, AgentRunResponse, ResponseAttackVector
 from src.services import AgentService
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
@@ -21,6 +21,10 @@ class AgentRunningResponse(BaseModel):
     target_id: Optional[str] = None
 
 class AgentPendingInterruptResponse(BaseModel):
+    tool_calls: list[dict]
+
+class AgentPendingInterruptEntry(BaseModel):
+    agent_run_id: str
     tool_calls: list[dict]
 
 @router.post(
@@ -162,3 +166,75 @@ def get_target_pending_interrupt(project_id: str, target_id: str):
         return None
 
     return AgentPendingInterruptResponse(tool_calls=tool_calls)
+
+@router.get(
+    "/project/{project_id}/target/{target_id}/agent/pending_interrupts",
+    response_model=list[AgentPendingInterruptEntry],
+    operation_id="GetTargetPendingInterrupts",
+)
+def get_target_pending_interrupts(project_id: str, target_id: str):
+    """Plural counterpart to GetTargetPendingInterrupt - every pending
+    interrupt currently live under this target's pipeline, each tagged
+    with the real agent_run_id that raised it. Single Agent mode has at
+    most one; Multi Agent mode can have several (e.g. two concurrent
+    pentesting sub-runs each waiting on their own approval)."""
+    try:
+        return AgentService.get_pending_interrupts(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not fetch pending interrupts: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not fetch pending interrupts",
+        )
+
+@router.get(
+    "/project/{project_id}/target/{target_id}/agent/run_tree",
+    response_model=list[AgentRunResponse],
+    operation_id="GetTargetAgentRunTree",
+)
+def get_target_agent_run_tree(project_id: str, target_id: str):
+    """Every AgentRun under this target's pipeline (every role, not just
+    the root) - lets a Multi Agent client group logs by run the same way
+    Single Agent mode's single GetTargetAgentRun result already implies
+    for its own one row."""
+    try:
+        return AgentService.get_run_tree(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not fetch agent run tree: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not fetch agent run tree",
+        )
+
+@router.get(
+    "/project/{project_id}/target/{target_id}/attack_vectors",
+    response_model=list[ResponseAttackVector],
+    operation_id="GetTargetAttackVectors",
+)
+def get_target_attack_vectors(project_id: str, target_id: str):
+    """The attack-vector board's initial load for this target - live
+    updates after that arrive via the AttackVectorUpdate websocket
+    message (see run_registry.broadcast_attack_vector), not polling."""
+    try:
+        return AgentService.get_attack_vectors(project_id, target_id)
+    except (ProjectDoesNotExistException, TargetDoesNotExistException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Could not fetch attack vectors: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not fetch attack vectors",
+        )
