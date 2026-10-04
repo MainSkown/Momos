@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     # KV-cache allocation a very large context implies.
     DEFAULT_MAX_CONTEXT_WINDOW: int = 262144
 
+    # Hard ceiling on how many agent LLM instances may run at once, across
+    # the WHOLE backend (every project) - the real hardware constraint
+    # (one GPU, limited VRAM) a project's own ProjectSettings.
+    # max_concurrent_agents request can never exceed. See agent_service.py's
+    # _acquire_agent_slot: effective slots for a project = min(that
+    # project's own setting, this value). Same shape/reasoning as
+    # DEFAULT_MAX_CONTEXT_WINDOW above - a global default a per-project
+    # setting can't override past, lowered via .env on hardware that can
+    # only realistically run one model at a time (the actual default this
+    # project ships with, since most local setups are exactly that).
+    GLOBAL_MAX_CONCURRENT_AGENTS: int = 1
+
     # Tell Pydantic to look for the .env file in the root directory
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
