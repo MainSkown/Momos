@@ -29,6 +29,14 @@ export type AgentContextUsage = {
      * Context Window
      */
     context_window: number;
+    /**
+     * Agent Run Id
+     */
+    agent_run_id?: string | null;
+    /**
+     * Role
+     */
+    role?: string | null;
 };
 
 /**

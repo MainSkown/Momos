@@ -28,7 +28,7 @@ from src.schemas.project_scheme import (
     reporting_starting_prompt as default_reporting_prompt,
     scouting_starting_prompt as default_scouting_prompt,
 )
-from src.websocket import ws_registry, WsTypes, AgentInterruptRequest
+from src.websocket import ws_registry, WsTypes, AgentInterruptRequest, AgentContextUsage
 
 RUN_SCOUTING_TOOL_NAME = "run_scouting"
 DISPATCH_PENTEST_BATCH_TOOL_NAME = "dispatch_pentest_batch"
@@ -77,6 +77,19 @@ async def _drain_sub_agent(
     back to None on the very next status update for this row."""
     async for event in agent_events:
         if isinstance(event, dict):
+            if event.get("kind") == "context_usage":
+                await ws_registry.send_message(
+                    AgentContextUsage(
+                        type=WsTypes.AgentContextUsage,
+                        project_id=project_id,
+                        target_id=target_id,
+                        used_tokens=event["used_tokens"],
+                        context_window=event["context_window"],
+                        agent_run_id=agent_run_id,
+                        role=role,
+                    )
+                )
+                continue
             if event.get("kind") == "interrupt":
                 run_registry.pending_interrupts[agent_run_id] = event["accept"]
                 tool_calls = [

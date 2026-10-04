@@ -779,6 +779,8 @@ class AgentService:
                             target_id=target_id,
                             used_tokens=event["used_tokens"],
                             context_window=event["context_window"],
+                            agent_run_id=agent_run_id,
+                            role=role,
                         )
                     )
                     continue
@@ -990,6 +992,8 @@ class AgentService:
                             target_id=target_id,
                             used_tokens=event["used_tokens"],
                             context_window=event["context_window"],
+                            agent_run_id=agent_run_id,
+                            role=role,
                         )
                     )
                     continue

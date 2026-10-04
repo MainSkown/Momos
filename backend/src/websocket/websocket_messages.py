@@ -183,6 +183,13 @@ class AgentContextUsage(OutboundMessage):
     type: Literal[WsTypes.AgentContextUsage]
     used_tokens: int
     context_window: int
+    # Every current call site (Single Agent mode's own run, the
+    # orchestrator's own run, and _drain_sub_agent for every sub-agent it
+    # spawns) sets both. Optional/defaulted only so this stays wire-
+    # compatible with any older client still expecting the shape from
+    # before multi_agent made more than one run per target possible.
+    agent_run_id: Optional[str] = None
+    role: Optional[str] = None
 
 class AttackVectorUpdate(OutboundMessage):
     """Pushed on every AttackVector create/update (see

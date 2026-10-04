@@ -225,7 +225,9 @@ export const en = {
         role_pentesting: "Pentesting",
         role_reporting: "Reporting",
         running: "Agent is running",
-        no_logs: "No agent activity yet"
+        no_logs: "No agent activity yet",
+        active_agent_count_one: "{count} agent",
+        active_agent_count_other: "{count} agents"
     },
 
     vulnerabilities: {
