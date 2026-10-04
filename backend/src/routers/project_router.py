@@ -1,7 +1,7 @@
 from typing import List
 
 from fastapi import APIRouter, HTTPException, status
-from src.services import ProjectService, OllamaService
+from src.services import ProjectService, OllamaService, AgentService
 from src.schemas import (
     ProjectResponse,
     ProjectRequest,
@@ -9,6 +9,7 @@ from src.schemas import (
     ProjectSettingsBody,
 )
 from src.core import tool_groups
+from src.core.pipeline_modes import PIPELINE_MODE_IDS
 
 router = APIRouter()
 
@@ -68,6 +69,27 @@ async def update_project_settings(project_id: str, data: ProjectSettingsBody):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="allow_install_packages requires allow_shell to also be enabled.",
+        )
+
+    if data.pipeline_mode not in PIPELINE_MODE_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown pipeline_mode: {data.pipeline_mode!r}",
+        )
+
+    # pipeline_mode can't change mid-run - a live orchestrator run (and
+    # every sub-run it's spawned) assumes the mode it started under; the
+    # Single Agent flow's own AgentRun row likewise assumes the opposite.
+    # is_project_running is the same exclusivity check AgentService.start_agent
+    # itself enforces, so this can only ever reject a change that would have
+    # raced a live run either way.
+    current_settings = ProjectService.get_project_settings(project_id)
+    if data.pipeline_mode != current_settings.pipeline_mode and AgentService.is_project_running(
+        project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot change pipeline_mode while this project has a run in progress.",
         )
 
     if data.enabled_tools is not None:

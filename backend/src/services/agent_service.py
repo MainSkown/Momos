@@ -4,9 +4,14 @@ from src.core import db_manager, ollama_manager, settings, tool_groups
 from src.core.agent import Agent
 from src.core.agent import agent_checkpointer
 from src.core.agent import run_registry
+from src.core.agent.roles import common as roles_common
+from src.core.agent.roles.agents.orchestrator_agent import OrchestratorAgent
 from src.core.kali_integration import kali_registry
 from src.schemas.target_scheme import Target
-from src.schemas.project_scheme import ProjectSettings
+from src.schemas.project_scheme import (
+    ProjectSettings,
+    orchestrator_starting_prompt as default_orchestrator_prompt,
+)
 from src.schemas.agent_run_scheme import AgentRun, AgentRunState
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
@@ -55,28 +60,46 @@ async def _set_running(project_id: str, target_id: str, running: bool):
 
 
 async def _on_interrupt_response(message: AgentInterruptResponseMessage):
-    # run_registry's dicts are keyed by agent_run_id - this still works
-    # unchanged because single_agent mode's agent_run_id always equals
-    # target_id (see Agent.__init__'s own comment). AgentInterruptResponseMessage
-    # has no agent_run_id field yet to look up a multi_agent sub-run's own
-    # pending interrupt by - that's Phase 6's job, alongside the rest of
-    # the "queue of pending approvals" work.
-    accept = run_registry.pending_interrupts.pop(message.target_id, None)
-    run_registry.pending_interrupt_tool_calls.pop(message.target_id, None)
+    # run_registry's dicts are keyed by agent_run_id - the direct lookup
+    # below works unchanged for single_agent mode because its agent_run_id
+    # always equals target_id (see Agent.__init__'s own comment).
+    # AgentInterruptResponseMessage has no agent_run_id field yet to say
+    # directly which multi_agent sub-run it's answering - that's Phase 6's
+    # job, alongside the rest of the "queue of pending approvals" work.
+    # Until then, the fallback below resolves it the same way
+    # AgentService.get_pending_interrupt does: the first pending interrupt
+    # found among every run currently live under this target's pipeline.
+    agent_run_id = message.target_id
+    accept = run_registry.pending_interrupts.pop(agent_run_id, None)
+    run_registry.pending_interrupt_tool_calls.pop(agent_run_id, None)
+
+    if accept is None:
+        for candidate in run_registry.live_runs_for_target.get(message.target_id, ()):
+            accept = run_registry.pending_interrupts.pop(candidate, None)
+            if accept is not None:
+                run_registry.pending_interrupt_tool_calls.pop(candidate, None)
+                agent_run_id = candidate
+                break
 
     if accept is None:
         print(f"No pending interrupt for target {message.target_id}. Ignoring.")
         return
 
-    # The agent is about to resume - flip the timer back to running immediately,
-    # rather than waiting for the next log message to arrive.
-    run_state = run_registry.run_states.get(message.target_id, {})
-    await run_registry.persist_run_state(
-        project_id=message.project_id,
-        target_id=message.target_id,
-        status=AgentRunState.RUNNING,
-        remaining_seconds=run_state.get("time_left", 0),
-    )
+    if agent_run_id == message.target_id:
+        # Single Agent mode only (its agent_run_id always equals
+        # target_id) - flips the UI timer back to RUNNING immediately
+        # rather than waiting for the next log message to arrive. A
+        # resolved multi_agent sub-run has no run_state timer entry of its
+        # own to flip (see roles/common.py's run_graph_loop docstring - only
+        # the orchestrator tracks one) - its own next persisted message
+        # corrects its displayed status anyway.
+        run_state = run_registry.run_states.get(message.target_id, {})
+        await run_registry.persist_run_state(
+            project_id=message.project_id,
+            target_id=message.target_id,
+            status=AgentRunState.RUNNING,
+            remaining_seconds=run_state.get("time_left", 0),
+        )
 
     accept(message.approved)
 
@@ -231,9 +254,17 @@ class AgentService:
                 "model in project settings before starting a scan."
             )
 
+        multi_agent = project_settings.pipeline_mode == "multi_agent"
+        # Multi Agent mode's root run is role="orchestrator" (one real
+        # AgentRun row per target, upserted the same way single_agent's
+        # own row is - see run_registry.persist_run_state's docstring);
+        # everything below this point reads identically for both modes
+        # once root_role is resolved.
+        root_role = "orchestrator" if multi_agent else "single_agent"
+
         # Resume from a paused run's remaining time, if one exists - otherwise
         # start fresh with the target's full configured duration.
-        existing_run = db_manager.get_agent_run(target_id)
+        existing_run = db_manager.get_agent_run(target_id, role=root_role)
         resuming_paused_run = (
             existing_run is not None and existing_run.status == AgentRunState.PAUSED
         )
@@ -254,15 +285,25 @@ class AgentService:
         # firewall scope at once.
         _running_targets[target_id] = project_id
 
-        if not resuming_paused_run:
+        if not resuming_paused_run and agent_checkpointer.checkpointer is not None:
             # Not resuming a paused run - clear any leftover LangGraph
             # checkpoint for this thread (from a prior finished/errored run).
             # The checkpointer persists state per thread_id independently of
-            # our own AgentRunState, so without this, Agent.start_agent would
-            # try to "resume" an already-completed graph: it has nothing left
-            # to do, so it does nothing and looks like an instant, silent
+            # our own AgentRunState, so without this, start_agent would try
+            # to "resume" an already-completed graph: it has nothing left to
+            # do, so it does nothing and looks like an instant, silent
             # completion instead of actually starting the task.
-            if agent_checkpointer.checkpointer is not None:
+            if multi_agent:
+                # The orchestrator's thread_id is f"{target_id}:{its own
+                # AgentRun.id}" (Phase 0's thread-id scheme), not target_id
+                # itself - only knowable once that row exists. If
+                # existing_run is None, this is this target's first-ever
+                # multi_agent run and there is no checkpoint to clear yet.
+                if existing_run is not None:
+                    await agent_checkpointer.checkpointer.adelete_thread(
+                        f"{target_id}:{existing_run.id}"
+                    )
+            else:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
         # Blocking install check - unlike _prepare_and_run's own best-effort
@@ -283,9 +324,14 @@ class AgentService:
                 project_settings.base_model_name,
             )
 
-        asyncio.create_task(
-            AgentService._prepare_and_run(target, project_settings, duration_seconds)
-        )
+        if multi_agent:
+            asyncio.create_task(
+                AgentService._prepare_and_run_orchestrator(target, project_settings, duration_seconds)
+            )
+        else:
+            asyncio.create_task(
+                AgentService._prepare_and_run(target, project_settings, duration_seconds)
+            )
 
     @staticmethod
     async def _prepare_and_run(
@@ -386,6 +432,98 @@ class AgentService:
         await AgentService._run_agent(agent, target, project_settings, duration_seconds)
 
     @staticmethod
+    async def _prepare_and_run_orchestrator(
+        target: Target, project_settings: ProjectSettings, duration_seconds: int
+    ):
+        """Multi Agent mode's equivalent of _prepare_and_run - same Kali/
+        nftables preparation (shared once per target, not re-done per
+        sub-agent: scouting/pentesting sub-agents call kali_registry.get_manager
+        themselves when they open a session, which is a no-op once the
+        container already exists), but constructs an OrchestratorAgent
+        instead of the Single Agent flow's own Agent, and hands off to
+        _run_orchestrator instead of _run_agent - their event-stream shapes
+        differ too much to share one runner (see _run_orchestrator's own
+        docstring)."""
+        project_id = str(target.project_id)
+        target_id = str(target.id)
+        loop = asyncio.get_running_loop()
+
+        def on_stage(stage):
+            kali_registry.set_build_stage(project_id, stage, target_id=target_id)
+            asyncio.run_coroutine_threadsafe(
+                ws_registry.send_message(
+                    KaliCreationStageMessage(
+                        project_id=project_id,
+                        type=WsTypes.KaliCreationStage,
+                        stage=stage,
+                    )
+                ),
+                loop,
+            )
+
+        orchestrator_model_name = (
+            project_settings.orchestrator_model_name or project_settings.base_model_name
+        )
+        reasoning: Optional[bool] = None
+        context_window: Optional[int] = None
+        try:
+            capabilities = await ollama_manager.get_model_capabilities(orchestrator_model_name)
+            reasoning = capabilities["thinking"]
+            ceiling = project_settings.max_context_window or settings.DEFAULT_MAX_CONTEXT_WINDOW
+            context_window = min(capabilities["context_window"], ceiling)
+        except Exception as e:
+            print(
+                f"Could not fetch capabilities for model '{orchestrator_model_name}', "
+                f"using defaults: {e}"
+            )
+
+        try:
+            kali_manager = await kali_registry.get_manager(project_id, on_stage=on_stage)
+            kali_registry.clear_build_status(project_id)
+            await kali_manager.prepare_nftables(target)
+
+            # Gets (or, on this target's first-ever multi_agent run,
+            # creates) the one stable orchestrator AgentRun row for this
+            # target - its real `id` IS this pipeline's root agent_run_id
+            # from here on (see run_registry.start_sub_run's own docstring
+            # for why that distinction matters: every sub-run's
+            # parent_run_id needs a REAL AgentRun.id to point at, not an
+            # arbitrary string).
+            orchestrator_run = await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.RUNNING,
+                remaining_seconds=duration_seconds,
+                agent_run_id=None,
+                role="orchestrator",
+            )
+            orchestrator_agent_run_id = str(orchestrator_run.id)
+
+            orchestrator = OrchestratorAgent(
+                model_name=orchestrator_model_name,
+                checkpointer=agent_checkpointer.checkpointer,
+                project_id=project_id,
+                target_id=target_id,
+                agent_run_id=orchestrator_agent_run_id,
+                reasoning=reasoning,
+                context_window=context_window,
+                should_interrupt=project_settings.should_interrupt,
+            )
+        except Exception as e:
+            print(f"Could not prepare orchestrator run for target {target_id}: {e}")
+            _running_targets.pop(target_id, None)
+            kali_registry.clear_build_status(project_id)
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Could not start multi-agent pipeline: {e}",
+            )
+            return
+
+        await AgentService._run_orchestrator(orchestrator, target, project_settings, duration_seconds)
+
+    @staticmethod
     async def pause_agent(project_id: str, target_id: str):
         """Signals the stop_event of every agent run currently live under
         this target's pipeline - one, in single_agent mode, but genuinely
@@ -456,7 +594,9 @@ class AgentService:
     def get_run(project_id: str, target_id: str) -> Optional[AgentRun]:
         AgentService._get_owned_target(project_id, target_id)
 
-        return db_manager.get_agent_run(target_id)
+        project_settings = db_manager.get_project_settings(project_id)
+        role = "orchestrator" if project_settings.pipeline_mode == "multi_agent" else "single_agent"
+        return db_manager.get_agent_run(target_id, role=role)
 
     @staticmethod
     def get_pending_interrupt(project_id: str, target_id: str) -> Optional[List[dict]]:
@@ -464,10 +604,28 @@ class AgentService:
         target_id, or None if there isn't one - lets a client that reloaded
         mid-approval (and so missed the one-shot AgentInterruptRequest
         websocket push) recover the dialog's contents instead of being
-        stuck with a run stuck as INTERRUPTED and nothing to approve/deny."""
+        stuck with a run stuck as INTERRUPTED and nothing to approve/deny.
+
+        Single Agent mode's agent_run_id always equals target_id, so the
+        direct lookup below is exact. Multi Agent mode has no single run_id
+        equal to target_id - falls back to the first pending interrupt
+        found among every run currently live under this target's pipeline
+        (the orchestrator itself never raises one, but any
+        scouting/pentesting sub-run it spawned might). Only ever surfaces
+        ONE at a time even if several sub-runs happen to be interrupted
+        together - a real "list every pending interrupt" endpoint is
+        Phase 6's job."""
         AgentService._get_owned_target(project_id, target_id)
 
-        return run_registry.pending_interrupt_tool_calls.get(target_id)
+        direct = run_registry.pending_interrupt_tool_calls.get(target_id)
+        if direct is not None:
+            return direct
+
+        for agent_run_id in run_registry.live_runs_for_target.get(target_id, ()):
+            pending = run_registry.pending_interrupt_tool_calls.get(agent_run_id)
+            if pending is not None:
+                return pending
+        return None
 
     @staticmethod
     def is_project_running(project_id: str) -> bool:
@@ -693,4 +851,159 @@ class AgentService:
             run_registry.cleanup_sub_run(target_id, agent_run_id)
             if slot_acquired:
                 await run_registry.release_agent_slot(project_id)
+            await _set_running(project_id, target_id, False)
+
+    @staticmethod
+    async def _run_orchestrator(
+        orchestrator: OrchestratorAgent,
+        target: Target,
+        project_settings: ProjectSettings,
+        duration_seconds: int,
+    ):
+        """Multi Agent mode's equivalent of _run_agent - same registration/
+        slot/status-persistence shape, adapted to OrchestratorAgent's own
+        event stream and run identity. Two deliberate differences from
+        _run_agent, beyond the obvious (role="orchestrator", a real
+        agent_run_id instead of target_id, and OrchestratorAgent.start_agent's
+        own narrower signature - no `target`/`should_interrupt`, since it
+        never touches the target itself and so never needs interrupt
+        approval at its own level):
+
+        1. No acquire_agent_slot/release_agent_slot here at all. The
+           concurrency cap bounds actual WORKER model calls (scouting/
+           pentesting/reporting, each acquiring their own slot inside
+           orchestrator_tools.py), not the orchestrator's own - its own LLM
+           call always happens strictly BEFORE/AFTER a blocking tool call
+           that spawns those workers, never AT THE SAME TIME as them
+           (LangGraph's agent->tools->agent step is sequential, not
+           concurrent). Acquiring a slot for the orchestrator's own run
+           here too would deadlock the moment max_concurrent_agents=1 -
+           the orchestrator would hold the only slot for its entire
+           lifetime, leaving none free for the very sub-agents it's
+           waiting on.
+        2. No per-message persist_and_broadcast loop reading the
+           orchestrator's sub-agents' own messages - those are already
+           fully persisted/broadcast by orchestrator_tools.py's own
+           _drain_sub_agent, synchronously, before the tool call that
+           spawned them even returns. This loop only ever sees the
+           orchestrator's OWN messages (role="orchestrator")."""
+        project_id = str(target.project_id)
+        target_id = str(target.id)
+        agent_run_id = orchestrator.agent_run_id
+        role = "orchestrator"
+
+        stop_event = asyncio.Event()
+        run_state: dict = {}
+
+        try:
+            run_registry.stop_events[agent_run_id] = stop_event
+            run_registry.run_states[agent_run_id] = run_state
+            run_registry.live_runs_for_target.setdefault(target_id, set()).add(agent_run_id)
+
+            await _set_running(project_id, target_id, True)
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.RUNNING,
+                remaining_seconds=duration_seconds,
+                agent_run_id=agent_run_id,
+                role=role,
+            )
+
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Starting multi-agent pipeline on target: {target.name}",
+                agent_run_id=agent_run_id,
+                role=role,
+            )
+
+            prompt_template = (
+                project_settings.orchestrator_starting_prompt or ""
+            ).strip() or default_orchestrator_prompt
+            rendered_prompt = roles_common.render_target_prompt(prompt_template, target)
+
+            async for event in orchestrator.start_agent(
+                start_prompt=rendered_prompt,
+                thread_id=f"{target_id}:{agent_run_id}",
+                stop_event=stop_event,
+                duration_seconds=duration_seconds,
+                run_state=run_state,
+            ):
+                if isinstance(event, dict) and event.get("kind") == "context_usage":
+                    await ws_registry.send_message(
+                        AgentContextUsage(
+                            type=WsTypes.AgentContextUsage,
+                            project_id=project_id,
+                            target_id=target_id,
+                            used_tokens=event["used_tokens"],
+                            context_window=event["context_window"],
+                        )
+                    )
+                    continue
+
+                if isinstance(event, dict):
+                    # OrchestratorAgent.start_agent's own requires_interrupt
+                    # always returns False (see its own docstring) - this
+                    # shape never actually occurs, kept only so an
+                    # unexpected dict here can't crash this loop.
+                    continue
+
+                for log_type, content, tool_name, raw_output in run_registry.message_to_log_specs(
+                    event
+                ):
+                    await run_registry.persist_and_broadcast(
+                        project_id=project_id,
+                        target_id=target_id,
+                        log_type=log_type,
+                        content=content,
+                        tool_name=tool_name,
+                        raw_output=raw_output,
+                        agent_run_id=agent_run_id,
+                        role=role,
+                    )
+
+            finished_by_request = run_registry.finish_intents.pop(agent_run_id, False)
+            final_status = (
+                AgentRunState.FINISHED
+                if finished_by_request
+                else (
+                    AgentRunState.PAUSED if stop_event.is_set() else AgentRunState.FINISHED
+                )
+            )
+            final_remaining = 0 if finished_by_request else run_state.get("time_left", 0)
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=final_status,
+                remaining_seconds=final_remaining,
+                agent_run_id=agent_run_id,
+                role=role,
+            )
+        except Exception as e:
+            print(f"Orchestrator run failed for target {target_id}: {e}")
+            await run_registry.persist_and_broadcast(
+                project_id=project_id,
+                target_id=target_id,
+                log_type="action",
+                content=f"Multi-agent pipeline failed: {e}",
+                agent_run_id=agent_run_id,
+                role=role,
+            )
+            await run_registry.persist_run_state(
+                project_id=project_id,
+                target_id=target_id,
+                status=AgentRunState.FAILED,
+                remaining_seconds=run_state.get("time_left", 0),
+                agent_run_id=agent_run_id,
+                role=role,
+            )
+        finally:
+            # The orchestrator itself never opens a Kali session (it never
+            # touches the target - see OrchestratorAgent's own docstring),
+            # so this is a harmless no-op for its own agent_run_id; any
+            # sub-agent it spawned already closed its own sessions inside
+            # orchestrator_tools.py's own run_one/request_report bodies.
+            run_registry.cleanup_sub_run(target_id, agent_run_id)
             await _set_running(project_id, target_id, False)
