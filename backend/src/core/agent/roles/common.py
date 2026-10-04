@@ -141,6 +141,27 @@ def trim_messages_for_model(
 # training data instead of the actual one given in scope).
 
 
+def render_target_prompt(template: str, target, attack_vector: Optional[str] = None) -> str:
+    """Substitutes a starting-prompt template's {{name}}/{{description}}/
+    {{ipv4}}/{{ipv6}}/{{ports}} placeholders with a real Target's fields -
+    the same substitution agent_service.py's own _render_start_prompt does
+    for the Single Agent flow, extracted here so the orchestrator (which
+    renders this once per scouting sub-run and once per pentesting
+    sub-run it spawns) doesn't duplicate it. {{attack_vector}} is only
+    replaced when `attack_vector` is given - pentesting_starting_prompt is
+    the only template that uses it."""
+    rendered = (
+        template.replace("{{name}}", target.name or "Not defined")
+        .replace("{{description}}", target.description or "Not defined")
+        .replace("{{ipv4}}", target.ipv4 or "Not defined")
+        .replace("{{ipv6}}", target.ipv6 or "Not defined")
+        .replace("{{ports}}", ", ".join(map(str, target.ports)) if target.ports else "Not defined")
+    )
+    if attack_vector is not None:
+        rendered = rendered.replace("{{attack_vector}}", attack_vector)
+    return rendered
+
+
 def render_target_scope_reminder(target_scope: Optional[dict]) -> str:
     if not target_scope:
         return ""
