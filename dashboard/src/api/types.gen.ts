@@ -54,6 +54,10 @@ export type AgentInterruptRequest = {
     tool_calls: Array<{
         [key: string]: unknown;
     }>;
+    /**
+     * Agent Run Id
+     */
+    agent_run_id?: string | null;
 };
 
 /**
@@ -76,6 +80,10 @@ export type AgentInterruptResponseMessage = {
      * Approved
      */
     approved: boolean;
+    /**
+     * Agent Run Id
+     */
+    agent_run_id?: string | null;
 };
 
 /**
@@ -95,6 +103,14 @@ export type AgentLogResponse = {
      * Raw Output
      */
     raw_output?: string | null;
+    /**
+     * Agent Run Id
+     */
+    agent_run_id?: string | null;
+    /**
+     * Role
+     */
+    role?: string | null;
     /**
      * Id
      */
@@ -131,6 +147,22 @@ export type AgentMessage = {
 };
 
 /**
+ * AgentPendingInterruptEntry
+ */
+export type AgentPendingInterruptEntry = {
+    /**
+     * Agent Run Id
+     */
+    agent_run_id: string;
+    /**
+     * Tool Calls
+     */
+    tool_calls: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
  * AgentPendingInterruptResponse
  */
 export type AgentPendingInterruptResponse = {
@@ -155,6 +187,22 @@ export type AgentRunResponse = {
      * Recorded At
      */
     recorded_at?: string;
+    /**
+     * Role
+     */
+    role?: string;
+    /**
+     * Parent Run Id
+     */
+    parent_run_id?: string | null;
+    /**
+     * Attack Vector Id
+     */
+    attack_vector_id?: string | null;
+    /**
+     * Id
+     */
+    id: string;
     /**
      * Target Id
      */
@@ -217,6 +265,136 @@ export type AgentRunningResponse = {
      * Target Id
      */
     target_id?: string | null;
+};
+
+/**
+ * AttackVectorStatus
+ */
+export type AttackVectorStatus = 'pending' | 'testing' | 'tested_vulnerable' | 'tested_not_vulnerable' | 'inconclusive' | 'skipped';
+
+/**
+ * AttackVectorUpdate
+ *
+ * Pushed on every AttackVector create/update (see
+ * run_registry.broadcast_attack_vector) - the board's live Kanban view
+ * (Phase 7) applies this directly instead of polling the
+ * .../attack_vectors endpoint, which is only needed for the initial
+ * load.
+ */
+export type AttackVectorUpdate = {
+    /**
+     * Type
+     */
+    type: 'AttackVectorUpdate';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    vector: ResponseAttackVector;
+};
+
+/**
+ * CloseConsoleSessionMessage
+ */
+export type CloseConsoleSessionMessage = {
+    /**
+     * Type
+     */
+    type: 'CloseConsoleSessionMessage';
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
+};
+
+/**
+ * ConsoleSessionClosedMessage
+ */
+export type ConsoleSessionClosedMessage = {
+    /**
+     * Type
+     */
+    type: 'ConsoleSessionClosedMessage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
+};
+
+/**
+ * ConsoleSessionCreatedMessage
+ */
+export type ConsoleSessionCreatedMessage = {
+    /**
+     * Type
+     */
+    type: 'ConsoleSessionCreatedMessage';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Session
+     */
+    session: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
+};
+
+/**
+ * ConsoleSessionInfo
+ *
+ * One active User Console session - see kali_user.py's
+ * CONSOLE_TARGET_ID/create_session. name carries the "root-"/"momos-"
+ * prefix create_session assigns (e.g. "root-1") to stay unique within
+ * the shared console namespace, and is also what SendCommandMessage.
+ * session/CloseConsoleSessionMessage.session expect - the frontend
+ * strips the prefix itself before using it as the tab label.
+ */
+export type ConsoleSessionInfo = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
+};
+
+/**
+ * CreateConsoleSessionMessage
+ */
+export type CreateConsoleSessionMessage = {
+    /**
+     * Type
+     */
+    type: 'CreateConsoleSessionMessage';
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * User
+     */
+    user: 'root' | 'momos';
 };
 
 /**
@@ -340,20 +518,6 @@ export type KaliUser = {
 };
 
 /**
- * ConsoleSessionInfo
- */
-export type ConsoleSessionInfo = {
-    /**
-     * Name
-     */
-    name: string;
-    /**
-     * User
-     */
-    user: 'root' | 'momos';
-};
-
-/**
  * ModelPullingUpdate
  */
 export type ModelPullingUpdate = {
@@ -458,7 +622,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage;
+export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate;
 
 /**
  * ProjectRequest
@@ -513,6 +677,46 @@ export type ProjectSettings = {
      */
     parsing_model_name: string;
     /**
+     * Pipeline Mode
+     */
+    pipeline_mode?: string;
+    /**
+     * Max Concurrent Agents
+     */
+    max_concurrent_agents?: number;
+    /**
+     * Orchestrator Model Name
+     */
+    orchestrator_model_name?: string;
+    /**
+     * Scouting Model Name
+     */
+    scouting_model_name?: string;
+    /**
+     * Pentesting Model Name
+     */
+    pentesting_model_name?: string;
+    /**
+     * Reporting Model Name
+     */
+    reporting_model_name?: string;
+    /**
+     * Orchestrator Starting Prompt
+     */
+    orchestrator_starting_prompt?: string;
+    /**
+     * Scouting Starting Prompt
+     */
+    scouting_starting_prompt?: string;
+    /**
+     * Pentesting Starting Prompt
+     */
+    pentesting_starting_prompt?: string;
+    /**
+     * Reporting Starting Prompt
+     */
+    reporting_starting_prompt?: string;
+    /**
      * Max Context Window
      */
     max_context_window?: number | null;
@@ -554,6 +758,46 @@ export type ProjectSettingsBody = {
      * Parsing Model Name
      */
     parsing_model_name: string;
+    /**
+     * Pipeline Mode
+     */
+    pipeline_mode?: string;
+    /**
+     * Max Concurrent Agents
+     */
+    max_concurrent_agents?: number;
+    /**
+     * Orchestrator Model Name
+     */
+    orchestrator_model_name?: string;
+    /**
+     * Scouting Model Name
+     */
+    scouting_model_name?: string;
+    /**
+     * Pentesting Model Name
+     */
+    pentesting_model_name?: string;
+    /**
+     * Reporting Model Name
+     */
+    reporting_model_name?: string;
+    /**
+     * Orchestrator Starting Prompt
+     */
+    orchestrator_starting_prompt?: string;
+    /**
+     * Scouting Starting Prompt
+     */
+    scouting_starting_prompt?: string;
+    /**
+     * Pentesting Starting Prompt
+     */
+    pentesting_starting_prompt?: string;
+    /**
+     * Reporting Starting Prompt
+     */
+    reporting_starting_prompt?: string;
     /**
      * Max Context Window
      */
@@ -600,45 +844,50 @@ export type ReceiveCommandOutputMessage = {
 };
 
 /**
- * ConsoleSessionCreatedMessage
+ * ResponseAttackVector
  */
-export type ConsoleSessionCreatedMessage = {
+export type ResponseAttackVector = {
     /**
-     * Type
+     * Description
      */
-    type: 'ConsoleSessionCreatedMessage';
-    error?: WebSocketError | null;
+    description: string;
+    status?: AttackVectorStatus;
+    /**
+     * Discovered By Run Id
+     */
+    discovered_by_run_id?: string | null;
+    /**
+     * Assigned Run Id
+     */
+    assigned_run_id?: string | null;
+    /**
+     * Result Summary
+     */
+    result_summary?: string | null;
+    /**
+     * Linked Vulnerability Id
+     */
+    linked_vulnerability_id?: string | null;
+    /**
+     * Id
+     */
+    id: string;
     /**
      * Project Id
      */
     project_id: string;
     /**
-     * Session
+     * Target Id
      */
-    session: string;
+    target_id: string;
     /**
-     * User
+     * Created At
      */
-    user: 'root' | 'momos';
-};
-
-/**
- * ConsoleSessionClosedMessage
- */
-export type ConsoleSessionClosedMessage = {
+    created_at: string;
     /**
-     * Type
+     * Updated At
      */
-    type: 'ConsoleSessionClosedMessage';
-    error?: WebSocketError | null;
-    /**
-     * Project Id
-     */
-    project_id: string;
-    /**
-     * Session
-     */
-    session: string;
+    updated_at: string;
 };
 
 /**
@@ -688,13 +937,9 @@ export type ResponseVulnerability = {
      */
     name: string;
     /**
-     * Severity
-     */
-    severity: string;
-    /**
      * Cvss4 Vector
      */
-    cvss4_vector?: string | null;
+    cvss4_vector: string;
     /**
      * Cvss4 Score
      */
@@ -723,6 +968,10 @@ export type ResponseVulnerability = {
      * Found By Model
      */
     found_by_model?: string | null;
+    /**
+     * Severity
+     */
+    readonly severity: string;
 };
 
 /**
@@ -741,42 +990,6 @@ export type SendCommandMessage = {
      * Command
      */
     command: string;
-    /**
-     * Session
-     */
-    session: string;
-};
-
-/**
- * CreateConsoleSessionMessage
- */
-export type CreateConsoleSessionMessage = {
-    /**
-     * Type
-     */
-    type: 'CreateConsoleSessionMessage';
-    /**
-     * Project Id
-     */
-    project_id: string;
-    /**
-     * User
-     */
-    user: 'root' | 'momos';
-};
-
-/**
- * CloseConsoleSessionMessage
- */
-export type CloseConsoleSessionMessage = {
-    /**
-     * Type
-     */
-    type: 'CloseConsoleSessionMessage';
-    /**
-     * Project Id
-     */
-    project_id: string;
     /**
      * Session
      */
@@ -850,13 +1063,9 @@ export type VulnerabilityBase = {
      */
     name: string;
     /**
-     * Severity
-     */
-    severity: string;
-    /**
      * Cvss4 Vector
      */
-    cvss4_vector?: string | null;
+    cvss4_vector: string;
     /**
      * Cvss4 Score
      */
@@ -887,6 +1096,48 @@ export type WebSocketError = {
 export type WebsocketTrafficSchema = {
     inbound_traffic: InboundTraffic;
     outbound_traffic: OutboundTraffic;
+};
+
+/**
+ * ResponseVulnerability
+ */
+export type ResponseVulnerabilityWritable = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Cvss4 Vector
+     */
+    cvss4_vector: string;
+    /**
+     * Cvss4 Score
+     */
+    cvss4_score?: number;
+    /**
+     * Proof Of Concept
+     */
+    proof_of_concept: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Found In
+     */
+    found_in: string;
+    /**
+     * Related To Project
+     */
+    related_to_project: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Found By Model
+     */
+    found_by_model?: string | null;
 };
 
 export type GetAllProjectsData = {
@@ -1200,36 +1451,6 @@ export type GetProjectKaliClientResponses = {
 
 export type GetProjectKaliClientResponse = GetProjectKaliClientResponses[keyof GetProjectKaliClientResponses];
 
-export type GetConsoleSessionsData = {
-    body?: never;
-    path: {
-        /**
-         * Project Id
-         */
-        project_id: string;
-    };
-    query?: never;
-    url: '/api/project/{project_id}/kali_client/sessions';
-};
-
-export type GetConsoleSessionsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetConsoleSessionsError = GetConsoleSessionsErrors[keyof GetConsoleSessionsErrors];
-
-export type GetConsoleSessionsResponses = {
-    /**
-     * Successful Response
-     */
-    200: Array<ConsoleSessionInfo>;
-};
-
-export type GetConsoleSessionsResponse = GetConsoleSessionsResponses[keyof GetConsoleSessionsResponses];
-
 export type CreateKaliUserData = {
     body?: never;
     path: {
@@ -1259,6 +1480,38 @@ export type CreateKaliUserResponses = {
 };
 
 export type CreateKaliUserResponse = CreateKaliUserResponses[keyof CreateKaliUserResponses];
+
+export type GetConsoleSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/kali_client/sessions';
+};
+
+export type GetConsoleSessionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetConsoleSessionsError = GetConsoleSessionsErrors[keyof GetConsoleSessionsErrors];
+
+export type GetConsoleSessionsResponses = {
+    /**
+     * Response Getconsolesessions
+     *
+     * Successful Response
+     */
+    200: Array<ConsoleSessionInfo>;
+};
+
+export type GetConsoleSessionsResponse = GetConsoleSessionsResponses[keyof GetConsoleSessionsResponses];
 
 export type GetProjectKaliStatusData = {
     body?: never;
@@ -1613,6 +1866,114 @@ export type GetTargetPendingInterruptResponses = {
 };
 
 export type GetTargetPendingInterruptResponse = GetTargetPendingInterruptResponses[keyof GetTargetPendingInterruptResponses];
+
+export type GetTargetPendingInterruptsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/pending_interrupts';
+};
+
+export type GetTargetPendingInterruptsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTargetPendingInterruptsError = GetTargetPendingInterruptsErrors[keyof GetTargetPendingInterruptsErrors];
+
+export type GetTargetPendingInterruptsResponses = {
+    /**
+     * Response Gettargetpendinginterrupts
+     *
+     * Successful Response
+     */
+    200: Array<AgentPendingInterruptEntry>;
+};
+
+export type GetTargetPendingInterruptsResponse = GetTargetPendingInterruptsResponses[keyof GetTargetPendingInterruptsResponses];
+
+export type GetTargetAgentRunTreeData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/agent/run_tree';
+};
+
+export type GetTargetAgentRunTreeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTargetAgentRunTreeError = GetTargetAgentRunTreeErrors[keyof GetTargetAgentRunTreeErrors];
+
+export type GetTargetAgentRunTreeResponses = {
+    /**
+     * Response Gettargetagentruntree
+     *
+     * Successful Response
+     */
+    200: Array<AgentRunResponse>;
+};
+
+export type GetTargetAgentRunTreeResponse = GetTargetAgentRunTreeResponses[keyof GetTargetAgentRunTreeResponses];
+
+export type GetTargetAttackVectorsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+        /**
+         * Target Id
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/target/{target_id}/attack_vectors';
+};
+
+export type GetTargetAttackVectorsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTargetAttackVectorsError = GetTargetAttackVectorsErrors[keyof GetTargetAttackVectorsErrors];
+
+export type GetTargetAttackVectorsResponses = {
+    /**
+     * Response Gettargetattackvectors
+     *
+     * Successful Response
+     */
+    200: Array<ResponseAttackVector>;
+};
+
+export type GetTargetAttackVectorsResponse = GetTargetAttackVectorsResponses[keyof GetTargetAttackVectorsResponses];
 
 export type GetAllVulnerabilitiesInProjectData = {
     body?: never;

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetAgentRunTreeData, GetTargetAgentRunTreeErrors, GetTargetAgentRunTreeResponses, GetTargetAttackVectorsData, GetTargetAttackVectorsErrors, GetTargetAttackVectorsResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, GetTargetPendingInterruptsData, GetTargetPendingInterruptsErrors, GetTargetPendingInterruptsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -101,12 +101,15 @@ export const kaliClientExists = <ThrowOnError extends boolean = false>(options: 
  */
 export const getProjectKaliClient = <ThrowOnError extends boolean = false>(options: Options<GetProjectKaliClientData, ThrowOnError>): RequestResult<GetProjectKaliClientResponses, GetProjectKaliClientErrors, ThrowOnError> => (options.client ?? client).get<GetProjectKaliClientResponses, GetProjectKaliClientErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client', ...options });
 
-export const getConsoleSessions = <ThrowOnError extends boolean = false>(options: Options<GetConsoleSessionsData, ThrowOnError>): RequestResult<GetConsoleSessionsResponses, GetConsoleSessionsErrors, ThrowOnError> => (options.client ?? client).get<GetConsoleSessionsResponses, GetConsoleSessionsErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client/sessions', ...options });
-
 /**
  * Post Kali User
  */
 export const createKaliUser = <ThrowOnError extends boolean = false>(options: Options<CreateKaliUserData, ThrowOnError>): RequestResult<CreateKaliUserResponses, CreateKaliUserErrors, ThrowOnError> => (options.client ?? client).post<CreateKaliUserResponses, CreateKaliUserErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client', ...options });
+
+/**
+ * Get Console Sessions
+ */
+export const getConsoleSessions = <ThrowOnError extends boolean = false>(options: Options<GetConsoleSessionsData, ThrowOnError>): RequestResult<GetConsoleSessionsResponses, GetConsoleSessionsErrors, ThrowOnError> => (options.client ?? client).get<GetConsoleSessionsResponses, GetConsoleSessionsErrors, ThrowOnError>({ url: '/api/project/{project_id}/kali_client/sessions', ...options });
 
 /**
  * Get Project Kali Status
@@ -186,6 +189,36 @@ export const getTargetAgentRun = <ThrowOnError extends boolean = false>(options:
  * Get Target Pending Interrupt
  */
 export const getTargetPendingInterrupt = <ThrowOnError extends boolean = false>(options: Options<GetTargetPendingInterruptData, ThrowOnError>): RequestResult<GetTargetPendingInterruptResponses, GetTargetPendingInterruptErrors, ThrowOnError> => (options.client ?? client).get<GetTargetPendingInterruptResponses, GetTargetPendingInterruptErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/pending_interrupt', ...options });
+
+/**
+ * Get Target Pending Interrupts
+ *
+ * Plural counterpart to GetTargetPendingInterrupt - every pending
+ * interrupt currently live under this target's pipeline, each tagged
+ * with the real agent_run_id that raised it. Single Agent mode has at
+ * most one; Multi Agent mode can have several (e.g. two concurrent
+ * pentesting sub-runs each waiting on their own approval).
+ */
+export const getTargetPendingInterrupts = <ThrowOnError extends boolean = false>(options: Options<GetTargetPendingInterruptsData, ThrowOnError>): RequestResult<GetTargetPendingInterruptsResponses, GetTargetPendingInterruptsErrors, ThrowOnError> => (options.client ?? client).get<GetTargetPendingInterruptsResponses, GetTargetPendingInterruptsErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/pending_interrupts', ...options });
+
+/**
+ * Get Target Agent Run Tree
+ *
+ * Every AgentRun under this target's pipeline (every role, not just
+ * the root) - lets a Multi Agent client group logs by run the same way
+ * Single Agent mode's single GetTargetAgentRun result already implies
+ * for its own one row.
+ */
+export const getTargetAgentRunTree = <ThrowOnError extends boolean = false>(options: Options<GetTargetAgentRunTreeData, ThrowOnError>): RequestResult<GetTargetAgentRunTreeResponses, GetTargetAgentRunTreeErrors, ThrowOnError> => (options.client ?? client).get<GetTargetAgentRunTreeResponses, GetTargetAgentRunTreeErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/agent/run_tree', ...options });
+
+/**
+ * Get Target Attack Vectors
+ *
+ * The attack-vector board's initial load for this target - live
+ * updates after that arrive via the AttackVectorUpdate websocket
+ * message (see run_registry.broadcast_attack_vector), not polling.
+ */
+export const getTargetAttackVectors = <ThrowOnError extends boolean = false>(options: Options<GetTargetAttackVectorsData, ThrowOnError>): RequestResult<GetTargetAttackVectorsResponses, GetTargetAttackVectorsErrors, ThrowOnError> => (options.client ?? client).get<GetTargetAttackVectorsResponses, GetTargetAttackVectorsErrors, ThrowOnError>({ url: '/api/project/{project_id}/target/{target_id}/attack_vectors', ...options });
 
 /**
  * Get All Vulnerabilities In Project
