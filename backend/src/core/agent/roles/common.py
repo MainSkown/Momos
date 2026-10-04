@@ -133,6 +133,33 @@ def trim_messages_for_model(
     return [first, notice] + recent
 
 
+# --- Target-scope reminder ---
+# Pure string formatting, ported verbatim from agent.py's
+# Agent._render_target_scope_reminder (same reasoning: re-stating the real
+# authorized address every turn stops a model drifting onto a plausible-
+# looking address it associates with the target's name from its own
+# training data instead of the actual one given in scope).
+
+
+def render_target_scope_reminder(target_scope: Optional[dict]) -> str:
+    if not target_scope:
+        return ""
+
+    def _value(v):
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v) if v else "not defined"
+        return str(v) if v not in (None, "") else "not defined"
+
+    return (
+        "### Authorized target - use exactly this, never a different "
+        "address you recall for a target with this name:\n"
+        f"- Name: {_value(target_scope.get('name'))}\n"
+        f"- IPv4: {_value(target_scope.get('ipv4'))}\n"
+        f"- IPv6: {_value(target_scope.get('ipv6'))}\n"
+        f"- Authorized ports: {_value(target_scope.get('ports'))}"
+    )
+
+
 # --- Turn-level writer/reader race guard ---
 # Generalizes agent.py's _mode_gate_conflict/_tools_node - the
 # switch_mode-vs-other-writer special case is dropped, since none of the 4
