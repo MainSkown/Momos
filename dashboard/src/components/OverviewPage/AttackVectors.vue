@@ -102,10 +102,16 @@ watch(runningTargetId, (newTarget) => loadForTarget(newTarget));
 }
 
 .board-column {
-  flex: 0 0 140px;
+  flex: 1 1 0;
+  min-width: 140px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-right: 8px;
+}
+
+.board-column:not(:last-child) {
+  border-right: 1px solid var(--border-primary);
 }
 
 .board-column-header {
