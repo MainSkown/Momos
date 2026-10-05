@@ -312,6 +312,18 @@ class AgentService:
             else:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
+        if not resuming_paused_run and multi_agent:
+            # Scouting is about to run again from scratch (its own
+            # checkpoint was just cleared above), but AttackVector rows
+            # aren't checkpointed - without this, leftover vectors from a
+            # previous, already-finished run on this same target would
+            # still look live to the new orchestrator (re-dispatched if
+            # "pending", shown as stale board cards either way). See
+            # delete_attack_vectors_for_target's own docstring for why this
+            # is safe: the Vulnerability rows a prior run produced are a
+            # separate, untouched table.
+            db_manager.delete_attack_vectors_for_target(target_id)
+
         # Blocking install check - unlike _prepare_and_run's own best-effort
         # capabilities lookup (kept as-is, for reasoning/context_window),
         # this one actually aborts the start if the model isn't installed/
@@ -591,11 +603,19 @@ class AgentService:
         role = "orchestrator" if project_settings.pipeline_mode == "multi_agent" else "single_agent"
         existing_run = db_manager.get_agent_run(target_id, role=role)
         if existing_run is not None and existing_run.status == AgentRunState.PAUSED:
+            # agent_run_id/role must be passed through for Multi Agent mode -
+            # persist_run_state defaults to upsert_agent_run's (target_id,
+            # role="single_agent") lookup otherwise, which would miss this
+            # orchestrator row entirely (or silently flip an unrelated
+            # single_agent row instead), leaving the real paused run as
+            # PAUSED forever.
             await run_registry.persist_run_state(
                 project_id=project_id,
                 target_id=target_id,
                 status=AgentRunState.FINISHED,
                 remaining_seconds=0,
+                agent_run_id=str(existing_run.id),
+                role=role,
             )
 
     @staticmethod

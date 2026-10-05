@@ -527,5 +527,20 @@ class DatabaseManager:
             session.refresh(merged)
             return merged
 
+    def delete_attack_vectors_for_target(self, target_id: str | uuid.UUID) -> None:
+        """Called when a Multi Agent pipeline starts fresh (not resumed) on
+        a target that already has vectors from a previous, finished run -
+        AttackVector rows are purely this-run-local bookkeeping (the
+        durable artifact of a "vulnerable" verdict is the Vulnerability
+        row it produced, which this leaves untouched), so without this a
+        new run's orchestrator would see a prior run's already-resolved
+        vectors as if they were its own: re-dispatching old "pending" ones
+        and showing stale cards on the board alongside the new run's."""
+        parsed_uuid = self._parse_uuid(target_id)
+
+        with Session(self.engine) as session:
+            session.exec(delete(AttackVector).where(AttackVector.target_id == parsed_uuid))
+            session.commit()
+
 
 db_manager = DatabaseManager(settings.database_url)
