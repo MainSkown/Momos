@@ -34,7 +34,6 @@ const props = withDefaults(
 
 const triggerRef = ref<HTMLElement | null>(null);
 const visible = ref(false);
-const position = ref({ x: 0, y: 0 });
 // Teleported to <body>, so it isn't actually nested under the trigger -
 // without a short grace period, moving the mouse from the trigger down to
 // the panel (which never overlaps the trigger's own bounding box) would
@@ -46,13 +45,36 @@ let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
 const panelStyle = ref<Record<string, string>>({});
 
+// Same approach as Tooltip.vue's own clamp: a trigger near the right edge
+// (e.g. this card's own top-right corner) would otherwise let a
+// left-anchored panel run straight off the viewport, since nothing about
+// a fixed-position Teleported element stops it from doing that on its own.
+const VIEWPORT_MARGIN = 24;
+
+function parsePixels(value: string): number {
+  const parsed = parseFloat(value);
+  return Number.isNaN(parsed) ? 320 : parsed;
+}
+
 function updatePosition() {
   const trigger = triggerRef.value;
   if (!trigger) return;
 
   const rect = trigger.getBoundingClientRect();
+
+  // Clamped against the configured max width, not the panel's own
+  // (not-yet-rendered-at-this-point) actual width - this can never let it
+  // overflow, even if the real box ends up narrower and so isn't flush
+  // against the trigger's left edge anymore.
+  const effectiveMaxWidth = Math.min(
+    parsePixels(props.maxWidth),
+    window.innerWidth - 2 * VIEWPORT_MARGIN,
+  );
+  const maxLeft = window.innerWidth - effectiveMaxWidth - VIEWPORT_MARGIN;
+  const clampedLeft = Math.min(Math.max(rect.left, VIEWPORT_MARGIN), maxLeft);
+
   panelStyle.value = {
-    left: `${rect.left}px`,
+    left: `${clampedLeft}px`,
     top: `${rect.bottom + 6}px`,
   };
 }
