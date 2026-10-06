@@ -169,18 +169,33 @@ class OrchestratorAgent:
         docstring) - the orchestrator's job is inherently "keep going
         until the board says there's nothing left", not something it
         itself gets to unilaterally declare complete. Done once scouting
-        has run at least once AND no AttackVector is left pending or
-        testing - a lingering "testing" row counts as NOT done rather than
+        has run at least once, no AttackVector is left pending or testing
+        - a lingering "testing" row counts as NOT done rather than
         finished, since (per orchestrator_tools.create_dispatch_pentest_batch_tool's
         own comment) it can only mean a sub-run was abandoned, not that
         one is still genuinely live - every dispatch_pentest_batch call
         fully awaits its whole batch before returning, so nothing can be
-        truly in flight between the orchestrator's own turns."""
+        truly in flight between the orchestrator's own turns - AND every
+        "tested_vulnerable" vector has actually been reported
+        (linked_vulnerability_id set via request_report).
+
+        This last condition matters because roles/common.py's run_graph_loop
+        checks is_done() immediately after processing each tool's own
+        result, not just between the orchestrator's turns (see its own
+        docstring) - without it, the moment a dispatch_pentest_batch call
+        resolves every vector to a terminal status, the run stopped dead
+        right there, before the orchestrator's NEXT turn could ever see
+        that result and call request_report() on a real finding - the
+        whole pipeline could finish with a confirmed vulnerability
+        discovered but never actually recorded."""
         if not self._scouting_done:
             return False
         vectors = db_manager.get_attack_vectors_for_target(self.target_id)
+        if any(v.status in (AttackVectorStatus.PENDING, AttackVectorStatus.TESTING) for v in vectors):
+            return False
         return not any(
-            v.status in (AttackVectorStatus.PENDING, AttackVectorStatus.TESTING) for v in vectors
+            v.status == AttackVectorStatus.TESTED_VULNERABLE and v.linked_vulnerability_id is None
+            for v in vectors
         )
 
     async def start_agent(
@@ -229,5 +244,11 @@ class OrchestratorAgent:
             target_id=self.target_id,
             run_mode=run_mode,
             safety_cap=safety_cap,
+            # No finish tool of its own (see _is_done's docstring) - must
+            # always get a turn to react to a tool's result (e.g. call
+            # request_report on a fresh finding) before is_done() can end
+            # the run; see run_graph_loop's own docstring for why the
+            # mid-turn check would otherwise cut that reaction off.
+            check_done_mid_turn=False,
         ):
             yield event

@@ -310,6 +310,7 @@ async def run_graph_loop(
     target_id: Optional[str] = None,
     run_mode: str = "timer",
     safety_cap: Optional[int] = None,
+    check_done_mid_turn: bool = True,
 ):
     """Runs `app` (a compiled LangGraph, interrupt_before=["tools"]) until
     it's done, stopped, or runs out of budget - yielding raw BaseMessages,
@@ -319,11 +320,24 @@ async def run_graph_loop(
     agent turn.
 
     `input_data=None` resumes an existing checkpoint; a real dict (e.g.
-    `{"messages": [...]}`) starts fresh. `is_done()` is checked after
-    every processed node update (not just at the top of the outer loop) -
-    a role's own finish tool setting its "I'm done" flag mid-step must
-    stop this immediately rather than paying for one more (wasted) LLM
-    turn. `requires_interrupt(tool_call_names)` decides whether a turn
+    `{"messages": [...]}`) starts fresh. When `check_done_mid_turn` is true
+    (the default), `is_done()` is ALSO checked right after every processed
+    node update, not just at the top of the outer loop - a role's own
+    finish tool setting its "I'm done" flag mid-step stops this
+    immediately rather than paying for one more (wasted) LLM turn. The
+    orchestrator passes `check_done_mid_turn=False`: it has no finish tool
+    of its own (see OrchestratorAgent._is_done's own docstring) - its
+    "done" condition is externally derived from the AttackVector board, so
+    the SAME astream() call that just ran e.g. dispatch_pentest_batch and
+    resolved every vector to a terminal status would otherwise be cut off
+    right there, before the orchestrator's own next turn - already
+    streaming in as part of that same call, since the graph's only
+    unconditional edge is tools->agent - ever got to see that result and
+    react to it (e.g. call request_report on a real finding). Checking
+    only at the top of the outer loop instead means the orchestrator
+    always gets that turn first; `is_done()` only ends the run once it
+    reports being done AFTER having seen the board itself.
+    `requires_interrupt(tool_call_names)` decides whether a turn
     paused right before "tools" needs human approval - callers build
     their own predicate (typically from turn_conflict + their own
     interrupt-gated tool names + an "always interrupt" set), since what
@@ -456,7 +470,7 @@ async def run_graph_loop(
                                     "context_window": context_window,
                                 }
 
-                if is_done():
+                if check_done_mid_turn and is_done():
                     stream_task.cancel()
                     return
         finally:
