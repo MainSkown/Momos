@@ -3551,6 +3551,8 @@ def build_agent_tools(
     get_unresolved_vulnerable_claims_count: Callable[[], int],
     get_model_name: Callable[[], str],
     on_ports_changed: Callable[[List[int]], None],
+    get_current_vector_id: Callable[[], Optional[str]],
+    set_current_vector_id: Callable[[Optional[str]], None],
     allow_shell: bool = True,
     allow_install_packages: bool = True,
     enabled_tools: Optional[List[str]] = None,
@@ -3632,6 +3634,33 @@ def build_agent_tools(
         )
     )
     tools.append(create_finish_task_tool(on_finish, get_unresolved_vulnerable_claims_count))
+
+    # Deferred import - see this module's own comment above
+    # build_scouting_agent_tools for why (single_agent_vector_tools needs
+    # run_registry, which imports this module back).
+    from .roles.tools import single_agent_vector_tools as vector_tools
+
+    tools.append(
+        vector_tools.create_propose_attack_vector_tool(
+            project_id, target_id, agent_run_id, has_tested
+        )
+    )
+    tools.append(
+        vector_tools.create_start_attack_vector_tool(
+            target_id, get_current_vector_id, set_current_vector_id, clear_tested
+        )
+    )
+    tools.append(
+        vector_tools.create_report_outcome_tool(
+            project_id,
+            target_id,
+            agent_run_id,
+            get_current_vector_id,
+            set_current_vector_id,
+            has_tested,
+            clear_tested,
+        )
+    )
     return tools
 
 

@@ -242,7 +242,12 @@ class AgentService:
                 target_id,
             )
 
-        if target.task_duration is None or target.task_duration == 0:
+        # A fixed duration is only required in "timer" mode - a target set
+        # to "until_vectors_checked" can start with no task_duration (and
+        # no safety_cap_duration either; that just means unbounded).
+        if target.run_mode == "timer" and (
+            target.task_duration is None or target.task_duration == 0
+        ):
             raise DurationNotDefinedInTarget(
                 f"Target {target_id} does not have defined scan duration"
             )
@@ -269,14 +274,23 @@ class AgentService:
         root_role = "orchestrator" if multi_agent else "single_agent"
 
         # Resume from a paused run's remaining time, if one exists - otherwise
-        # start fresh with the target's full configured duration.
+        # start fresh. "timer" mode starts fresh with the target's full
+        # configured duration (unchanged). "until_vectors_checked" has no
+        # required duration - duration_seconds there is instead the elapsed-
+        # so-far stopwatch value (0 on a fresh run; AgentRun.remaining_seconds
+        # doubles as "elapsed" for this mode - see agent.py/common.py's own
+        # comments), and target.safety_cap_duration (optional) is the
+        # separate hard ceiling passed through below.
         existing_run = db_manager.get_agent_run(target_id, role=root_role)
         resuming_paused_run = (
             existing_run is not None and existing_run.status == AgentRunState.PAUSED
         )
-        duration_seconds = (
-            existing_run.remaining_seconds if resuming_paused_run else target.task_duration
-        )
+        if resuming_paused_run:
+            duration_seconds = existing_run.remaining_seconds
+        elif target.run_mode == "until_vectors_checked":
+            duration_seconds = 0
+        else:
+            duration_seconds = target.task_duration
 
         # Claim the target (and so, via is_project_running, the whole
         # project) immediately - everything above this point is a plain
@@ -312,13 +326,17 @@ class AgentService:
             else:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
-        if not resuming_paused_run and multi_agent:
-            # Scouting is about to run again from scratch (its own
-            # checkpoint was just cleared above), but AttackVector rows
-            # aren't checkpointed - without this, leftover vectors from a
-            # previous, already-finished run on this same target would
-            # still look live to the new orchestrator (re-dispatched if
-            # "pending", shown as stale board cards either way). See
+        if not resuming_paused_run:
+            # Scouting (multi_agent) / the agent's own propose_attack_vector
+            # tool (single_agent) is about to start proposing vectors again
+            # from scratch (the checkpoint was just cleared above), but
+            # AttackVector rows aren't checkpointed - without this, leftover
+            # vectors from a previous, already-finished run on this same
+            # target would still look live to the new run (re-dispatched if
+            # "pending" in multi_agent, re-offered to pick up in
+            # single_agent, shown as stale board cards either way). Applies
+            # regardless of pipeline mode or run_mode - a single_agent
+            # Target can propose/resolve vectors too now. See
             # delete_attack_vectors_for_target's own docstring for why this
             # is safe: the Vulnerability rows a prior run produced are a
             # separate, untouched table.
@@ -551,11 +569,7 @@ class AgentService:
         run_registry.live_runs_for_target's own comment for why this index
         exists."""
         AgentService._get_owned_target(project_id, target_id)
-
-        for agent_run_id in list(run_registry.live_runs_for_target.get(target_id, ())):
-            stop_event = run_registry.stop_events.get(agent_run_id)
-            if stop_event is not None:
-                stop_event.set()
+        run_registry.stop_all_for_target(target_id)
 
     @staticmethod
     async def finish_agent(project_id: str, target_id: str):
@@ -1003,6 +1017,8 @@ class AgentService:
                 stop_event=stop_event,
                 duration_seconds=duration_seconds,
                 run_state=run_state,
+                run_mode=target.run_mode,
+                safety_cap=target.safety_cap_duration,
             ):
                 if isinstance(event, dict) and event.get("kind") == "context_usage":
                     await ws_registry.send_message(

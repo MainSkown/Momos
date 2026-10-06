@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Session, create_engine, select
-from sqlalchemy import delete, text, inspect
+from sqlalchemy import delete, text, inspect, func
 from . import settings
 from typing import List, Optional, TypeVar, Type
 
@@ -15,7 +15,7 @@ from src.schemas.target_scheme import Target
 from src.schemas.vulnerability_scheme import Vulnerability
 from src.schemas.agent_log_scheme import AgentLog
 from src.schemas.agent_run_scheme import AgentRun
-from src.schemas.attack_vector_scheme import AttackVector
+from src.schemas.attack_vector_scheme import AttackVector, AttackVectorStatus
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -191,6 +191,24 @@ class DatabaseManager:
         with self.engine.connect() as conn:
             conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS agent_run_id UUID"))
             conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS role TEXT"))
+            conn.commit()
+
+        # target.task_duration predates this migration block entirely and so
+        # has never had one of its own - it only exists on a database whose
+        # target table was built fresh via create_all(). Backfilled here
+        # opportunistically while adding its two new siblings below, so it's
+        # no longer the one non-migrated column in this area. run_mode
+        # defaults every existing Target to 'timer' - see TargetBase - so
+        # pre-existing targets keep their exact current behavior.
+        with self.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE target ADD COLUMN IF NOT EXISTS task_duration INTEGER"))
+            conn.execute(
+                text(
+                    "ALTER TABLE target ADD COLUMN IF NOT EXISTS "
+                    "run_mode TEXT NOT NULL DEFAULT 'timer'"
+                )
+            )
+            conn.execute(text("ALTER TABLE target ADD COLUMN IF NOT EXISTS safety_cap_duration INTEGER"))
             conn.commit()
 
     def get_session(self):
@@ -526,6 +544,36 @@ class DatabaseManager:
             session.commit()
             session.refresh(merged)
             return merged
+
+    def attack_vectors_all_checked(self, target_id: str | uuid.UUID) -> bool:
+        """The stop condition for Target.run_mode == "until_vectors_checked":
+        true once every AttackVector ever proposed for this target has
+        reached a terminal status (anything but PENDING/TESTING). A target
+        with zero vectors proposed yet is NOT "all checked" - it must
+        return False, or a fresh run would stop before scouting ever gets a
+        chance to propose the first one."""
+        parsed_uuid = self._parse_uuid(target_id)
+
+        with Session(self.engine) as session:
+            total = session.exec(
+                select(func.count())
+                .select_from(AttackVector)
+                .where(AttackVector.target_id == parsed_uuid)
+            ).one()
+            if total == 0:
+                return False
+
+            unresolved = session.exec(
+                select(func.count())
+                .select_from(AttackVector)
+                .where(
+                    AttackVector.target_id == parsed_uuid,
+                    AttackVector.status.in_(
+                        [AttackVectorStatus.PENDING, AttackVectorStatus.TESTING]
+                    ),
+                )
+            ).one()
+            return unresolved == 0
 
     def delete_attack_vectors_for_target(self, target_id: str | uuid.UUID) -> None:
         """Called when a Multi Agent pipeline starts fresh (not resumed) on

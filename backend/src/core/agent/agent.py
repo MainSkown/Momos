@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
-from src.core import settings, tool_groups
+from src.core import db_manager, settings, tool_groups
 import time
 
 logger = logging.getLogger("momos.agent")
@@ -349,6 +349,15 @@ class Agent:
         # worth persisting across a pause/resume.
         self._consecutive_rejected_switch_mode: int = 0
 
+        # Which AttackVector (if any) start_attack_vector most recently
+        # selected for this run - see _set_current_attack_vector_id's own
+        # docstring. None until the agent selects one; single_agent mode's
+        # only use of the Attack Vectors workflow agent_tools.py otherwise
+        # has no concept of (that lives in
+        # roles/tools/single_agent_vector_tools.py instead - see
+        # build_agent_tools' own comment for why).
+        self._current_attack_vector_id: Optional[str] = None
+
         # (target, vector) pairs (normalized: stripped/lowercased) logged
         # with outcome="vulnerable" that have no matching
         # report_vulnerability call yet - added in _record_attack_attempt,
@@ -468,6 +477,8 @@ class Agent:
             self._get_unresolved_vulnerable_claims_count,
             self._get_model_name,
             self._set_authorized_ports,
+            self._get_current_attack_vector_id,
+            self._set_current_attack_vector_id,
             allow_shell,
             allow_install_packages,
             enabled_tools,
@@ -570,6 +581,21 @@ class Agent:
         to observe this immediately rather than only after the next
         _call_model flush."""
         self._tested_since_mode_switch = False
+
+    def _get_current_attack_vector_id(self) -> Optional[str]:
+        return self._current_attack_vector_id
+
+    def _set_current_attack_vector_id(self, attack_vector_id: Optional[str]):
+        """Live record of which AttackVector start_attack_vector most
+        recently selected (None once report_outcome resolves it, or before
+        any selection) - same synchronous-instance-attribute pattern as
+        self.mode/_current_session_name, read by
+        single_agent_vector_tools.create_report_outcome_tool so it can
+        resolve "whichever vector is current" without an id argument. Not
+        checkpointed: a resumed run has no vector left mid-selection to
+        recover (report_outcome's own tool-call either happened before the
+        pause or didn't - there's no partial state worth restoring)."""
+        self._current_attack_vector_id = attack_vector_id
 
     def _set_current_session(self, name: Optional[str], command: Optional[str]):
         """Updates the live "current session" record read by
@@ -1249,7 +1275,7 @@ class Agent:
         start_prompt: str,
         thread_id: str,
         should_interrupt: bool,
-        duration_seconds: int,
+        duration_seconds: Optional[int],
         stop_event: asyncio.Event | None = None,
         run_state: dict | None = None,
     ) -> AsyncGenerator[BaseMessage | AgentInterruptAction | AgentContextUsageEvent, None]:
@@ -1323,8 +1349,40 @@ class Agent:
             current.command if current else None,
         )
 
+        # "timer" (the default): time_left counts DOWN from duration_seconds
+        # (the budget) to 0, exactly as before run_mode existed.
+        # "until_vectors_checked": there is no required budget - duration_seconds
+        # here is instead however much elapsed time was already tracked on a
+        # resumed run (0 on a fresh one), and time_left counts UP from it;
+        # target.safety_cap_duration (optional) is checked separately as a
+        # hard ceiling, not via this same "reached 0" comparison.
+        run_mode = target.run_mode
+        safety_cap = target.safety_cap_duration
         time_left = duration_seconds
+        if run_mode == "until_vectors_checked" and time_left is None:
+            time_left = 0
         run_state["time_left"] = time_left
+
+        def _time_budget_exhausted() -> bool:
+            if run_mode == "until_vectors_checked":
+                return safety_cap is not None and time_left >= safety_cap
+            return time_left is not None and time_left <= 0
+
+        def _vectors_all_checked() -> bool:
+            return run_mode == "until_vectors_checked" and db_manager.attack_vectors_all_checked(
+                self.target_id
+            )
+
+        def _advance_time_left(delta: float) -> None:
+            nonlocal time_left
+            # until_vectors_checked counts elapsed time UP (toward the
+            # optional safety cap, or just for the stopwatch display when
+            # there's no cap); timer counts the remaining budget DOWN -
+            # same wall-clock delta either way.
+            time_left = (
+                time_left + delta if run_mode == "until_vectors_checked" else time_left - delta
+            )
+            run_state["time_left"] = time_left
 
         # The only sanctioned way for the agent to end its own run is
         # finish_task. If the model instead responds with no tool call at
@@ -1368,7 +1426,8 @@ class Agent:
 
         while (
             not stop_event.is_set()
-            and time_left > 0
+            and not _time_budget_exhausted()
+            and not _vectors_all_checked()
             and self.finish_summary is None
         ):
             loop_start = time.monotonic()
@@ -1497,8 +1556,7 @@ class Agent:
                 )
 
                 if not requires_interrupt:
-                    time_left -= (time.monotonic() - loop_start)
-                    run_state["time_left"] = time_left
+                    _advance_time_left(time.monotonic() - loop_start)
                     input_data = None
                     continue
                 else:
@@ -1516,8 +1574,7 @@ class Agent:
                     }
 
                     # Pause timer awaiting for user's action
-                    time_left -= (time.monotonic() - loop_start)
-                    run_state["time_left"] = time_left
+                    _advance_time_left(time.monotonic() - loop_start)
 
                     yield interrupt_action
 
@@ -1600,5 +1657,4 @@ class Agent:
 
                 input_data = {"messages": [SystemMessage(content=nudge_message)]}
 
-            time_left -= (time.monotonic() - loop_start)
-            run_state["time_left"] = time_left
+            _advance_time_left(time.monotonic() - loop_start)

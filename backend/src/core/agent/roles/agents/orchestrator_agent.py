@@ -191,6 +191,8 @@ class OrchestratorAgent:
         duration_seconds: Optional[int] = None,
         run_state: Optional[dict] = None,
         max_turns: Optional[int] = None,
+        run_mode: str = "timer",
+        safety_cap: Optional[int] = None,
     ) -> AsyncGenerator:
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
         existing_state = await self.app.aget_state(config)
@@ -224,5 +226,8 @@ class OrchestratorAgent:
             duration_seconds=duration_seconds,
             run_state=run_state,
             max_turns=max_turns,
+            target_id=self.target_id,
+            run_mode=run_mode,
+            safety_cap=safety_cap,
         ):
             yield event

@@ -30,6 +30,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
 from src.core import ollama_manager
 from src.core import settings as core_settings
+from src.core.agent import run_registry
 
 # --- Model capability resolution ---
 # Used whenever ollama_manager.get_model_capabilities couldn't be reached -
@@ -306,6 +307,9 @@ async def run_graph_loop(
     max_turns: Optional[int] = None,
     nudge_message: str = NUDGE_MESSAGE,
     max_consecutive_no_tool_calls: int = MAX_CONSECUTIVE_NO_TOOL_CALLS,
+    target_id: Optional[str] = None,
+    run_mode: str = "timer",
+    safety_cap: Optional[int] = None,
 ):
     """Runs `app` (a compiled LangGraph, interrupt_before=["tools"]) until
     it's done, stopped, or runs out of budget - yielding raw BaseMessages,
@@ -337,17 +341,53 @@ async def run_graph_loop(
     tracking is in use, is a plain mutable dict updated with
     `"time_left"` on every turn - same shape as agent.py's own, so
     whatever reads it (e.g. the interrupt-response handler flipping the
-    timer back to RUNNING) doesn't need a role-specific case."""
+    timer back to RUNNING) doesn't need a role-specific case.
+
+    `target_id`, when given (only the orchestrator passes it - the only
+    role whose budget running out should stop the whole pipeline), is used
+    to fan the stop signal out to every other live sub-run for that target
+    via run_registry.stop_other_runs_for_target once this loop's own
+    time_left budget is exhausted - otherwise an in-flight scouting/
+    pentesting/reporting sub-run would keep going until its own max_turns
+    or finish tool, never having shared this clock or stop_event to begin
+    with. Deliberately excludes this loop's OWN stop_event (see that
+    function's own docstring) - this loop is already returning on its own
+    account below, and setting its own stop_event too would make the
+    caller's post-loop status check misread a natural budget exhaustion as
+    a user-initiated pause. Note Target.run_mode == "until_vectors_checked"
+    needs no separate "vectors all checked" stop check here: the
+    orchestrator's own `is_done` (nothing pending/testing left) already is
+    that condition - only the time budget itself changes shape. `run_mode`/
+    `safety_cap` (passed by the orchestrator, mirroring agent.py's own):
+    "timer" counts time_left DOWN from duration_seconds to 0 as before;
+    "until_vectors_checked" counts it UP (an elapsed-time stopwatch, with
+    no required ceiling) and only stops early if `safety_cap` is set and
+    reached."""
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     time_left = duration_seconds
     if run_state is not None and time_left is not None:
         run_state["time_left"] = time_left
 
+    def _time_budget_exhausted() -> bool:
+        if run_mode == "until_vectors_checked":
+            return safety_cap is not None and time_left is not None and time_left >= safety_cap
+        return time_left is not None and time_left <= 0
+
+    def _advance_time_left(delta: float) -> None:
+        nonlocal time_left
+        if time_left is None:
+            return
+        time_left = time_left + delta if run_mode == "until_vectors_checked" else time_left - delta
+        if run_state is not None:
+            run_state["time_left"] = time_left
+
     consecutive_no_tool_calls = 0
     turns_taken = 0
 
     while not stop_event.is_set() and not is_done():
-        if time_left is not None and time_left <= 0:
+        if _time_budget_exhausted():
+            if target_id is not None:
+                run_registry.stop_other_runs_for_target(target_id, stop_event)
             return
         if max_turns is not None and turns_taken >= max_turns:
             yield AIMessage(
@@ -436,10 +476,7 @@ async def run_graph_loop(
             tool_call_names = {tc["name"] for tc in tool_calls}
 
             if not requires_interrupt(tool_call_names):
-                if time_left is not None:
-                    time_left -= _time.monotonic() - loop_start
-                    if run_state is not None:
-                        run_state["time_left"] = time_left
+                _advance_time_left(_time.monotonic() - loop_start)
                 continue
 
             loop = asyncio.get_running_loop()
@@ -449,10 +486,7 @@ async def run_graph_loop(
                 if not resume_future.done():
                     resume_future.set_result(approved)
 
-            if time_left is not None:
-                time_left -= _time.monotonic() - loop_start
-                if run_state is not None:
-                    run_state["time_left"] = time_left
+            _advance_time_left(_time.monotonic() - loop_start)
 
             yield {"kind": "interrupt", "accept": accept, "tool_calls": tool_calls}
 
@@ -506,7 +540,4 @@ async def run_graph_loop(
                 return
             input_data = {"messages": [SystemMessage(content=nudge_message)]}
 
-        if time_left is not None:
-            time_left -= _time.monotonic() - loop_start
-            if run_state is not None:
-                run_state["time_left"] = time_left
+        _advance_time_left(_time.monotonic() - loop_start)

@@ -30,6 +30,11 @@ class TargetBase(SQLModel):
     description: str | None
     ports: List[ValidPort] | None = Field(sa_column=Column(ARRAY(Integer)))
     task_duration: int | None
+    # "timer" (default): stop when task_duration elapses, like today.
+    # "until_vectors_checked": run until no AttackVector for this target is
+    # PENDING/TESTING, with safety_cap_duration as an optional hard ceiling.
+    run_mode: str = "timer"
+    safety_cap_duration: int | None = None
 
 
 class Target(TargetBase, table=True):

@@ -210,6 +210,35 @@ def cleanup_sub_run(target_id: str, agent_run_id: str) -> None:
             live_runs_for_target.pop(target_id, None)
 
 
+def stop_all_for_target(target_id: str) -> None:
+    """Signals the stop_event of every agent run currently live under this
+    target's pipeline - one, in single_agent mode, but genuinely several
+    once a multi_agent pipeline can have concurrent sub-runs in flight.
+    Used by agent_service.pause_agent, where the whole pipeline (including
+    its own root run) is meant to stop and become resumable."""
+    for agent_run_id in list(live_runs_for_target.get(target_id, ())):
+        stop_event = stop_events.get(agent_run_id)
+        if stop_event is not None:
+            stop_event.set()
+
+
+def stop_other_runs_for_target(target_id: str, own_stop_event: asyncio.Event) -> None:
+    """Like stop_all_for_target, but skips whichever live run's stop_event
+    IS own_stop_event (identity, not value). Used by roles/common.py's
+    run_graph_loop when the orchestrator's own time_left/safety-cap budget
+    runs out and its loop is about to return on its own - it only needs to
+    propagate that to its SIBLING sub-runs (scouting/pentesting/reporting),
+    which never shared its clock or stop_event to begin with and would
+    otherwise keep going until their own max_turns or finish tool. Setting
+    the orchestrator's OWN stop_event here too would make its caller's
+    post-loop status check (stop_event.is_set()) wrongly read a natural
+    budget exhaustion as a user-initiated pause."""
+    for agent_run_id in list(live_runs_for_target.get(target_id, ())):
+        stop_event = stop_events.get(agent_run_id)
+        if stop_event is not None and stop_event is not own_stop_event:
+            stop_event.set()
+
+
 def stringify_content(content) -> str:
     return content if isinstance(content, str) else str(content)
 
