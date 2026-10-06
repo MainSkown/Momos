@@ -778,12 +778,22 @@ class AgentService:
             slot_acquired = True
 
             await _set_running(project_id, target_id, True)
-            await run_registry.persist_run_state(
+            root_run = await run_registry.persist_run_state(
                 project_id=project_id,
                 target_id=target_id,
                 status=AgentRunState.RUNNING,
                 remaining_seconds=duration_seconds,
             )
+            # The real AgentRun row id - NOT agent_run_id (== target_id for
+            # single_agent, see above). AgentRunTimer/get_run_tree already
+            # report this real id as the row's own `id`; AgentContextUsage
+            # must report the SAME value so a frontend keying usage by
+            # agent_run_id (AgentLogs.vue's active-agent HoverMenu) can
+            # actually match it up with the run it's for. Sending
+            # agent_run_id (target_id) here instead - as this used to -
+            # meant single_agent's own context-usage ring could never find
+            # its entry, since nothing else ever keys a run by target_id.
+            root_run_id = str(root_run.id)
 
             await run_registry.persist_and_broadcast(
                 project_id=project_id,
@@ -813,7 +823,7 @@ class AgentService:
                             target_id=target_id,
                             used_tokens=event["used_tokens"],
                             context_window=event["context_window"],
-                            agent_run_id=agent_run_id,
+                            agent_run_id=root_run_id,
                             role=role,
                         )
                     )
