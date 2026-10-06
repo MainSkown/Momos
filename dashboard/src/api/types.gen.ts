@@ -927,6 +927,14 @@ export type ResponseTarget = {
      */
     task_duration: number | null;
     /**
+     * Run Mode
+     */
+    run_mode?: string;
+    /**
+     * Safety Cap Duration
+     */
+    safety_cap_duration?: number | null;
+    /**
      * Id
      */
     id: string;
@@ -1032,6 +1040,14 @@ export type TargetBase = {
      * Task Duration
      */
     task_duration: number | null;
+    /**
+     * Run Mode
+     */
+    run_mode?: string;
+    /**
+     * Safety Cap Duration
+     */
+    safety_cap_duration?: number | null;
 };
 
 /**

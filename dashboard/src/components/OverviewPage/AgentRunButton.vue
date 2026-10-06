@@ -8,10 +8,10 @@
   <button
     v-else-if="!showTimer && run?.status !== 'paused'"
     class="button no-border"
-    :disabled="!hasDuration"
+    :disabled="!canStart"
     @click="handleStart"
   >
-    <span v-if="hasDuration" class="material-icons-outlined"> play_arrow </span>
+    <span v-if="canStart" class="material-icons-outlined"> play_arrow </span>
     <Tooltip v-else :message="$t('targets.duration_required')">
       <span class="material-icons-outlined"> timer_off </span>
     </Tooltip>
@@ -55,7 +55,7 @@
           'timer-button--interrupted': run?.status === 'interrupted',
           'timer-button--holding': isHolding,
         }"
-        :disabled="run?.status === 'paused' && !hasDuration"
+        :disabled="run?.status === 'paused' && !canStart"
         @mouseenter="isHovering = true"
         @mouseleave="onButtonLeave"
         @mousedown="onHoldStart"
@@ -72,7 +72,7 @@
         >
           pause
         </span>
-        <span v-else class="timer-text">{{ formattedRemaining }}</span>
+        <span v-else class="timer-text">{{ timerText }}</span>
       </button>
     </Tooltip>
   </div>
@@ -223,12 +223,6 @@ function canHold(status: string | undefined): boolean {
   return status === "running" || status === "paused";
 }
 
-const holdTooltipMessage = computed(() =>
-  run.value?.status === "paused"
-    ? $t("targets.hold_to_finish_tooltip_paused")
-    : $t("targets.hold_to_finish_tooltip"),
-);
-
 const buildingLabel = computed(() => {
   if (!isBuilding.value) return null;
   return buildingStage.value
@@ -246,6 +240,16 @@ const hasDuration = computed(
   () => props.target.task_duration !== null && props.target.task_duration > 0,
 );
 
+const isUntilVectorsChecked = computed(
+  () => props.target.run_mode === "until_vectors_checked",
+);
+
+// "until_vectors_checked" has no required duration - Start is never
+// blocked by a missing one, unlike "timer" mode where hasDuration gates
+// it (see the timer_off icon/tooltip below, which stays keyed on
+// hasDuration itself since it's only ever shown in "timer" mode).
+const canStart = computed(() => isUntilVectorsChecked.value || hasDuration.value);
+
 const showTimer = computed(
   () =>
     run.value !== null &&
@@ -262,12 +266,59 @@ const remainingSeconds = computed(() => {
   return Math.max(0, run.value.remaining_seconds - elapsed);
 });
 
-const formattedRemaining = computed(() => {
-  const total = Math.max(0, Math.round(remainingSeconds.value));
+// "until_vectors_checked" has no ceiling to count down from - the backend
+// reuses the same remaining_seconds/recorded_at fields to instead track
+// elapsed time counting UP (see agent.py/roles/common.py's own comments),
+// so this is remainingSeconds' mirror: ADD the delta since recorded_at
+// instead of subtracting it.
+const elapsedSeconds = computed(() => {
+  if (!run.value) return 0;
+
+  if (run.value.status !== "running") return run.value.remaining_seconds;
+
+  const recordedAt = run.value.recorded_at ?? new Date().toISOString();
+  const elapsed = (displayNow.value - new Date(recordedAt).getTime()) / 1000;
+  return Math.max(0, run.value.remaining_seconds + elapsed);
+});
+
+function formatHms(totalSeconds: number): string {
+  const total = Math.max(0, Math.round(totalSeconds));
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+const formattedRemaining = computed(() => formatHms(remainingSeconds.value));
+const formattedElapsed = computed(() => formatHms(elapsedSeconds.value));
+
+// The timer button's own display text - the countdown in "timer" mode,
+// unchanged, or the elapsed-time stopwatch in "until_vectors_checked"
+// mode (remaining-to-safety-cap, when set, is surfaced via
+// holdTooltipMessage instead of here - see its own comment).
+const timerText = computed(() =>
+  isUntilVectorsChecked.value ? formattedElapsed.value : formattedRemaining.value,
+);
+
+// null when run_mode isn't "until_vectors_checked", or no safety cap is
+// set (unbounded) - either way, nothing to show.
+const safetyCapRemainingSeconds = computed(() => {
+  if (!isUntilVectorsChecked.value) return null;
+  const cap = props.target.safety_cap_duration;
+  if (cap === null || cap === undefined) return null;
+  return Math.max(0, cap - elapsedSeconds.value);
+});
+
+const holdTooltipMessage = computed(() => {
+  const base =
+    run.value?.status === "paused"
+      ? $t("targets.hold_to_finish_tooltip_paused")
+      : $t("targets.hold_to_finish_tooltip");
+
+  const capRemaining = safetyCapRemainingSeconds.value;
+  if (capRemaining === null) return base;
+
+  return `${base} (${formatHms(capRemaining)} ${$t("targets.to_safety_cap")})`;
 });
 
 function toolCallCommand(args: unknown): string {
@@ -335,7 +386,7 @@ async function loadBuildStatus() {
 }
 
 async function handleStart() {
-  if (!hasDuration.value) return;
+  if (!canStart.value) return;
 
   isBuilding.value = true;
   buildingStage.value = null;

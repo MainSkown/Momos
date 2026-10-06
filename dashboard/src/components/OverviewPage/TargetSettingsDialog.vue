@@ -66,7 +66,34 @@
           />
         </div> -->
 
-        <div class="input-wrapper">
+        <div class="column gap-low">
+          <label class="text-bold">{{ $t("targets.run_mode") }}</label>
+          <div class="radio-group full-width run-mode-group">
+            <input
+              id="run-mode-timer"
+              type="radio"
+              value="timer"
+              v-model="localTarget.run_mode"
+              class="radio-input"
+            />
+            <label for="run-mode-timer" class="radio-label">
+              {{ $t("targets.run_mode_timer") }}
+            </label>
+
+            <input
+              id="run-mode-vectors"
+              type="radio"
+              value="until_vectors_checked"
+              v-model="localTarget.run_mode"
+              class="radio-input"
+            />
+            <label for="run-mode-vectors" class="radio-label">
+              {{ $t("targets.run_mode_vectors") }}
+            </label>
+          </div>
+        </div>
+
+        <div v-if="localTarget.run_mode !== 'until_vectors_checked'" class="input-wrapper">
           <label class="floating-label">
             {{ $t("targets.scan_duration") }}
           </label>
@@ -84,6 +111,28 @@
                 localTarget.task_duration !== null &&
                 localTarget.task_duration !== undefined &&
                 localTarget.task_duration <= 0,
+            }"
+          />
+        </div>
+
+        <div v-else class="input-wrapper">
+          <label class="floating-label">
+            {{ $t("targets.safety_cap") }}
+          </label>
+
+          <input
+            v-model="safetyCapInput"
+            @blur="handleSafetyCapBlur"
+            type="text"
+            inputmode="numeric"
+            :placeholder="$t('targets.safety_cap_placeholder')"
+            pattern="^\d+:[0-5]\d$"
+            class="input-field border"
+            :class="{
+              'is-invalid':
+                localTarget.safety_cap_duration !== null &&
+                localTarget.safety_cap_duration !== undefined &&
+                localTarget.safety_cap_duration <= 0,
             }"
           />
         </div>
@@ -113,7 +162,14 @@ import { useMomosStore } from "@/store/momos_store.ts";
 const visible = defineModel("visible", { type: Boolean, default: false });
 const target = defineModel<tTarget>("target", { required: true });
 
-const localTarget = ref<tTarget>({ ...target.value });
+// run_mode defaults to "timer" for a target saved before this field
+// existed (the backend migrates it the same way, but a target loaded
+// before that migration ran - or before api:sync regenerated this field -
+// would otherwise leave neither radio selected).
+const localTarget = ref<tTarget>({
+  ...target.value,
+  run_mode: target.value.run_mode ?? "timer",
+});
 
 const portsInput = ref<string>(localTarget.value.ports?.join(", ") || "");
 
@@ -140,6 +196,8 @@ const isFormValid = (val?: tTarget): boolean => {
     /*domain,*/
     ports,
     task_duration,
+    run_mode,
+    safety_cap_duration,
   } = val || localTarget.value;
 
   if (name.length === 0) return false;
@@ -152,7 +210,18 @@ const isFormValid = (val?: tTarget): boolean => {
     if (!arePortsValid) return false;
   }
 
-  if (
+  // "until_vectors_checked" has no required duration - task_duration is
+  // only validated in "timer" mode; safety_cap_duration is always
+  // optional (blank/null means unbounded), just never negative/zero.
+  if (run_mode === "until_vectors_checked") {
+    if (
+      safety_cap_duration !== null &&
+      safety_cap_duration !== undefined &&
+      safety_cap_duration <= 0
+    ) {
+      return false;
+    }
+  } else if (
     task_duration !== null &&
     task_duration !== undefined &&
     task_duration <= 0
@@ -207,6 +276,56 @@ watch(durationInput, (newValue) => {
 
 const handleDurationBlur = () => {
   durationInput.value = formatTaskDuration(localTarget.value.task_duration);
+};
+
+// Same HH:MM pattern as task_duration above, but blank (not "0:00") when
+// unset - unlike task_duration, null here is a valid, meaningful value
+// ("no safety cap"), not a placeholder prompting the user to fill it in.
+const formatOptionalDuration = (total?: number | null): string => {
+  if (total === null || total === undefined) return "";
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}`;
+};
+
+const safetyCapInput = ref<string>(
+  formatOptionalDuration(localTarget.value.safety_cap_duration),
+);
+
+watch(safetyCapInput, (newValue) => {
+  const trimmed = newValue.trim();
+
+  if (!trimmed) {
+    localTarget.value.safety_cap_duration = null;
+    return;
+  }
+
+  const parts = trimmed.split(":");
+
+  if (parts.length !== 2) return;
+
+  const hoursText = parts[0];
+  const minutesText = parts[1];
+
+  if (hoursText === "" || minutesText === "") return;
+
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+
+  if (
+    Number.isFinite(hours) &&
+    Number.isFinite(minutes) &&
+    minutes >= 0 &&
+    minutes <= 59
+  ) {
+    localTarget.value.safety_cap_duration = hours * 3600 + minutes * 60;
+  }
+});
+
+const handleSafetyCapBlur = () => {
+  safetyCapInput.value = formatOptionalDuration(
+    localTarget.value.safety_cap_duration,
+  );
 };
 
 const isInvalid = (
@@ -336,6 +455,24 @@ const handleDomainInput = (event: Event): string => {
   flex: 2;
   display: flex;
   flex-direction: column;
+}
+
+/* Same technique ProjectSettingsPage.vue's .pipeline-mode-group uses -
+   side by side (the default .radio-group row direction) wraps "Until all
+   vectors checked" onto two lines inside this column's narrow width.
+   Stacked instead, each option gets the column's full width. */
+.run-mode-group {
+  flex-direction: column;
+}
+
+.run-mode-group .radio-label {
+  width: 100%;
+  margin-right: 0;
+  margin-bottom: -2px;
+}
+
+.run-mode-group .radio-label:last-of-type {
+  margin-bottom: 0;
 }
 
 .input-wrapper.description {
