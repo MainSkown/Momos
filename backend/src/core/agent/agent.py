@@ -80,20 +80,40 @@ _CHARS_PER_TOKEN_ESTIMATE = 4
 # to, not instead of, the trimmed messages, so it needs its own bound.
 _MAX_ATTACK_LOG_ENTRIES_SHOWN = 40
 
+# Same display order as orchestrator_agent.py's own _STATUS_DISPLAY_ORDER -
+# used by _render_context_message to show the live Attack Vector board.
+_STATUS_DISPLAY_ORDER = (
+    "pending",
+    "testing",
+    "tested_vulnerable",
+    "tested_not_vulnerable",
+    "inconclusive",
+)
+
 # Tool names whose success path WRITES to the exploiting-mode "proof of
-# testing" state (self.mode / self._tested_since_mode_switch - see
-# _set_mode/_mark_tested/_clear_tested below) vs. tool names whose gate
-# check READS that same state (_require_tested in agent_tools.py).
+# testing" state (self._tested_since_claim / self._current_attack_vector_id
+# - see _mark_tested/_clear_tested/_set_current_attack_vector_id below) vs.
+# tool names whose gate check READS that same state (_require_tested in
+# agent_tools.py, and single_agent_vector_tools.py's own has_tested gates).
 # LangGraph's ToolNode runs every tool call from one LLM turn concurrently
 # via asyncio.gather (confirmed against the installed langgraph source), so
 # a writer and a reader landing in the SAME turn is order-dependent, not
 # just theoretically racy - see Agent._tools_node below, which rejects the
 # whole batch outright whenever a turn mixes one of each, rather than
-# trying to out-time the race.
+# trying to out-time the race. start_attack_vector/report_outcome/
+# propose_attack_vector are referenced by their bare string names (not
+# imported constants) rather than importing single_agent_vector_tools here
+# - that module imports run_registry, which imports agent_tools, so
+# importing it from agent.py's own top level would cycle (same reason
+# run_registry.render_tool_call_content already uses bare string literals
+# for these same tool names).
 _MODE_GATE_WRITER_TOOL_NAMES = {
     agent_tools.RUN_TOOL_NAME,
     agent_tools.NEW_SESSION_TOOL_NAME,
-    agent_tools.SWITCH_MODE_TOOL_NAME,
+    # start_attack_vector resets has_tested (clear_tested()) on selection,
+    # same role switch_mode used to have ("fresh vector, fresh requirement
+    # to prove something was actually tried against it").
+    "start_attack_vector",
     # Tier 1/2 tools (create_pentest_tools/create_guided_session_tools) -
     # every one of these calls mark_tested()/updates _last_raw_output just
     # like run() does, so the same batched-with-a-reader race applies to
@@ -114,6 +134,10 @@ _MODE_GATE_WRITER_TOOL_NAMES = {
 _MODE_GATE_READER_TOOL_NAMES = {
     agent_tools.REPORT_VULNERABILITY_TOOL_NAME,
     agent_tools.ATTACK_LOG_TOOL_NAME,
+    # Both gate on has_tested() the same way report_vulnerability/
+    # log_attack_attempt do - see single_agent_vector_tools.py.
+    "report_outcome",
+    "propose_attack_vector",
 }
 
 # What should_interrupt (start_agent's optional pause-for-human-approval
@@ -128,7 +152,9 @@ _MODE_GATE_READER_TOOL_NAMES = {
 # single packet to the target, unlike nmap_scan, which does (real SYN/
 # connect scans against the live target) and so stays interrupt-gated even
 # though it's core/always-on for tool-selection purposes (tool_groups.py).
-# switch_mode is pure bookkeeping and was never included here either way.
+# propose_attack_vector/start_attack_vector/report_outcome are pure
+# bookkeeping (no target-touching side effect of their own) and are not
+# included here either.
 _INTERRUPT_GATED_TOOL_NAMES = (
     {agent_tools.RUN_TOOL_NAME, agent_tools.NEW_SESSION_TOOL_NAME, agent_tools.NMAP_SCAN_TOOL_NAME}
     | tool_groups.ALL_GROUPED_TOOL_NAMES
@@ -150,35 +176,21 @@ _ALWAYS_INTERRUPT_TOOL_NAMES = {agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME}
 
 
 def _mode_gate_conflict(names: set) -> tuple:
-    """Returns (writers, reader_like) for one turn's tool-call names.
-    reader_like is empty when there's no same-turn conflict; otherwise
-    it's the set of tool(s) that must NOT run in the same turn as the
-    other writer(s) they're paired with here, because they read state a
-    writer only sets after an await (mark_tested()) - so they'd reliably
-    read it stale if run concurrently (asyncio.gather) in the same batch.
-
-    Two cases collapse into this one helper because they're the same race
-    shape: the real _MODE_GATE_READER_TOOL_NAMES members (report_
-    vulnerability/log_attack_attempt), and switch_mode itself when paired
-    with any OTHER writer - switch_mode is bucketed as a writer (a
-    successful switch resets _tested_since_mode_switch), but its own body
-    is also a reader of that exact state (has_tested()), with no await
-    before that read, so it reliably wins the race against whatever writer
-    it's paired with. Used by both _tools_node (the actual per-turn
-    dispatch gate) and start_agent's batch_will_be_rejected pre-check
-    (which must reject the identical set of turns _tools_node will, or an
-    operator can be asked to approve a batch that's rejected anyway the
-    moment it's resumed) - kept as one function specifically so those two
-    checks can't drift apart the way they briefly did for the switch_mode
-    case."""
+    """Returns (writers, readers) for one turn's tool-call names - empty
+    reader set when there's no same-turn conflict; otherwise the reader(s)
+    that must NOT run in the same turn as the writer(s) they're paired
+    with here, because they read state a writer only sets after an await
+    (mark_tested()/clear_tested()) - so they'd reliably read it stale if
+    run concurrently (asyncio.gather) in the same batch. Used by both
+    _tools_node (the actual per-turn dispatch gate) and start_agent's
+    batch_will_be_rejected pre-check (which must reject the identical set
+    of turns _tools_node will, or an operator can be asked to approve a
+    batch that's rejected anyway the moment it's resumed) - kept as one
+    function specifically so those two checks can't drift apart."""
     writers = names & _MODE_GATE_WRITER_TOOL_NAMES
     readers = names & _MODE_GATE_READER_TOOL_NAMES
     if writers and readers:
         return writers, readers
-    if agent_tools.SWITCH_MODE_TOOL_NAME in names:
-        other_writers = writers - {agent_tools.SWITCH_MODE_TOOL_NAME}
-        if other_writers:
-            return writers, {agent_tools.SWITCH_MODE_TOOL_NAME}
     return writers, set()
 
 
@@ -194,22 +206,24 @@ class AgentState(TypedDict):
     # pause/resume for free.
     enumeration: Dict[str, Dict[str, str]]
     attack_log: List[Dict[str, str]]
-    # Current focus - "scouting" or "exploiting" (see agent_tools.py's
-    # switch_mode/VALID_MODES). Mirrors Agent.mode, which is the live,
-    # synchronously-updated source of truth (see Agent._set_mode) - this
+    # Which AttackVector (if any) start_attack_vector most recently
+    # selected - "exploiting" focus is now purely derived from this (see
+    # Agent._get_vector_mode) rather than being its own separate concept.
+    # Mirrors Agent._current_attack_vector_id, the live synchronously-
+    # updated source of truth (see _set_current_attack_vector_id) - this
     # field only exists so the value survives a pause/resume via the same
     # Postgres checkpoint as everything else.
-    mode: str
-    # Mirrors Agent._tested_since_mode_switch, the live synchronously-
-    # updated source of truth (see _mark_tested/_clear_tested/_set_mode) -
-    # same reasoning as `mode` above: without this, resuming a paused run
+    current_attack_vector_id: Optional[str]
+    # Mirrors Agent._tested_since_claim, the live synchronously-updated
+    # source of truth (see _mark_tested/_clear_tested) - same reasoning as
+    # current_attack_vector_id above: without this, resuming a paused run
     # that had genuinely tested something would come back on a fresh Agent
     # instance defaulting to False, falsely re-showing the "you have NOT
     # yet run() anything" warning even though it had.
-    tested_since_mode_switch: bool
+    tested_since_claim: bool
     # Mirrors Agent._unresolved_vulnerable_claims - see
     # _record_attack_attempt/_mark_vulnerability_reported. Same pause/resume
-    # reasoning as tested_since_mode_switch above: without this, resuming a
+    # reasoning as tested_since_claim above: without this, resuming a
     # paused run with a real outstanding "vulnerable" claim would come back
     # on a fresh Agent instance defaulting to empty, silently dropping the
     # reminder to actually report it. Checkpointed as a plain list of
@@ -317,46 +331,32 @@ class Agent:
         # Memoized by _fixed_overhead_tokens on first use - see there.
         self._cached_fixed_overhead_tokens: Optional[int] = None
 
-        # Live, synchronously-updated source of truth for the current
-        # scouting/exploiting focus (see agent_tools.py's switch_mode) -
-        # read directly by report_vulnerability/log_attack_attempt's gating
-        # via _get_mode, so a switch_mode call is visible to them
-        # immediately rather than only after the next _call_model flush.
-        # Mirrored into the checkpointed AgentState.mode field every turn
-        # (see _call_model) purely so it survives a pause/resume; restored
-        # from checkpoint in start_agent() when resuming.
-        self.mode: str = "scouting"
-
-        # Whether a real run()/new_session() call has happened since the
-        # last switch_mode call - gates report_vulnerability/
-        # log_attack_attempt alongside mode itself. Mode gating alone
-        # turned out not to be enough: observed in production, the agent
-        # called switch_mode("exploiting", ...) and then immediately
-        # log_attack_attempt + report_vulnerability with a fully fabricated
-        # CVE, exploit-db id, and CVSS score - without ever actually
-        # running anything against the target in between. Same
-        # synchronous-instance-attribute pattern as self.mode (see
-        # _get_mode/_set_mode) and the same reasoning for why: tool calls
-        # need to observe this immediately, not just after the next
-        # _call_model flush.
-        self._tested_since_mode_switch: bool = False
-
-        # Consecutive switch_mode calls rejected by the has_tested() gate
-        # above with nothing productive in between - see
-        # _note_switch_mode_rejected/_note_switch_mode_allowed and
-        # create_switch_mode_tool. Not checkpointed, same reasoning as
-        # KaliSession.confusion_streak: a live in-memory streak, not state
-        # worth persisting across a pause/resume.
-        self._consecutive_rejected_switch_mode: int = 0
-
         # Which AttackVector (if any) start_attack_vector most recently
         # selected for this run - see _set_current_attack_vector_id's own
-        # docstring. None until the agent selects one; single_agent mode's
-        # only use of the Attack Vectors workflow agent_tools.py otherwise
-        # has no concept of (that lives in
-        # roles/tools/single_agent_vector_tools.py instead - see
-        # build_agent_tools' own comment for why).
+        # docstring. None until the agent selects one; this IS the current
+        # scouting/exploiting focus now (see _get_vector_mode) rather than
+        # a separate mode concept - "exploiting" means "a vector is
+        # selected", nothing else sets or reads it. Mirrored into the
+        # checkpointed AgentState.current_attack_vector_id field every turn
+        # (see _call_model) so it survives a pause/resume; restored from
+        # checkpoint in start_agent() when resuming.
         self._current_attack_vector_id: Optional[str] = None
+
+        # Whether a real run()/new_session() call has happened since the
+        # last reset (start_attack_vector selecting a new vector, or a
+        # successful report_vulnerability/log_attack_attempt/report_outcome
+        # claim - see _mark_tested/_clear_tested) - gates those same claim
+        # tools alongside a vector actually being selected. Selection gating
+        # alone turned out not to be enough: observed in production (back
+        # when this was gated by switch_mode instead), the agent switched
+        # straight to a claim with a fully fabricated CVE, exploit-db id,
+        # and CVSS score - without ever actually running anything against
+        # the target in between. Same synchronous-instance-attribute
+        # pattern as _current_attack_vector_id (see _mark_tested/
+        # _clear_tested) and the same reasoning for why: tool calls need to
+        # observe this immediately, not just after the next _call_model
+        # flush.
+        self._tested_since_claim: bool = False
 
         # (target, vector) pairs (normalized: stripped/lowercased) logged
         # with outcome="vulnerable" that have no matching
@@ -376,7 +376,7 @@ class Agent:
         # reads this via _get_unresolved_vulnerable_claims_count. Mirrored
         # into AgentState.unresolved_vulnerable_claims every turn (as a
         # plain list of pairs - see that field's comment), same pattern as
-        # tested_since_mode_switch above, for the same pause/resume reason.
+        # tested_since_claim above, for the same pause/resume reason.
         self._unresolved_vulnerable_claims: set[tuple[str, str]] = set()
 
         # Written to by tool calls (log_attack_attempt, run()'s FACTS
@@ -393,10 +393,12 @@ class Agent:
         self._pending_attack_log: List[dict] = []
 
         # Live, synchronously-updated record of which terminal session is
-        # current and what it's running - same pattern as self.mode above,
-        # for the same reason: _render_context_message re-injects this every
-        # turn (see there) so the model can't lose track of "you're inside
-        # telnet, not a Kali shell" the same way it can't lose track of mode.
+        # current and what it's running - same pattern as
+        # _current_attack_vector_id above, for the same reason:
+        # _render_context_message re-injects this every turn (see there) so
+        # the model can't lose track of "you're inside telnet, not a Kali
+        # shell" the same way it can't lose track of which vector it's
+        # testing.
         # None until start_agent()'s pre-open of the default session sets it
         # (see there) - never checkpointed, since every session is
         # unconditionally closed at the end of any run (paused or finished,
@@ -408,7 +410,7 @@ class Agent:
         self._current_session_command: Optional[str] = None
 
         # Live, synchronously-updated override of target_scope's ports -
-        # same pattern as self.mode/_current_session_name above, and for
+        # same pattern as _current_attack_vector_id/_current_session_name above, and for
         # the same reason: request_port_access (agent_tools.py) can only
         # update the CHECKPOINTED target_scope (via _apply_granted_ports)
         # from the message-consumption loop BETWEEN graph steps, but
@@ -422,8 +424,9 @@ class Agent:
         # patch alone would only become visible one extra turn later than
         # intended. This live override is set synchronously from within
         # the tool call itself (see on_ports_changed) so the very next
-        # turn's reminder is correct immediately, exactly like self.mode
-        # already is for switch_mode. None until a grant happens; not
+        # turn's reminder is correct immediately, exactly like
+        # _current_attack_vector_id already is for start_attack_vector. None
+        # until a grant happens; not
         # checkpointed on its own - _apply_granted_ports still patches the
         # real target_scope for a paused-then-resumed run, since a fresh
         # Agent instance on resume starts this back at None.
@@ -462,11 +465,8 @@ class Agent:
             self._mark_finished,
             self._record_enumeration,
             self._record_attack_attempt,
-            self._get_mode,
-            self._set_mode,
-            self._get_tested_since_mode_switch,
-            self._note_switch_mode_rejected,
-            self._note_switch_mode_allowed,
+            self._get_vector_mode,
+            self._get_tested_since_claim,
             self._mark_tested,
             self._clear_tested,
             self._set_current_session,
@@ -537,50 +537,38 @@ class Agent:
     def _get_last_raw_output(self) -> Optional[str]:
         return self._last_raw_output
 
-    def _get_mode(self) -> str:
-        return self.mode
+    def _get_vector_mode(self) -> str:
+        """Derived, not stored - "exploiting" iff a vector is currently
+        selected, "scouting" otherwise. Passed as the `get_mode` callable
+        into create_vulnerability_tool/create_attack_log_tool (both shared
+        with other roles, which pass their own constant/real get_mode - see
+        build_agent_tools), so report_vulnerability/log_attack_attempt's
+        existing _require_tested gate keeps working unchanged while now
+        meaning "a vector is selected" instead of "switch_mode was called"."""
+        return "exploiting" if self._current_attack_vector_id is not None else "scouting"
 
-    def _set_mode(self, mode: str):
-        self.mode = mode
-        # Fresh mode, fresh requirement to prove something was actually
-        # tried in it - including re-entering "exploiting" after having
-        # left it, so a vector's confirmation can't ride on testing done
-        # for a different, earlier vector.
-        self._tested_since_mode_switch = False
-
-    def _get_tested_since_mode_switch(self) -> bool:
-        return self._tested_since_mode_switch
+    def _get_tested_since_claim(self) -> bool:
+        return self._tested_since_claim
 
     def _mark_tested(self):
-        self._tested_since_mode_switch = True
-        # Any real tool call clears the rejected-switch_mode streak too -
-        # it only grows across consecutive switch_mode calls with nothing
-        # productive in between (see _note_switch_mode_rejected).
-        self._consecutive_rejected_switch_mode = 0
-
-    def _note_switch_mode_rejected(self) -> int:
-        self._consecutive_rejected_switch_mode += 1
-        return self._consecutive_rejected_switch_mode
-
-    def _note_switch_mode_allowed(self):
-        self._consecutive_rejected_switch_mode = 0
+        self._tested_since_claim = True
 
     def _clear_tested(self):
-        """Resets the "tested since mode switch" flag right after a
-        report_vulnerability/log_attack_attempt call actually succeeds -
-        makes proof-of-testing a per-CLAIM requirement rather than a
-        per-mode-switch one. Without this, a single real run() call used to
-        unlock an unlimited number of subsequent report_vulnerability/
-        log_attack_attempt calls until the next switch_mode - closing that
-        gap this way (rather than tracking exactly which vector was tested)
-        matches the existing starting prompt, which already tells the model
-        to log "immediately after" each attempt: requiring a fresh run()
-        before the *next* claim is the intended workflow, not an extra
-        burden. Same synchronous-instance-attribute pattern as
-        _mark_tested/_set_mode - see their comments for why tool calls need
-        to observe this immediately rather than only after the next
-        _call_model flush."""
-        self._tested_since_mode_switch = False
+        """Resets the "tested since last reset" flag right after a
+        report_vulnerability/log_attack_attempt/report_outcome call
+        actually succeeds - makes proof-of-testing a per-CLAIM requirement
+        rather than a per-vector-selection one. Without this, a single real
+        run() call used to unlock an unlimited number of subsequent claims
+        until the next vector selection - closing that gap this way
+        (rather than tracking exactly which run() call went with which
+        claim) matches the existing starting prompt, which already tells
+        the model to log "immediately after" each attempt: requiring a
+        fresh run() before the *next* claim is the intended workflow, not
+        an extra burden. Same synchronous-instance-attribute pattern as
+        _mark_tested/_set_current_attack_vector_id - see their comments for
+        why tool calls need to observe this immediately rather than only
+        after the next _call_model flush."""
+        self._tested_since_claim = False
 
     def _get_current_attack_vector_id(self) -> Optional[str]:
         return self._current_attack_vector_id
@@ -589,12 +577,15 @@ class Agent:
         """Live record of which AttackVector start_attack_vector most
         recently selected (None once report_outcome resolves it, or before
         any selection) - same synchronous-instance-attribute pattern as
-        self.mode/_current_session_name, read by
+        _current_session_name, read by
         single_agent_vector_tools.create_report_outcome_tool so it can
-        resolve "whichever vector is current" without an id argument. Not
-        checkpointed: a resumed run has no vector left mid-selection to
-        recover (report_outcome's own tool-call either happened before the
-        pause or didn't - there's no partial state worth restoring)."""
+        resolve "whichever vector is current" without an id argument, and
+        by _get_vector_mode (this is now the sole source of "exploiting"
+        focus - see its own docstring). Mirrored into the checkpointed
+        AgentState.current_attack_vector_id field every turn (_call_model)
+        and restored on resume (start_agent), same as every other live
+        field here - a paused run resuming mid-selection must not silently
+        forget which vector it was testing."""
         self._current_attack_vector_id = attack_vector_id
 
     def _set_current_session(self, name: Optional[str], command: Optional[str]):
@@ -660,15 +651,14 @@ class Agent:
     async def _tools_node(self, state: AgentState, config: RunnableConfig):
         """Wraps the real ToolNode with a pre-dispatch check for the race
         described above _MODE_GATE_WRITER_TOOL_NAMES: a turn whose
-        tool_calls mix a writer (run/new_session/switch_mode/...) with a
-        reader (report_vulnerability/log_attack_attempt), OR pair
-        switch_mode with any other writer, is rejected outright - NONE of
-        that turn's calls execute for real, and every one gets a synthetic
-        ToolMessage explaining why, so the model can retry them as separate
-        turns instead. This removes the race by construction (a writer and
-        a reader - including switch_mode's own read of has_tested() - can
-        never actually run concurrently against each other) rather than
-        trying to out-time asyncio.gather."""
+        tool_calls mix a writer (run/new_session/start_attack_vector/...)
+        with a reader (report_vulnerability/log_attack_attempt/
+        report_outcome/propose_attack_vector) is rejected outright - NONE
+        of that turn's calls execute for real, and every one gets a
+        synthetic ToolMessage explaining why, so the model can retry them
+        as separate turns instead. This removes the race by construction
+        (a writer and a reader can never actually run concurrently against
+        each other) rather than trying to out-time asyncio.gather."""
         last_message: AIMessage = state["messages"][-1]
         tool_calls = last_message.tool_calls
 
@@ -676,20 +666,16 @@ class Agent:
         writers, reader_like = _mode_gate_conflict(names)
 
         if reader_like:
-            # reader_like must run AFTER writers - writers (minus
-            # reader_like itself, for the switch_mode-vs-writer case where
-            # switch_mode is a member of both sets) is what needs to go
-            # first. See _mode_gate_conflict's own docstring for why
-            # switch_mode can end up as reader_like here.
+            # reader_like must run AFTER writers.
             rejection = (
                 "Rejected: this turn called "
                 f"{', '.join(sorted(writers))} together with "
                 f"{', '.join(sorted(reader_like))} in the SAME turn - none "
                 "of these calls ran. Tool calls in one turn execute "
-                "concurrently, so a report_vulnerability/log_attack_attempt "
-                "call (or switch_mode) can't reliably see a run()/"
-                "new_session()/searchsploit_run/... result from the very "
-                "same turn. See the result of "
+                "concurrently, so a report_vulnerability/log_attack_attempt/"
+                "report_outcome/propose_attack_vector call can't reliably "
+                "see a run()/new_session()/searchsploit_run/start_attack_vector/"
+                "... result from the very same turn. See the result of "
                 f"{', '.join(sorted(writers - reader_like))} on its own "
                 f"turn FIRST, then call {', '.join(sorted(reader_like))} "
                 "on a later turn."
@@ -778,7 +764,7 @@ class Agent:
         )
 
     def _render_context_message(self, state: AgentState) -> SystemMessage:
-        """Renders the current scouting/exploiting mode plus the running
+        """Renders the live Attack Vector board plus the running
         enumeration table / attack-attempt log as one compact reminder,
         every turn - so neither the current focus nor a fact from many
         turns ago (or from before a pause/resume) depends on the model
@@ -798,31 +784,59 @@ class Agent:
         scope_reminder = self._render_target_scope_reminder(target_scope)
         lines = [scope_reminder, ""] if scope_reminder else []
 
-        mode = self.mode
-        lines.append(f"### Current mode: {mode}")
-        if mode == "scouting":
+        # Live DB read, not state carried on AgentState - the real source
+        # of truth (AttackVector rows) is written by propose_attack_vector/
+        # start_attack_vector/report_outcome as they happen, so re-deriving
+        # it fresh every turn is the only way to see the model's own recent
+        # calls reflected back to it. Same pattern/reasoning as
+        # OrchestratorAgent._render_context_message's own vector board.
+        vectors = db_manager.get_attack_vectors_for_target(self.target_id)
+        lines.append("### Attack vector board (live - trust this over your own memory of earlier turns)")
+        if not vectors:
             lines.append(
-                "Focus on enumeration - identify open ports/services and "
-                "their versions. switch_mode to \"exploiting\" once you "
-                "have a specific service/version and a candidate "
-                "vulnerability to test."
+                "(empty - nothing proposed yet. Focus on enumeration first: "
+                "identify open ports/services and their versions, then call "
+                "propose_attack_vector once you've found something worth "
+                "testing.)"
             )
         else:
+            by_status: Dict[str, list] = {}
+            for v in vectors:
+                by_status.setdefault(v.status.value, []).append(v)
+            for status in _STATUS_DISPLAY_ORDER:
+                group = by_status.get(status)
+                if not group:
+                    continue
+                lines.append(f"{status} ({len(group)}):")
+                for v in group:
+                    lines.append(f"  - {v.id}: {v.description}")
+
+        current_vector_id = self._current_attack_vector_id
+        if current_vector_id is None:
             lines.append(
-                "Focus on testing the specific vector you switched here "
-                "for. Before improvising your own exploit/payload (e.g. a "
-                "hand-rolled one-liner), check for an existing tested "
-                "approach first - e.g. searchsploit for this "
-                "service/version, or the relevant tool's own checks - and "
-                "follow a real match exactly. switch_mode back to "
-                "\"scouting\" if you need broader enumeration first."
+                "Not currently testing any vector - keep enumerating and "
+                "proposing candidates (propose_attack_vector), or call "
+                "start_attack_vector(<id>) on a \"pending\" one above to "
+                "begin testing it."
             )
-            if not self._tested_since_mode_switch:
+        else:
+            current = next((v for v in vectors if str(v.id) == current_vector_id), None)
+            description = current.description if current else "(not found - may have been removed)"
+            lines.append(f"### Currently testing: {current_vector_id} - {description}")
+            lines.append(
+                "Focus on this vector. Before improvising your own exploit/"
+                "payload (e.g. a hand-rolled one-liner), check for an "
+                "existing tested approach first - e.g. searchsploit for "
+                "this service/version, or the relevant tool's own checks - "
+                "and follow a real match exactly. Call report_outcome once "
+                "you've made the real attempt."
+            )
+            if not self._tested_since_claim:
                 lines.append(
                     "You have NOT yet run() anything against the target "
-                    "since switching to exploiting mode - report_vulnerability "
-                    "and log_attack_attempt will be refused until you do. "
-                    "Make the real attempt first."
+                    "since selecting this vector - report_vulnerability, "
+                    "log_attack_attempt, and report_outcome will all be "
+                    "refused until you do. Make the real attempt first."
                 )
 
         unresolved_count = len(self._unresolved_vulnerable_claims)
@@ -1197,8 +1211,8 @@ class Agent:
             "messages": [response],
             "enumeration": enumeration,
             "attack_log": attack_log,
-            "mode": self.mode,
-            "tested_since_mode_switch": self._tested_since_mode_switch,
+            "current_attack_vector_id": self._current_attack_vector_id,
+            "tested_since_claim": self._tested_since_claim,
             "unresolved_vulnerable_claims": [
                 list(pair) for pair in self._unresolved_vulnerable_claims
             ],
@@ -1291,15 +1305,18 @@ class Agent:
 
         if existing_state.values:
             input_data = None
-            # Restore the live mode from the checkpoint - a fresh Agent
-            # instance always starts at self.mode = "scouting" (see
-            # __init__), so resuming a paused run that had switched to
-            # "exploiting" needs this or it would silently reset. Same
-            # reasoning for tested_since_mode_switch/finish_summary - see
-            # their fields on AgentState.
-            self.mode = existing_state.values.get("mode", self.mode)
-            self._tested_since_mode_switch = existing_state.values.get(
-                "tested_since_mode_switch", self._tested_since_mode_switch
+            # Restore the live selection from the checkpoint - a fresh
+            # Agent instance always starts at
+            # self._current_attack_vector_id = None (see __init__), so
+            # resuming a paused run that had selected a vector needs this
+            # or it would silently forget which one it was testing. Same
+            # reasoning for tested_since_claim/finish_summary - see their
+            # fields on AgentState.
+            self._current_attack_vector_id = existing_state.values.get(
+                "current_attack_vector_id", self._current_attack_vector_id
+            )
+            self._tested_since_claim = existing_state.values.get(
+                "tested_since_claim", self._tested_since_claim
             )
             checkpointed_claims = existing_state.values.get("unresolved_vulnerable_claims")
             if checkpointed_claims is not None:
@@ -1533,8 +1550,7 @@ class Agent:
                 tool_call_names = {tc["name"] for tc in tool_calls}
                 # _tools_node rejects this exact turn outright (see its own
                 # docstring and _mode_gate_conflict) whenever it mixes a
-                # writer with a reader-like tool (a real reader, or
-                # switch_mode paired with another writer) - don't ask the
+                # writer with a reader tool - don't ask the
                 # user to approve a run()/new_session() call that's going
                 # to be rejected the moment it's resumed regardless of
                 # their answer; that made an approval look like a silent

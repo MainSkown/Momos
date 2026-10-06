@@ -27,7 +27,6 @@ LIST_SESSIONS_TOOL_NAME = "list_sessions"
 INTERRUPT_SESSION_TOOL_NAME = "interrupt_session"
 INSTALL_PACKAGE_TOOL_NAME = "install_kali_package"
 ATTACK_LOG_TOOL_NAME = "log_attack_attempt"
-SWITCH_MODE_TOOL_NAME = "switch_mode"
 REQUEST_PORT_ACCESS_TOOL_NAME = "request_port_access"
 
 # Tier 1 (one-shot structured tools) and Tier 2 (guided session tools) - see
@@ -55,7 +54,6 @@ READ_LOCAL_FILE_TOOL_NAME = "read_local_file"
 LIST_LOCAL_FILES_TOOL_NAME = "list_local_files"
 
 ATTACK_OUTCOMES = {"vulnerable", "not_vulnerable", "inconclusive"}
-VALID_MODES = {"scouting", "exploiting"}
 
 # Name of the session auto-opened by Agent.start_agent before the first
 # turn, and re-opened by run() as a defensive fallback if every session
@@ -2169,8 +2167,8 @@ def _ftp_active_mode_fallback(raw_output: str) -> bool:
 #   already documented above (see ftp_connect) to get a real but
 #   misleading "530 Can't change from guest user" reply.
 # - "passive": _send_ftp_passive already toggles this exactly once per
-#   session (see FTP_TOOL_BUG_REPORT.md) - it's a TOGGLE, not a setting,
-#   so the model sending it again would flip the session back to active
+#   session (see _send_ftp_passive's own docstring) - it's a TOGGLE, not a
+#   setting, so the model sending it again would flip the session back to active
 #   mode and reintroduce the exact data-connection hang that fix exists to
 #   prevent.
 # - Everything that would have the same effect indirectly ("sendport"
@@ -2259,10 +2257,9 @@ async def _send_ftp_passive(
     for every data-connection command (ls, get, put, ...); that callback
     has nowhere to land here, so the command just hangs until
     ftp_command's own read window gives up, returning little more than
-    its own echoed input (confirmed in production - see
-    FTP_TOOL_BUG_REPORT.md). Passive mode instead has the client open the
-    data connection itself, matching how curl's own FTP support already
-    behaves in this codebase.
+    its own echoed input (confirmed in production). Passive mode instead
+    has the client open the data connection itself, matching how curl's
+    own FTP support already behaves in this codebase.
 
     "passive" is ftp's own interactive TOGGLE command, not a persisted
     setting - sending it a second time on an already-passive session
@@ -2777,27 +2774,34 @@ async def _save_vulnerability(vulnerability: Vulnerability) -> Vulnerability:
 def _require_tested(
     get_mode: Callable[[], str], has_tested: Callable[[], bool], tool_name: str
 ) -> Optional[str]:
-    """Shared gate for report_vulnerability/log_attack_attempt. Mode alone
-    isn't enough - observed in production: the agent called
-    switch_mode("exploiting", ...) and then immediately reported a fully
-    fabricated CVE/CVSS score with no real run() call against the target
-    anywhere in between. This additionally requires at least one real
-    run()/new_session() call since the last switch_mode before either tool
-    can succeed, so a mode switch alone can no longer be used as a
-    substitute for actually testing something."""
+    """Shared gate for report_vulnerability/log_attack_attempt (and, via
+    pentesting_tools.create_report_outcome_tool/the reporting role's own
+    constant-pass usage, report_outcome) - "exploiting" alone isn't enough.
+    Observed in production, back when the Single Agent flow's own "mode"
+    was a free-floating toggle (switch_mode) independent of any specific
+    vector: the agent switched to exploiting and immediately reported a
+    fully fabricated CVE/CVSS score with no real run() call against the
+    target anywhere in between. get_mode()'s real meaning is caller-
+    specific now (Agent._get_vector_mode derives it from whether a vector
+    is currently selected via start_attack_vector; pentesting/reporting
+    pass a constant "exploiting" since they have nothing else to be "in")
+    - either way, this additionally requires at least one real run()/
+    new_session() call since get_mode() last became "exploiting" before
+    either tool can succeed, so entering exploiting focus alone can never
+    be used as a substitute for actually testing something."""
     if get_mode() != "exploiting":
         return (
-            "Not in exploiting mode - call switch_mode(\"exploiting\", "
-            f"<reason>) first. {tool_name} is only for a finding you have "
-            "already reproduced while actively testing a specific vector, "
-            "not while scouting."
+            "Not in exploiting mode - start_attack_vector(<id>) to select "
+            f"and begin testing a specific attack vector first. {tool_name} "
+            "is only for a finding you have already reproduced while "
+            "actively testing a specific vector, not while scouting."
         )
     if not has_tested():
         return (
             "You haven't actually run anything against the target since "
-            "switching to exploiting mode - call run() to make the real "
-            f"attempt first. {tool_name} requires a real tool result you "
-            "have seen, not just a plan for one."
+            "selecting this vector - call run() to make the real attempt "
+            f"first. {tool_name} requires a real tool result you have "
+            "seen, not just a plan for one."
         )
     return None
 
@@ -2841,10 +2845,11 @@ def create_vulnerability_tool(
     ) -> str:
         """Records a confirmed vulnerability found on the current target. Only
         call this once a finding has actually been verified - not for suspected
-        or untested issues. Only works while in "exploiting" mode, and only
-        after you have actually run something against the target since
-        switching to it - call switch_mode("exploiting", ...) first if you
-        haven't already, then run() the real attempt before this.
+        or untested issues. Only works while actively testing a specific
+        attack vector, and only after you have actually run something
+        against the target since selecting it - call
+        start_attack_vector(<id>) first if you haven't already, then run()
+        the real attempt before this.
 
         Args:
             name: A short, descriptive name for the vulnerability.
@@ -2990,9 +2995,9 @@ def create_attack_log_tool(
         running it first - "inconclusive" must mean "I tried it and the
         result was unclear", not "I thought about trying it". If you have
         not actually run the command yet, run it now instead of logging
-        anything. Only works while in "exploiting" mode - call
-        switch_mode("exploiting", ...) first if you haven't already. A
-        logged failure keeps you (and future turns) from repeating or
+        anything. Only works while actively testing a specific attack
+        vector - call start_attack_vector(<id>) first if you haven't
+        already. A logged failure keeps you (and future turns) from repeating or
         hallucinating the same attempt again. This is separate from
         report_vulnerability: a genuinely confirmed vulnerability still
         needs its own report_vulnerability call with a CVSS vector for the
@@ -3050,84 +3055,6 @@ def create_attack_log_tool(
         return f"Logged attack attempt against '{target}' ({normalized})."
 
     return log_attack_attempt
-
-
-def create_switch_mode_tool(
-    on_mode_change: Callable[[str], None],
-    has_tested: Callable[[], bool],
-    note_rejected: Callable[[], int],
-    note_allowed: Callable[[], None],
-):
-    """Builds the switch_mode tool that toggles the agent's own working
-    focus between scouting and exploiting - see agent.py's
-    _render_context_message for how the current mode is re-shown every
-    turn, and create_vulnerability_tool/create_attack_log_tool for the
-    gating this enables."""
-
-    @tool(SWITCH_MODE_TOOL_NAME)
-    async def switch_mode(mode: str, reason: str) -> str:
-        """Switches your current focus between "scouting" (broad
-        enumeration/recon) and "exploiting" (testing one specific attack
-        vector). Freely bidirectional - switch back and forth as many times
-        as you like: scout broadly, switch to exploiting to test a specific
-        finding, switch back to scouting if that didn't pan out, and so on.
-        report_vulnerability and log_attack_attempt only work while in
-        "exploiting" mode. Requires a real tool call (nmap_scan,
-        ftp_connect, run(), ...) since your last mode switch - you can't
-        switch again on thinking alone.
-
-        Args:
-            mode: Either "scouting" or "exploiting".
-            reason: A short reason for the switch, e.g. "identified the
-                service/version on 21/tcp, want to test a candidate
-                vulnerability for it" or "that attempt didn't pan out, going
-                back to enumerate the remaining ports".
-        """
-        normalized = mode.strip().lower()
-        if normalized not in VALID_MODES:
-            return f"Invalid mode '{mode}'. Use one of: {', '.join(sorted(VALID_MODES))}."
-
-        # Observed in production: after a failed tool call, the model got
-        # stuck alternating switch_mode(scouting)/switch_mode(exploiting)
-        # for several turns straight with no real tool call in between -
-        # re-deriving the same failed hypothesis each time instead of
-        # actually acting on it. has_tested() (reset by _set_mode on every
-        # switch, set by any real run()/nmap_scan/ftp_connect/...) is the
-        # same "did anything actually happen" signal report_vulnerability/
-        # log_attack_attempt already gate on - reusing it here stops a
-        # mode-flipping loop the same way.
-        if not has_tested():
-            streak = note_rejected()
-            if streak < 2:
-                return (
-                    "Rejected: you haven't run anything (a real tool call "
-                    "- nmap_scan, ftp_connect, run(), ...) since your last "
-                    "mode switch. Do something concrete first, then "
-                    "switch modes based on what it showed - switching "
-                    "back and forth without acting in between makes no "
-                    "progress."
-                )
-            # 2nd+ consecutive rejection - mechanically release instead of
-            # rejecting forever. Confirmed in production: a static
-            # rejection message repeated verbatim did not stop the model
-            # from just retrying the identical action - 18 consecutive
-            # rejections burned an entire 15-minute run. This bounds the
-            # worst case to 2 wasted turns instead, the same "mechanically
-            # resolve it, don't just keep reminding" reasoning behind
-            # promote_stuck_session (kali_manager.py).
-            note_allowed()
-            on_mode_change(normalized)
-            return (
-                f"Switched to {normalized} mode (auto-allowed after "
-                "repeated rejections - you still haven't run anything "
-                f"concrete; do that now): {reason}"
-            )
-
-        note_allowed()
-        on_mode_change(normalized)
-        return f"Switched to {normalized} mode: {reason}"
-
-    return switch_mode
 
 
 def create_terminal_tools(
@@ -3411,9 +3338,9 @@ def create_terminal_tools(
         # Opening a session launches `command` for real against the
         # container - counts as testing the same way run()'s mark_tested
         # does when input is actually sent (see the comment there). Matches
-        # what Agent.__init__'s own comment on _tested_since_mode_switch
-        # already documents as the intended gate ("a real run()/
-        # new_session() call") - this was previously never implemented.
+        # what Agent.__init__'s own comment on _tested_since_claim already
+        # documents as the intended gate ("a real run()/new_session()
+        # call") - this was previously never implemented.
         mark_tested()
         on_session_change(name, command)
         on_raw_output(initial_output)
@@ -3537,10 +3464,7 @@ def build_agent_tools(
     on_enumeration: Callable[[dict], None],
     on_attempt: Callable[[dict], None],
     get_mode: Callable[[], str],
-    on_mode_change: Callable[[str], None],
     has_tested: Callable[[], bool],
-    note_switch_mode_rejected: Callable[[], int],
-    note_switch_mode_allowed: Callable[[], None],
     mark_tested: Callable[[], None],
     clear_tested: Callable[[], None],
     on_session_change: Callable[[Optional[str], Optional[str]], None],
@@ -3611,11 +3535,6 @@ def build_agent_tools(
                 on_raw_output,
             )
         )
-    tools.append(
-        create_switch_mode_tool(
-            on_mode_change, has_tested, note_switch_mode_rejected, note_switch_mode_allowed
-        )
-    )
     tools.append(
         create_vulnerability_tool(
             project_id,

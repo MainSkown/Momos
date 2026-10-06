@@ -256,8 +256,6 @@ def render_tool_call_content(tool_name: str, args: dict) -> str:
         return str(args.get("name", ""))
     if tool_name == agent_tools.FINISH_TASK_TOOL_NAME:
         return str(args.get("summary", ""))
-    if tool_name == agent_tools.SWITCH_MODE_TOOL_NAME:
-        return f"{args.get('mode', '')}: {args.get('reason', '')}"
     if tool_name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME:
         return f"{args.get('port', '')}/{args.get('protocol', '')}: {args.get('reason', '')}"
     if tool_name == agent_tools.RUN_TOOL_NAME:
@@ -304,9 +302,12 @@ def render_tool_call_content(tool_name: str, args: dict) -> str:
         return f"{username}: {command}" if command is not None else username
     if tool_name == agent_tools.TELNET_PROBE_TOOL_NAME:
         return f"port {args.get('port', '')}"
-    # --- Multi-agent pipeline tools ---
+    # --- Attack Vector tools (multi-agent pipeline AND single_agent mode -
+    # see single_agent_vector_tools.py) ---
     if tool_name == "propose_attack_vector":
         return "; ".join(str(d) for d in args.get("descriptions", []))
+    if tool_name == "start_attack_vector":
+        return str(args.get("attack_vector_id", ""))
     if tool_name == "report_outcome":
         return f"[{args.get('outcome', '')}] {args.get('summary', '')}"
     if tool_name == "dispatch_pentest_batch":
