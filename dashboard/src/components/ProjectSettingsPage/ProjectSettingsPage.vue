@@ -17,31 +17,7 @@
             <div class="column gap-low settings-card-body">
               <div class="field-group">
                 <label class="text-bold">{{ $t("settings.pipeline_mode") }}</label>
-                <div class="radio-group full-width pipeline-mode-group">
-                  <input
-                    id="pipeline-mode-multi"
-                    type="radio"
-                    value="multi_agent"
-                    v-model="project_settings.pipeline_mode"
-                    class="radio-input"
-                    :disabled="isScanRunning"
-                  />
-                  <label for="pipeline-mode-multi" class="radio-label">
-                    {{ $t("settings.pipeline_mode_multi_agent") }}
-                  </label>
-
-                  <input
-                    id="pipeline-mode-single"
-                    type="radio"
-                    value="single_agent"
-                    v-model="project_settings.pipeline_mode"
-                    class="radio-input"
-                    :disabled="isScanRunning"
-                  />
-                  <label for="pipeline-mode-single" class="radio-label">
-                    {{ $t("settings.pipeline_mode_single_agent") }}
-                  </label>
-                </div>
+                <span class="text-gray">{{ $t("settings.pipeline_mode_multi_agent") }}</span>
               </div>
             </div>
           </div>
@@ -924,24 +900,6 @@ watch(
    instead of leaving them sized to content with empty space after. */
 .prompt-tabs-group .radio-label {
   flex: 1;
-}
-
-/* "Multi Agent"/"Single Agent" side by side (the default .radio-group row
-   direction) left each pill too narrow and wrapped its label onto two
-   lines inside the Pipeline card's own width. Stacked instead, each
-   option gets the card's full width. */
-.pipeline-mode-group {
-  flex-direction: column;
-}
-
-.pipeline-mode-group .radio-label {
-  width: 100%;
-  margin-right: 0;
-  margin-bottom: -2px;
-}
-
-.pipeline-mode-group .radio-label:last-of-type {
-  margin-bottom: 0;
 }
 
 .prompt-legend {
