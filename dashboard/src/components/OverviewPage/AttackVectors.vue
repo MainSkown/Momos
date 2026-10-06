@@ -8,7 +8,7 @@
     <div class="separator" />
 
     <div class="column attack-vectors-body">
-      <div v-if="!runningTargetId" class="text-center text-gray no-vectors">
+      <div v-if="!displayTargetId" class="text-center text-gray no-vectors">
         {{ $t("attack_vectors.no_running_target") }}
       </div>
 
@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { AttackVectorStatus } from "@/api/types.gen";
 
@@ -64,22 +64,45 @@ const COLUMNS: { status: AttackVectorStatus; labelKey: string }[] = [
 // Attack vectors are per-target, but (like AgentLogs/UserConsole) this
 // card is project-wide - only one target can ever be running in a
 // project at a time (see AgentService.start_agent's own exclusivity
-// rule), so the currently-running target is the only one with anything
-// live to show. A finished target's own board is still reachable later
-// once a dedicated view exists for it - out of scope here.
+// rule).
 const runningTargetId = computed(() => store.getRunningTarget(store.openedProject));
 
+// Which target's board to show - follows runningTargetId while a run is
+// live, but deliberately does NOT clear back to null when the run ends:
+// the last run's board stays on screen (so a finished pentest's results
+// are still readable) until a NEW run actually starts, either on the
+// same target (which wipes and repopulates it - see
+// delete_attack_vectors_for_target's own docstring on the backend) or a
+// different one in this project.
+const displayTargetId = ref<string | null>(runningTargetId.value);
+
 function vectorsFor(status: AttackVectorStatus) {
-  if (!runningTargetId.value) return [];
-  return store.getAttackVectors(runningTargetId.value).filter((v) => v.status === status);
+  if (!displayTargetId.value) return [];
+  return store.getAttackVectors(displayTargetId.value).filter((v) => v.status === status);
 }
 
 async function loadForTarget(targetID: string | null) {
   if (targetID) await store.loadAttackVectors(store.openedProject, targetID);
 }
 
-onMounted(() => loadForTarget(runningTargetId.value));
-watch(runningTargetId, (newTarget) => loadForTarget(newTarget));
+onMounted(() => loadForTarget(displayTargetId.value));
+
+watch(runningTargetId, (newTarget) => {
+  if (!newTarget) return;
+  displayTargetId.value = newTarget;
+  loadForTarget(newTarget);
+});
+
+// Switching projects entirely - the previous project's target has nothing
+// to do with this one's board, so (unlike a run simply ending) this does
+// reset back to null when nothing is running in the newly opened project.
+watch(
+  () => store.openedProject,
+  (newProject) => {
+    displayTargetId.value = store.getRunningTarget(newProject);
+    loadForTarget(displayTargetId.value);
+  },
+);
 </script>
 
 <style scoped lang="css">
