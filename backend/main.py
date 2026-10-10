@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from src.core.kali_integration import kali_registry
+from src.core.database_manager import db_manager
 from src.core.agent.agent_checkpointer import setup_checkpointer, shutdown_checkpointer
 from src.routers import (
     project_router,
@@ -13,6 +14,7 @@ from src.routers import (
     ollama_router,
     agent_router,
     vulnerability_router,
+    session_router,
 )
 from src.schemas import export_json_schema, OllamaModelsList
 
@@ -30,6 +32,14 @@ async def lifespan(app: FastAPI):
         app.state.ollama_models = []
 
     await setup_checkpointer()
+
+    # _running_targets (agent_service.py) is a plain in-memory dict, empty
+    # after every restart - any TestSession still RUNNING in the database
+    # belongs to a pipeline that was genuinely mid-execution when the
+    # backend went down, with no live task left to ever end it. See
+    # DatabaseManager.mark_orphaned_sessions_aborted's own docstring for
+    # why a PAUSED session is deliberately left untouched here.
+    db_manager.mark_orphaned_sessions_aborted()
 
     yield
     await kali_registry.shutdown()
@@ -63,5 +73,6 @@ app.include_router(kali_router, prefix="/api")
 app.include_router(ollama_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(vulnerability_router, prefix="/api")
+app.include_router(session_router, prefix="/api")
 # --- WebSockets ---
 app.include_router(websocket_router, prefix="/ws")

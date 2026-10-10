@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetAgentRunTreeData, GetTargetAgentRunTreeErrors, GetTargetAgentRunTreeResponses, GetTargetAttackVectorsData, GetTargetAttackVectorsErrors, GetTargetAttackVectorsResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, GetTargetPendingInterruptsData, GetTargetPendingInterruptsErrors, GetTargetPendingInterruptsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteTestSessionData, DeleteTestSessionErrors, DeleteTestSessionResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetProjectTestSessionsData, GetProjectTestSessionsErrors, GetProjectTestSessionsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetAgentRunTreeData, GetTargetAgentRunTreeErrors, GetTargetAgentRunTreeResponses, GetTargetAttackVectorsData, GetTargetAttackVectorsErrors, GetTargetAttackVectorsResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, GetTargetPendingInterruptsData, GetTargetPendingInterruptsErrors, GetTargetPendingInterruptsResponses, GetTestSessionAttackVectorsData, GetTestSessionAttackVectorsErrors, GetTestSessionAttackVectorsResponses, GetTestSessionData, GetTestSessionErrors, GetTestSessionLogsData, GetTestSessionLogsErrors, GetTestSessionLogsResponses, GetTestSessionResponses, GetTestSessionRunsData, GetTestSessionRunsErrors, GetTestSessionRunsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -241,6 +241,36 @@ export const updateVulnerability = <ThrowOnError extends boolean = false>(option
         ...options.headers
     }
 });
+
+/**
+ * Get Project Test Sessions
+ */
+export const getProjectTestSessions = <ThrowOnError extends boolean = false>(options: Options<GetProjectTestSessionsData, ThrowOnError>): RequestResult<GetProjectTestSessionsResponses, GetProjectTestSessionsErrors, ThrowOnError> => (options.client ?? client).get<GetProjectTestSessionsResponses, GetProjectTestSessionsErrors, ThrowOnError>({ url: '/api/project/{project_id}/sessions', ...options });
+
+/**
+ * Delete Test Session
+ */
+export const deleteTestSession = <ThrowOnError extends boolean = false>(options: Options<DeleteTestSessionData, ThrowOnError>): RequestResult<DeleteTestSessionResponses, DeleteTestSessionErrors, ThrowOnError> => (options.client ?? client).delete<DeleteTestSessionResponses, DeleteTestSessionErrors, ThrowOnError>({ url: '/api/session/{session_id}', ...options });
+
+/**
+ * Get Test Session
+ */
+export const getTestSession = <ThrowOnError extends boolean = false>(options: Options<GetTestSessionData, ThrowOnError>): RequestResult<GetTestSessionResponses, GetTestSessionErrors, ThrowOnError> => (options.client ?? client).get<GetTestSessionResponses, GetTestSessionErrors, ThrowOnError>({ url: '/api/session/{session_id}', ...options });
+
+/**
+ * Get Test Session Attack Vectors
+ */
+export const getTestSessionAttackVectors = <ThrowOnError extends boolean = false>(options: Options<GetTestSessionAttackVectorsData, ThrowOnError>): RequestResult<GetTestSessionAttackVectorsResponses, GetTestSessionAttackVectorsErrors, ThrowOnError> => (options.client ?? client).get<GetTestSessionAttackVectorsResponses, GetTestSessionAttackVectorsErrors, ThrowOnError>({ url: '/api/session/{session_id}/attack_vectors', ...options });
+
+/**
+ * Get Test Session Runs
+ */
+export const getTestSessionRuns = <ThrowOnError extends boolean = false>(options: Options<GetTestSessionRunsData, ThrowOnError>): RequestResult<GetTestSessionRunsResponses, GetTestSessionRunsErrors, ThrowOnError> => (options.client ?? client).get<GetTestSessionRunsResponses, GetTestSessionRunsErrors, ThrowOnError>({ url: '/api/session/{session_id}/runs', ...options });
+
+/**
+ * Get Test Session Logs
+ */
+export const getTestSessionLogs = <ThrowOnError extends boolean = false>(options: Options<GetTestSessionLogsData, ThrowOnError>): RequestResult<GetTestSessionLogsResponses, GetTestSessionLogsErrors, ThrowOnError> => (options.client ?? client).get<GetTestSessionLogsResponses, GetTestSessionLogsErrors, ThrowOnError>({ url: '/api/session/{session_id}/logs', ...options });
 
 /**
  * Ws Types Dummy

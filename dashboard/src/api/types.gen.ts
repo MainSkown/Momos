@@ -120,6 +120,10 @@ export type AgentLogResponse = {
      */
     role?: string | null;
     /**
+     * Session Id
+     */
+    session_id?: string | null;
+    /**
      * Id
      */
     id: string;
@@ -207,6 +211,10 @@ export type AgentRunResponse = {
      * Attack Vector Id
      */
     attack_vector_id?: string | null;
+    /**
+     * Session Id
+     */
+    session_id?: string | null;
     /**
      * Id
      */
@@ -630,7 +638,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate;
+export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate | TestSessionUpdate;
 
 /**
  * ProjectRequest
@@ -877,6 +885,10 @@ export type ResponseAttackVector = {
      */
     linked_vulnerability_id?: string | null;
     /**
+     * Session Id
+     */
+    session_id?: string | null;
+    /**
      * Id
      */
     id: string;
@@ -1013,6 +1025,20 @@ export type SendCommandMessage = {
 };
 
 /**
+ * SessionLogsResponse
+ */
+export type SessionLogsResponse = {
+    /**
+     * Items
+     */
+    items: Array<AgentLogResponse>;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * TargetBase
  */
 export type TargetBase = {
@@ -1048,6 +1074,173 @@ export type TargetBase = {
      * Safety Cap Duration
      */
     safety_cap_duration?: number | null;
+};
+
+/**
+ * TestSessionDetailResponse
+ */
+export type TestSessionDetailResponse = {
+    /**
+     * Started At
+     */
+    started_at?: string;
+    /**
+     * Ended At
+     */
+    ended_at?: string | null;
+    /**
+     * Active Seconds
+     */
+    active_seconds?: number;
+    /**
+     * Time Budget Seconds
+     */
+    time_budget_seconds?: number | null;
+    outcome?: TestSessionOutcome;
+    /**
+     * Pipeline Mode
+     */
+    pipeline_mode: string;
+    /**
+     * Max Concurrent Agents
+     */
+    max_concurrent_agents: number;
+    /**
+     * Base Model Name
+     */
+    base_model_name: string;
+    /**
+     * Orchestrator Model Name
+     */
+    orchestrator_model_name: string;
+    /**
+     * Scouting Model Name
+     */
+    scouting_model_name: string;
+    /**
+     * Pentesting Model Name
+     */
+    pentesting_model_name: string;
+    /**
+     * Reporting Model Name
+     */
+    reporting_model_name: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Vector Counts
+     */
+    vector_counts: {
+        [key: string]: number;
+    };
+    /**
+     * Vulnerability Count
+     */
+    vulnerability_count: number;
+};
+
+/**
+ * TestSessionOutcome
+ */
+export type TestSessionOutcome = 'running' | 'paused' | 'finished' | 'time_expired' | 'failed' | 'aborted';
+
+/**
+ * TestSessionResponse
+ */
+export type TestSessionResponse = {
+    /**
+     * Started At
+     */
+    started_at?: string;
+    /**
+     * Ended At
+     */
+    ended_at?: string | null;
+    /**
+     * Active Seconds
+     */
+    active_seconds?: number;
+    /**
+     * Time Budget Seconds
+     */
+    time_budget_seconds?: number | null;
+    outcome?: TestSessionOutcome;
+    /**
+     * Pipeline Mode
+     */
+    pipeline_mode: string;
+    /**
+     * Max Concurrent Agents
+     */
+    max_concurrent_agents: number;
+    /**
+     * Base Model Name
+     */
+    base_model_name: string;
+    /**
+     * Orchestrator Model Name
+     */
+    orchestrator_model_name: string;
+    /**
+     * Scouting Model Name
+     */
+    scouting_model_name: string;
+    /**
+     * Pentesting Model Name
+     */
+    pentesting_model_name: string;
+    /**
+     * Reporting Model Name
+     */
+    reporting_model_name: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+};
+
+/**
+ * TestSessionUpdate
+ *
+ * Pushed whenever a TestSession is created or its outcome/ended_at/
+ * active_seconds changes (see agent_service.py's session create/resume
+ * in start_agent and _finalize_session) - an open History list applies
+ * this directly instead of polling .../sessions, the same way
+ * AttackVectorUpdate already does for the live board.
+ */
+export type TestSessionUpdate = {
+    /**
+     * Type
+     */
+    type: 'TestSessionUpdate';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    session: TestSessionResponse;
 };
 
 /**
@@ -2090,6 +2283,226 @@ export type UpdateVulnerabilityResponses = {
 };
 
 export type UpdateVulnerabilityResponse = UpdateVulnerabilityResponses[keyof UpdateVulnerabilityResponses];
+
+export type GetProjectTestSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: {
+        /**
+         * Target Id
+         */
+        target_id?: string | null;
+        /**
+         * Outcome
+         */
+        outcome?: TestSessionOutcome | null;
+    };
+    url: '/api/project/{project_id}/sessions';
+};
+
+export type GetProjectTestSessionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectTestSessionsError = GetProjectTestSessionsErrors[keyof GetProjectTestSessionsErrors];
+
+export type GetProjectTestSessionsResponses = {
+    /**
+     * Response Getprojecttestsessions
+     *
+     * Successful Response
+     */
+    200: Array<TestSessionResponse>;
+};
+
+export type GetProjectTestSessionsResponse = GetProjectTestSessionsResponses[keyof GetProjectTestSessionsResponses];
+
+export type DeleteTestSessionData = {
+    body?: never;
+    path: {
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/session/{session_id}';
+};
+
+export type DeleteTestSessionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteTestSessionError = DeleteTestSessionErrors[keyof DeleteTestSessionErrors];
+
+export type DeleteTestSessionResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteTestSessionResponse = DeleteTestSessionResponses[keyof DeleteTestSessionResponses];
+
+export type GetTestSessionData = {
+    body?: never;
+    path: {
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/session/{session_id}';
+};
+
+export type GetTestSessionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTestSessionError = GetTestSessionErrors[keyof GetTestSessionErrors];
+
+export type GetTestSessionResponses = {
+    /**
+     * Successful Response
+     */
+    200: TestSessionDetailResponse;
+};
+
+export type GetTestSessionResponse = GetTestSessionResponses[keyof GetTestSessionResponses];
+
+export type GetTestSessionAttackVectorsData = {
+    body?: never;
+    path: {
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/session/{session_id}/attack_vectors';
+};
+
+export type GetTestSessionAttackVectorsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTestSessionAttackVectorsError = GetTestSessionAttackVectorsErrors[keyof GetTestSessionAttackVectorsErrors];
+
+export type GetTestSessionAttackVectorsResponses = {
+    /**
+     * Response Gettestsessionattackvectors
+     *
+     * Successful Response
+     */
+    200: Array<ResponseAttackVector>;
+};
+
+export type GetTestSessionAttackVectorsResponse = GetTestSessionAttackVectorsResponses[keyof GetTestSessionAttackVectorsResponses];
+
+export type GetTestSessionRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/session/{session_id}/runs';
+};
+
+export type GetTestSessionRunsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTestSessionRunsError = GetTestSessionRunsErrors[keyof GetTestSessionRunsErrors];
+
+export type GetTestSessionRunsResponses = {
+    /**
+     * Response Gettestsessionruns
+     *
+     * Successful Response
+     */
+    200: Array<AgentRunResponse>;
+};
+
+export type GetTestSessionRunsResponse = GetTestSessionRunsResponses[keyof GetTestSessionRunsResponses];
+
+export type GetTestSessionLogsData = {
+    body?: never;
+    path: {
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: {
+        /**
+         * Role
+         */
+        role?: string | null;
+        /**
+         * Agent Run Id
+         */
+        agent_run_id?: string | null;
+        /**
+         * Type
+         */
+        type?: AgentLogType | null;
+        /**
+         * Q
+         */
+        q?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+    };
+    url: '/api/session/{session_id}/logs';
+};
+
+export type GetTestSessionLogsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetTestSessionLogsError = GetTestSessionLogsErrors[keyof GetTestSessionLogsErrors];
+
+export type GetTestSessionLogsResponses = {
+    /**
+     * Successful Response
+     */
+    200: SessionLogsResponse;
+};
+
+export type GetTestSessionLogsResponse = GetTestSessionLogsResponses[keyof GetTestSessionLogsResponses];
 
 export type WsTypesData = {
     body?: never;

@@ -13,9 +13,10 @@ from src.schemas.project_scheme import (
 )
 from src.schemas.target_scheme import Target
 from src.schemas.vulnerability_scheme import Vulnerability
-from src.schemas.agent_log_scheme import AgentLog
+from src.schemas.agent_log_scheme import AgentLog, AgentLogType
 from src.schemas.agent_run_scheme import AgentRun
 from src.schemas.attack_vector_scheme import AttackVector, AttackVectorStatus
+from src.schemas.test_session_scheme import TestSession, TestSessionOutcome
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -211,6 +212,20 @@ class DatabaseManager:
             conn.execute(text("ALTER TABLE target ADD COLUMN IF NOT EXISTS safety_cap_duration INTEGER"))
             conn.commit()
 
+        # TestSession - create_all above already creates the table itself
+        # (brand new, no existing rows to migrate), but agentrun/agentlog/
+        # attackvector all predate it and need their new nullable
+        # session_id column added the same idempotent way as every other
+        # column in this method. No REFERENCES constraint here, matching
+        # this file's existing convention for every other FK-shaped column
+        # added via ALTER (agent_run_id, parent_run_id, attack_vector_id,
+        # ...) - enforced at the ORM/Python level only, not the DB's.
+        with self.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE agentrun ADD COLUMN IF NOT EXISTS session_id UUID"))
+            conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS session_id UUID"))
+            conn.execute(text("ALTER TABLE attackvector ADD COLUMN IF NOT EXISTS session_id UUID"))
+            conn.commit()
+
     def get_session(self):
         with Session(self.engine) as session:
             yield session
@@ -306,6 +321,7 @@ class DatabaseManager:
             session.exec(delete(Vulnerability).where(Vulnerability.related_to_project == parsed_uuid))
             session.exec(delete(AgentLog).where(AgentLog.project_id == parsed_uuid))
             session.exec(delete(AgentRun).where(AgentRun.project_id == parsed_uuid))
+            session.exec(delete(TestSession).where(TestSession.project_id == parsed_uuid))
             session.exec(delete(Target).where(Target.project_id == parsed_uuid))
             session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
             session.exec(delete(Project).where(Project.id == parsed_uuid))
@@ -334,6 +350,7 @@ class DatabaseManager:
             session.exec(delete(Vulnerability).where(Vulnerability.found_in == parsed_uuid))
             session.exec(delete(AgentLog).where(AgentLog.target_id == parsed_uuid))
             session.exec(delete(AgentRun).where(AgentRun.target_id == parsed_uuid))
+            session.exec(delete(TestSession).where(TestSession.target_id == parsed_uuid))
             session.exec(delete(Target).where(Target.id == parsed_uuid))
             session.commit()
 
@@ -527,14 +544,25 @@ class DatabaseManager:
     def get_attack_vectors_for_target(
         self, target_id: str | uuid.UUID
     ) -> List[AttackVector]:
+        """Scoped to the target's CURRENT session (its most recently
+        started one, live or not - see get_current_session_for_target) so
+        the Overview board and the agents' own reads (propose/
+        attack_vectors_all_checked) only ever see this run's vectors, not
+        every session this target has ever had - AttackVector rows are no
+        longer deleted on a fresh start (see TestSession's own docstring),
+        so without this scoping a target with any history would show every
+        past run's vectors mixed together. Falls back to unscoped (every
+        vector for this target) only if the target somehow has no session
+        yet at all - defensive, since start_agent always creates one
+        before anything can propose a vector."""
         parsed_uuid = self._parse_uuid(target_id)
+        current_session = self.get_current_session_for_target(parsed_uuid)
 
         with Session(self.engine) as session:
-            statement = (
-                select(AttackVector)
-                .where(AttackVector.target_id == parsed_uuid)
-                .order_by(AttackVector.created_at)
-            )
+            statement = select(AttackVector).where(AttackVector.target_id == parsed_uuid)
+            if current_session is not None:
+                statement = statement.where(AttackVector.session_id == current_session.id)
+            statement = statement.order_by(AttackVector.created_at)
             return session.exec(statement).all()
 
     def update_attack_vector(self, attack_vector: AttackVector) -> AttackVector:
@@ -547,18 +575,23 @@ class DatabaseManager:
 
     def attack_vectors_all_checked(self, target_id: str | uuid.UUID) -> bool:
         """The stop condition for Target.run_mode == "until_vectors_checked":
-        true once every AttackVector ever proposed for this target has
-        reached a terminal status (anything but PENDING/TESTING). A target
-        with zero vectors proposed yet is NOT "all checked" - it must
-        return False, or a fresh run would stop before scouting ever gets a
-        chance to propose the first one."""
+        true once every AttackVector proposed for the target's CURRENT
+        session (see get_attack_vectors_for_target's own comment on why
+        this is scoped, not every vector the target has ever had) has
+        reached a terminal status (anything but PENDING/TESTING). A
+        session with zero vectors proposed yet is NOT "all checked" - it
+        must return False, or a fresh run would stop before scouting ever
+        gets a chance to propose the first one."""
         parsed_uuid = self._parse_uuid(target_id)
+        current_session = self.get_current_session_for_target(parsed_uuid)
 
         with Session(self.engine) as session:
+            scope = [AttackVector.target_id == parsed_uuid]
+            if current_session is not None:
+                scope = [AttackVector.session_id == current_session.id]
+
             total = session.exec(
-                select(func.count())
-                .select_from(AttackVector)
-                .where(AttackVector.target_id == parsed_uuid)
+                select(func.count()).select_from(AttackVector).where(*scope)
             ).one()
             if total == 0:
                 return False
@@ -567,7 +600,7 @@ class DatabaseManager:
                 select(func.count())
                 .select_from(AttackVector)
                 .where(
-                    AttackVector.target_id == parsed_uuid,
+                    *scope,
                     AttackVector.status.in_(
                         [AttackVectorStatus.PENDING, AttackVectorStatus.TESTING]
                     ),
@@ -575,19 +608,185 @@ class DatabaseManager:
             ).one()
             return unresolved == 0
 
-    def delete_attack_vectors_for_target(self, target_id: str | uuid.UUID) -> None:
-        """Called when a Multi Agent pipeline starts fresh (not resumed) on
-        a target that already has vectors from a previous, finished run -
-        AttackVector rows are purely this-run-local bookkeeping (the
-        durable artifact of a "vulnerable" verdict is the Vulnerability
-        row it produced, which this leaves untouched), so without this a
-        new run's orchestrator would see a prior run's already-resolved
-        vectors as if they were its own: re-dispatching old "pending" ones
-        and showing stale cards on the board alongside the new run's."""
+    # --- Managing Test Sessions ---
+    def add_test_session(self, test_session: TestSession) -> TestSession:
+        return self.add_to_database(test_session)
+
+    def get_test_session(self, session_id: str | uuid.UUID) -> Optional[TestSession]:
+        parsed_uuid = self._parse_uuid(session_id)
+
+        with Session(self.engine) as session:
+            return session.get(TestSession, parsed_uuid)
+
+    def update_test_session(self, test_session: TestSession) -> TestSession:
+        with Session(self.engine) as session:
+            merged = session.merge(test_session)
+            session.commit()
+            session.refresh(merged)
+            return merged
+
+    def get_test_sessions_for_project(
+        self,
+        project_id: str | uuid.UUID,
+        target_id: str | uuid.UUID | None = None,
+        outcome: TestSessionOutcome | None = None,
+    ) -> List[TestSession]:
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            statement = select(TestSession).where(TestSession.project_id == parsed_uuid)
+            if target_id is not None:
+                statement = statement.where(TestSession.target_id == self._parse_uuid(target_id))
+            if outcome is not None:
+                statement = statement.where(TestSession.outcome == outcome)
+            statement = statement.order_by(TestSession.started_at.desc())
+            return session.exec(statement).all()
+
+    def get_current_session_for_target(
+        self, target_id: str | uuid.UUID
+    ) -> Optional[TestSession]:
+        """The target's most recently STARTED session, regardless of its
+        outcome - live while it's RUNNING/PAUSED, otherwise simply the one
+        that just ended. This is what scopes both the live board's own
+        reads (get_attack_vectors_for_target/attack_vectors_all_checked)
+        and start_agent's own paused-session-reuse check to exactly one
+        session at a time, and rolls over to the new one automatically the
+        moment a fresh start creates it - see TestSession's own module
+        docstring."""
         parsed_uuid = self._parse_uuid(target_id)
 
         with Session(self.engine) as session:
-            session.exec(delete(AttackVector).where(AttackVector.target_id == parsed_uuid))
+            statement = (
+                select(TestSession)
+                .where(TestSession.target_id == parsed_uuid)
+                .order_by(TestSession.started_at.desc())
+            )
+            return session.exec(statement).first()
+
+    def get_attack_vectors_for_session(
+        self, session_id: str | uuid.UUID
+    ) -> List[AttackVector]:
+        parsed_uuid = self._parse_uuid(session_id)
+
+        with Session(self.engine) as session:
+            statement = (
+                select(AttackVector)
+                .where(AttackVector.session_id == parsed_uuid)
+                .order_by(AttackVector.created_at)
+            )
+            return session.exec(statement).all()
+
+    def get_agent_runs_for_session(self, session_id: str | uuid.UUID) -> List[AgentRun]:
+        parsed_uuid = self._parse_uuid(session_id)
+
+        with Session(self.engine) as session:
+            statement = select(AgentRun).where(AgentRun.session_id == parsed_uuid)
+            return session.exec(statement).all()
+
+    def get_agent_logs_for_session(
+        self,
+        session_id: str | uuid.UUID,
+        role: Optional[str] = None,
+        agent_run_id: str | uuid.UUID | None = None,
+        log_type: Optional[AgentLogType] = None,
+        q: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[List[AgentLog], int]:
+        """Server-side filtered/paginated log read for one session - the
+        History Logs tab's own data source (unlike
+        get_all_agent_logs_in_project/get_agent_logs_for_run, which are
+        unfiltered and unpaginated, fine for a live single-run view but not
+        for a session that can accumulate a very large transcript over
+        its lifetime). Returns (page, total) so the caller can render
+        pagination without a second round trip."""
+        parsed_uuid = self._parse_uuid(session_id)
+
+        with Session(self.engine) as session:
+            filters = [AgentLog.session_id == parsed_uuid]
+            if role is not None:
+                filters.append(AgentLog.role == role)
+            if agent_run_id is not None:
+                filters.append(AgentLog.agent_run_id == self._parse_uuid(agent_run_id))
+            if log_type is not None:
+                filters.append(AgentLog.type == log_type)
+            if q:
+                like = f"%{q}%"
+                filters.append(
+                    (AgentLog.content.ilike(like)) | (AgentLog.tool_name.ilike(like))
+                )
+
+            total = session.exec(
+                select(func.count()).select_from(AgentLog).where(*filters)
+            ).one()
+            statement = (
+                select(AgentLog)
+                .where(*filters)
+                .order_by(AgentLog.created_at)
+                .offset(offset)
+                .limit(limit)
+            )
+            return session.exec(statement).all(), total
+
+    def delete_test_session(self, session_id: str | uuid.UUID) -> None:
+        """Removes this session's own AttackVector/AgentLog/AgentRun rows,
+        then the session itself. Vulnerability rows are untouched - they're
+        durable findings that outlive the session that produced them (see
+        TestSession's own module docstring); only the vector that reported
+        one is session-scoped, not the vulnerability."""
+        parsed_uuid = self._parse_uuid(session_id)
+
+        with Session(self.engine) as session:
+            session.exec(delete(AttackVector).where(AttackVector.session_id == parsed_uuid))
+            session.exec(delete(AgentLog).where(AgentLog.session_id == parsed_uuid))
+            session.exec(delete(AgentRun).where(AgentRun.session_id == parsed_uuid))
+            session.exec(delete(TestSession).where(TestSession.id == parsed_uuid))
+            session.commit()
+
+    def mark_orphaned_sessions_aborted(self) -> None:
+        """Called once at backend startup (main.py's lifespan).
+        _running_targets (agent_service.py) is a plain in-memory dict,
+        empty after every restart, so any session still RUNNING in the
+        database belongs to a pipeline that was genuinely mid-execution
+        when the backend went down, with no live task left to ever end it
+        - without this it would sit forever looking live in History.
+        Deliberately does NOT touch a PAUSED session - pausing has always
+        been a deliberate, resumable stopping point in this codebase
+        (AgentRunState.PAUSED already survives a restart untouched), restart
+        or not, so a paused session is not "orphaned". ended_at is set to
+        the last known activity for that session (its last log or run
+        update), not "now" - "now" would make a backend that was down for
+        hours look like the run itself lasted that long."""
+        with Session(self.engine) as session:
+            orphaned = session.exec(
+                select(TestSession).where(TestSession.outcome == TestSessionOutcome.RUNNING)
+            ).all()
+
+            for test_session in orphaned:
+                last_log_at = session.exec(
+                    select(func.max(AgentLog.created_at)).where(
+                        AgentLog.session_id == test_session.id
+                    )
+                ).one()
+                last_run_at = session.exec(
+                    select(func.max(AgentRun.recorded_at)).where(
+                        AgentRun.session_id == test_session.id
+                    )
+                ).one()
+                candidates = [t for t in (last_log_at, last_run_at) if t is not None]
+                last_activity = max(candidates) if candidates else test_session.started_at
+
+                if test_session.last_resumed_at is not None:
+                    test_session.active_seconds += max(
+                        0,
+                        int((last_activity - test_session.last_resumed_at).total_seconds()),
+                    )
+                    test_session.last_resumed_at = None
+
+                test_session.outcome = TestSessionOutcome.ABORTED
+                test_session.ended_at = last_activity
+                session.add(test_session)
+
             session.commit()
 
 

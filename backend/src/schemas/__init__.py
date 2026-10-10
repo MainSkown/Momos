@@ -4,6 +4,13 @@ from .vulnerability_scheme import Vulnerability, VulnerabilityBase, ResponseVuln
 from .agent_log_scheme import AgentLog, AgentLogBase, AgentLogResponse, AgentLogType
 from .agent_run_scheme import AgentRun, AgentRunBase, AgentRunResponse, AgentRunState, AGENT_RUN_ROLES
 from .attack_vector_scheme import AttackVector, AttackVectorBase, ResponseAttackVector, AttackVectorStatus
+from .test_session_scheme import (
+    TestSession,
+    TestSessionBase,
+    TestSessionResponse,
+    TestSessionDetailResponse,
+    TestSessionOutcome,
+)
 from .kali_scheme import *
 from .ollama_scheme import *
 
@@ -14,4 +21,5 @@ __all__ = [
     "AgentLog", "AgentLogBase", "AgentLogResponse", "AgentLogType",
     "AgentRun", "AgentRunBase", "AgentRunResponse", "AgentRunState", "AGENT_RUN_ROLES",
     "AttackVector", "AttackVectorBase", "ResponseAttackVector", "AttackVectorStatus",
+    "TestSession", "TestSessionBase", "TestSessionResponse", "TestSessionDetailResponse", "TestSessionOutcome",
 ]

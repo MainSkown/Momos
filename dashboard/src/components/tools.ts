@@ -9,6 +9,7 @@ import { ref, type Ref } from 'vue';
 export enum TOOLS_KEYS {
   OVERVIEW = 'overview',
   VULNERABILITIES = 'vulns',
+  HISTORY = 'history',
   PROJECT_CONFIGURATION = 'p_config'
 }
 
@@ -20,6 +21,10 @@ export const tools: tTool[] = [
   {
     key: TOOLS_KEYS.VULNERABILITIES,
     name: "tools.vulnerabilities",
+  },
+  {
+    key: TOOLS_KEYS.HISTORY,
+    name: "tools.history",
   },
   {
     key: TOOLS_KEYS.PROJECT_CONFIGURATION,

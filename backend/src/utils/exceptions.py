@@ -25,3 +25,13 @@ class ModelNotInstalledException(Exception):
     def __init__(self, message, model_name: str):
         super().__init__(message)
         self.model_name = model_name
+
+class SessionDoesNotExistException(Exception):
+    def __init__(self, message, session_id: str):
+        super().__init__(message)
+        self.session_id = session_id
+
+class SessionIsRunningException(Exception):
+    def __init__(self, message, session_id: str):
+        super().__init__(message)
+        self.session_id = session_id

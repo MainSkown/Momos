@@ -63,6 +63,30 @@ run_states: Dict[str, dict] = {}
 # as FINISHED (not resumable) rather than PAUSED.
 finish_intents: Dict[str, bool] = {}
 
+# target_id -> the id (str) of its current TestSession, for exactly as
+# long as that session is live (RUNNING or PAUSED) - set by
+# agent_service.start_agent right before dispatching the run (so even an
+# early persist_and_broadcast failure log, before the agent loop itself
+# starts, is still stamped), and popped once agent_service._finalize_session
+# ends the session for real (anything but PAUSED). Every AgentRun/AgentLog/
+# AttackVector created while a session is live looks itself up here by
+# target_id - the same "no caller has to thread an extra argument through"
+# approach live_runs_for_target/stop_events/etc. above already use - rather
+# than being passed session_id explicitly. See test_session_scheme.py's own
+# module docstring for why rows are stamped this way instead of snapshot-
+# copied.
+current_session_for_target: Dict[str, str] = {}
+
+
+def current_session_id_for_target(target_id: str) -> Optional[str]:
+    """Small read-only accessor for the roles/tools/* modules that build
+    AttackVector rows directly (scouting_tools.py/
+    single_agent_vector_tools.py/pentesting_tools.py) - they already know
+    target_id at tool-construction time, so this is all they need to stamp
+    a new vector's session_id themselves, the same way persist_run_state/
+    start_sub_run/persist_and_broadcast below do internally."""
+    return current_session_for_target.get(target_id)
+
 # Process-wide cap on how many agent LLM instances may run at once, across
 # every project - see config.py's GLOBAL_MAX_CONCURRENT_AGENTS.
 _global_agent_semaphore = asyncio.Semaphore(settings.GLOBAL_MAX_CONCURRENT_AGENTS)
@@ -128,6 +152,7 @@ async def persist_run_state(
     docstring for why upsert_agent_run's lookup would be wrong for it
     (it would collapse multiple concurrent same-role sub-runs onto one
     row)."""
+    session_id = current_session_for_target.get(target_id)
     run = AgentRun(
         id=uuid.UUID(agent_run_id) if agent_run_id else uuid.uuid4(),
         status=status,
@@ -137,6 +162,7 @@ async def persist_run_state(
         role=role,
         parent_run_id=uuid.UUID(parent_run_id) if parent_run_id else None,
         attack_vector_id=uuid.UUID(attack_vector_id) if attack_vector_id else None,
+        session_id=uuid.UUID(session_id) if session_id else None,
     )
 
     loop = asyncio.get_running_loop()
@@ -171,6 +197,7 @@ async def start_sub_run(
     get_agent_logs_for_run(vector.assigned_run_id) actually resolve to a
     real pentesting run's transcript."""
     loop = asyncio.get_running_loop()
+    session_id = current_session_for_target.get(target_id)
     run = AgentRun(
         status=AgentRunState.RUNNING,
         remaining_seconds=0,
@@ -179,6 +206,7 @@ async def start_sub_run(
         role=role,
         parent_run_id=uuid.UUID(parent_run_id) if parent_run_id else None,
         attack_vector_id=uuid.UUID(attack_vector_id) if attack_vector_id else None,
+        session_id=uuid.UUID(session_id) if session_id else None,
     )
     saved = await loop.run_in_executor(None, db_manager.add_to_database, run)
 
@@ -366,6 +394,7 @@ async def persist_and_broadcast(
     agent_run_id: Optional[str] = None,
     role: Optional[str] = None,
 ) -> AgentLog:
+    session_id = current_session_for_target.get(target_id)
     log = AgentLog(
         type=log_type,
         content=content,
@@ -375,6 +404,7 @@ async def persist_and_broadcast(
         target_id=target_id,
         agent_run_id=uuid.UUID(agent_run_id) if agent_run_id else None,
         role=role,
+        session_id=uuid.UUID(session_id) if session_id else None,
     )
 
     loop = asyncio.get_running_loop()

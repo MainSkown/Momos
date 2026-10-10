@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from src.core import db_manager, ollama_manager, settings, tool_groups
 from src.core.agent import Agent
@@ -14,6 +15,7 @@ from src.schemas.project_scheme import (
 )
 from src.schemas.agent_run_scheme import AgentRun, AgentRunState
 from src.schemas.attack_vector_scheme import AttackVector
+from src.schemas.test_session_scheme import TestSession, TestSessionOutcome
 from src.utils.exceptions import (
     ProjectDoesNotExistException,
     TargetDoesNotExistException,
@@ -30,7 +32,9 @@ from src.websocket import (
     AgentRunStatus,
     AgentContextUsage,
     KaliCreationStageMessage,
+    TestSessionUpdate,
 )
+from src.schemas.test_session_scheme import TestSessionResponse
 
 # target_id -> project_id, for every target currently running an agent
 # PIPELINE (one root run; in single_agent mode that's the one and only run,
@@ -169,6 +173,72 @@ def _capability_note(project_settings: ProjectSettings) -> str:
             "installed; you have no way to add anything else."
         )
     return ""
+
+
+def _time_budget_exhausted(target: Target, run_state: dict) -> bool:
+    """Classifies, AFTER a run's loop has already exited on its own (not
+    via pause/finish), whether that was a time-budget expiry or something
+    else (finish_task / the orchestrator's own is_done) - mirrors
+    roles/common.py's run_graph_loop/_time_budget_exhausted and agent.py's
+    single-agent equivalent exactly, but is not itself a second source of
+    truth the loop obeys: those two decide when to actually stop, this
+    only reads the same run_state afterward to label the TestSession
+    outcome (see _finalize_session) as FINISHED vs TIME_EXPIRED."""
+    time_left = run_state.get("time_left")
+    if time_left is None:
+        return False
+    if target.run_mode == "until_vectors_checked":
+        return (
+            target.safety_cap_duration is not None
+            and time_left >= target.safety_cap_duration
+        )
+    return time_left <= 0
+
+
+async def _broadcast_session(test_session: TestSession) -> None:
+    await ws_registry.send_message(
+        TestSessionUpdate(
+            type=WsTypes.TestSessionUpdate,
+            project_id=str(test_session.project_id),
+            target_id=str(test_session.target_id),
+            session=TestSessionResponse.model_validate(test_session),
+        )
+    )
+
+
+async def _finalize_session(target_id: str, outcome: "TestSessionOutcome") -> None:
+    """Called once per whole pipeline (not per sub-run - a multi_agent
+    session spans many), right after _run_agent/_run_orchestrator's own
+    post-loop AgentRunState decision (or from finish_agent's direct
+    PAUSED->FINISHED shortcut, which has no loop of its own to fall out
+    of). Folds the just-ended running interval into active_seconds and,
+    for every outcome but PAUSED (still resumable), ends the session and
+    clears run_registry.current_session_for_target so the NEXT
+    start_agent for this target knows to create a fresh session instead of
+    mistakenly resuming this now-finished one."""
+    session_id = run_registry.current_session_for_target.get(target_id)
+    if session_id is None:
+        return
+
+    test_session = db_manager.get_test_session(session_id)
+    if test_session is None:
+        run_registry.current_session_for_target.pop(target_id, None)
+        return
+
+    now = datetime.now(timezone.utc)
+    if test_session.last_resumed_at is not None:
+        test_session.active_seconds += max(
+            0, int((now - test_session.last_resumed_at).total_seconds())
+        )
+
+    test_session.outcome = outcome
+    test_session.last_resumed_at = None
+    if outcome != TestSessionOutcome.PAUSED:
+        test_session.ended_at = now
+        run_registry.current_session_for_target.pop(target_id, None)
+
+    test_session = db_manager.update_test_session(test_session)
+    await _broadcast_session(test_session)
 
 
 def _render_start_prompt(
@@ -326,21 +396,87 @@ class AgentService:
             else:
                 await agent_checkpointer.checkpointer.adelete_thread(target_id)
 
-        if not resuming_paused_run:
+        # TestSession create/resume - see test_session_scheme.py's own
+        # module docstring. A resumable AgentRun implies its TestSession is
+        # PAUSED too (both flip together in _finalize_session/pause_agent),
+        # but a session is independently user-deletable (DELETE
+        # /session/{id} only rejects RUNNING ones), so a human could in
+        # principle have deleted the paused session's row between pause and
+        # resume - fall back to a fresh session rather than resume a
+        # reference that no longer exists.
+        if resuming_paused_run:
+            test_session = db_manager.get_current_session_for_target(target_id)
+            if test_session is None or test_session.outcome != TestSessionOutcome.PAUSED:
+                test_session = None
+        else:
+            test_session = None
+
+        now = datetime.now(timezone.utc)
+        if test_session is not None:
+            test_session.outcome = TestSessionOutcome.RUNNING
+            test_session.last_resumed_at = now
+            test_session = db_manager.update_test_session(test_session)
+        else:
             # Scouting (multi_agent) / the agent's own propose_attack_vector
             # tool (single_agent) is about to start proposing vectors again
             # from scratch (the checkpoint was just cleared above), but
-            # AttackVector rows aren't checkpointed - without this, leftover
-            # vectors from a previous, already-finished run on this same
-            # target would still look live to the new run (re-dispatched if
-            # "pending" in multi_agent, re-offered to pick up in
-            # single_agent, shown as stale board cards either way). Applies
-            # regardless of pipeline mode or run_mode - a single_agent
-            # Target can propose/resolve vectors too now. See
-            # delete_attack_vectors_for_target's own docstring for why this
-            # is safe: the Vulnerability rows a prior run produced are a
-            # separate, untouched table.
-            db_manager.delete_attack_vectors_for_target(target_id)
+            # AttackVector rows aren't checkpointed. A fresh TestSession is
+            # what scopes those new vectors away from any previous
+            # session's (see DatabaseManager.get_attack_vectors_for_target)
+            # instead of the old delete_attack_vectors_for_target wipe this
+            # replaces: that gave a new run a clean board by destroying
+            # history, this gives it a clean board by giving it its own
+            # session to write into, leaving every prior session's vectors
+            # exactly where History can still find them.
+            test_session = db_manager.add_test_session(
+                TestSession(
+                    project_id=project_id,
+                    target_id=target_id,
+                    outcome=TestSessionOutcome.RUNNING,
+                    time_budget_seconds=target.task_duration,
+                    last_resumed_at=now,
+                    pipeline_mode=project_settings.pipeline_mode,
+                    max_concurrent_agents=project_settings.max_concurrent_agents,
+                    base_model_name=project_settings.base_model_name,
+                    # Resolved, not raw - an empty per-role field means
+                    # "falls back to base_model_name at runtime" (see
+                    # _prepare_and_run_orchestrator's own identical
+                    # fallback below, and orchestrator_tools.py's
+                    # create_run_scouting_tool/dispatch_pentest_batch/
+                    # request_report, which resolve scouting/pentesting/
+                    # reporting the same way) - storing the raw empty
+                    # string here would make History's config snapshot
+                    # show "-" for a role that actually ran on
+                    # base_model_name the whole time.
+                    orchestrator_model_name=(
+                        project_settings.orchestrator_model_name
+                        or project_settings.base_model_name
+                    ),
+                    scouting_model_name=(
+                        project_settings.scouting_model_name
+                        or project_settings.base_model_name
+                    ),
+                    pentesting_model_name=(
+                        project_settings.pentesting_model_name
+                        or project_settings.base_model_name
+                    ),
+                    reporting_model_name=(
+                        project_settings.reporting_model_name
+                        or project_settings.base_model_name
+                    ),
+                )
+            )
+
+        # Every AgentRun/AgentLog/AttackVector created from here on for
+        # this target looks itself up here by target_id
+        # (run_registry.py's persist_run_state/start_sub_run/
+        # persist_and_broadcast, and the vector-creating tools via
+        # current_session_id_for_target) - see that dict's own module-level
+        # comment. Set before the task below is even dispatched so an early
+        # failure log (_prepare_and_run's own except block, before the
+        # agent loop itself starts) is still stamped correctly.
+        run_registry.current_session_for_target[target_id] = str(test_session.id)
+        await _broadcast_session(test_session)
 
         # Blocking install check - unlike _prepare_and_run's own best-effort
         # capabilities lookup (kept as-is, for reasoning/context_window),
@@ -631,6 +767,13 @@ class AgentService:
                 agent_run_id=str(existing_run.id),
                 role=role,
             )
+            # No loop to fall out of in this path (there was never a live
+            # run to begin with) - _run_agent/_run_orchestrator's own
+            # post-loop _finalize_session call never runs, so it's done
+            # here instead. The session is still PAUSED (current_session_
+            # for_target was never cleared when it paused) so this
+            # resolves exactly like a live finish would.
+            await _finalize_session(target_id, TestSessionOutcome.FINISHED)
 
     @staticmethod
     def get_run(project_id: str, target_id: str) -> Optional[AgentRun]:
@@ -912,6 +1055,19 @@ class AgentService:
                 status=final_status,
                 remaining_seconds=final_remaining,
             )
+            # TestSession outcome - PAUSED mirrors final_status exactly;
+            # otherwise a real finish/finish_task always reads as FINISHED,
+            # and a natural exit that wasn't one of those is TIME_EXPIRED
+            # only if the time budget/safety cap actually ran out (see
+            # _time_budget_exhausted) - distinct from final_status above,
+            # which collapses both of those into the same AgentRunState.
+            if final_status == AgentRunState.PAUSED:
+                session_outcome = TestSessionOutcome.PAUSED
+            elif finished_by_request or not _time_budget_exhausted(target, run_state):
+                session_outcome = TestSessionOutcome.FINISHED
+            else:
+                session_outcome = TestSessionOutcome.TIME_EXPIRED
+            await _finalize_session(target_id, session_outcome)
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
             await run_registry.persist_and_broadcast(
@@ -934,6 +1090,7 @@ class AgentService:
                 status=AgentRunState.FAILED,
                 remaining_seconds=run_state.get("time_left", 0),
             )
+            await _finalize_session(target_id, TestSessionOutcome.FAILED)
         finally:
             manager = await kali_registry.get_manager_if_exists(project_id)
             if manager is not None:
@@ -1082,6 +1239,20 @@ class AgentService:
                 agent_run_id=agent_run_id,
                 role=role,
             )
+            # TestSession outcome - see _run_agent's own identical comment;
+            # the orchestrator's natural "done" condition (nothing pending/
+            # testing left - OrchestratorAgent._is_done) and the single
+            # agent's finish_task both just mean "not a time-budget expiry"
+            # here, so _time_budget_exhausted alone is enough to tell them
+            # apart from TIME_EXPIRED without needing to know which one it
+            # actually was.
+            if final_status == AgentRunState.PAUSED:
+                session_outcome = TestSessionOutcome.PAUSED
+            elif finished_by_request or not _time_budget_exhausted(target, run_state):
+                session_outcome = TestSessionOutcome.FINISHED
+            else:
+                session_outcome = TestSessionOutcome.TIME_EXPIRED
+            await _finalize_session(target_id, session_outcome)
         except Exception as e:
             print(f"Orchestrator run failed for target {target_id}: {e}")
             await run_registry.persist_and_broadcast(
@@ -1100,6 +1271,7 @@ class AgentService:
                 agent_run_id=agent_run_id,
                 role=role,
             )
+            await _finalize_session(target_id, TestSessionOutcome.FAILED)
         finally:
             # The orchestrator itself never opens a Kali session (it never
             # touches the target - see OrchestratorAgent's own docstring),

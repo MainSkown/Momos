@@ -51,6 +51,16 @@ class AttackVectorBase(SQLModel):
     linked_vulnerability_id: Optional[uuid.UUID] = Field(
         default=None, foreign_key="vulnerability.id"
     )
+    # Which TestSession this vector belongs to - stamped at creation time
+    # (scouting_tools.py/single_agent_vector_tools.py/pentesting_tools.py,
+    # via run_registry.current_session_for_target), never snapshot-copied.
+    # A fresh start no longer deletes a target's previous vectors (see
+    # agent_service.start_agent) - this is what still keeps the live board/
+    # until_vectors_checked scoped to only the current session instead of
+    # every past one too - see DatabaseManager.get_attack_vectors_for_target.
+    session_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="testsession.id"
+    )
 
 
 class AttackVector(AttackVectorBase, table=True):

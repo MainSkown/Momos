@@ -17,6 +17,13 @@ import {
   getTargetAttackVectors,
   type ResponseAttackVector,
   type AttackVectorUpdate,
+  getProjectTestSessions,
+  getTestSession,
+  deleteTestSession,
+  type TestSessionResponse,
+  type TestSessionDetailResponse,
+  type TestSessionOutcome,
+  type TestSessionUpdate as TestSessionUpdateMessage,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -47,6 +54,19 @@ interface State {
   };
   attack_vectors: {
     [target_id: string]: ResponseAttackVector[];
+  };
+  // History's own state - a project-keyed list (for HistoryList.vue,
+  // refreshed via loadSessions whenever the project or its filters
+  // change) plus a session-keyed detail cache (for SessionDetail.vue,
+  // loaded on demand - see loadSessionDetail). Kept separate because the
+  // list and the detail carry different shapes (TestSessionDetailResponse
+  // adds vector_counts/vulnerability_count, derived server-side only for
+  // one session at a time).
+  sessions: {
+    [project_id: string]: TestSessionResponse[];
+  };
+  session_detail: {
+    [session_id: string]: TestSessionDetailResponse;
   };
 }
 
@@ -99,6 +119,54 @@ function registerAttackVectorHook() {
   });
 }
 
+// Same singleton-guarded pattern as registerRunningTargetHook/
+// registerAttackVectorHook above - loadSessions/loadSessionDetail can be
+// called repeatedly (once per History mount, once per project/filter
+// change) without ever stacking duplicate TestSessionUpdate hooks.
+let testSessionHookRegistered = false;
+
+function registerTestSessionHook() {
+  if (testSessionHookRegistered) return;
+  testSessionHookRegistered = true;
+
+  const ws_client = useWebSocketClient();
+  ws_client.add_hook("TestSessionUpdate", (message) => {
+    if (message.error) return;
+
+    const update = message as TestSessionUpdateMessage;
+    const store = useMomosStore();
+
+    const list = store.sessions[update.project_id] ?? [];
+    const index = list.findIndex((s) => s.id === update.session.id);
+
+    if (index === -1) {
+      // A brand new session (a fresh Start, or a resume flipping a paused
+      // one back to running - both still come through as a fresh row the
+      // list hasn't seen yet if it was loaded before this target's
+      // pipeline started) - prepended, not appended: History always
+      // lists newest-first, same as the initial loadSessions ordering.
+      store.sessions[update.project_id] = [update.session, ...list];
+    } else {
+      list[index] = update.session;
+      store.sessions[update.project_id] = list;
+    }
+
+    // Patches an already-open SessionDetail's header live (outcome/
+    // ended_at/active_seconds) - vector_counts/vulnerability_count are
+    // left untouched here (this message doesn't carry them; they already
+    // update live of their own accord via the existing AttackVectorUpdate
+    // hook driving the Attack Vectors tab, and a stale count in the
+    // header alone is a minor, self-correcting-on-reload cost).
+    const existingDetail = store.session_detail[update.session.id];
+    if (existingDetail) {
+      store.session_detail[update.session.id] = {
+        ...existingDetail,
+        ...update.session,
+      };
+    }
+  });
+}
+
 export const useMomosStore = defineStore("momos", {
   state: (): State => ({
     projects: [],
@@ -109,6 +177,8 @@ export const useMomosStore = defineStore("momos", {
     running_targets: {},
     project_settings: {},
     attack_vectors: {},
+    sessions: {},
+    session_detail: {},
   }),
 
   getters: {
@@ -121,6 +191,9 @@ export const useMomosStore = defineStore("momos", {
       state.project_settings[projectID] ?? null,
     getAttackVectors: (state) => (targetID: string) =>
       state.attack_vectors[targetID] ?? [],
+    getSessions: (state) => (projectID: string) => state.sessions[projectID] ?? [],
+    getSessionDetail: (state) => (sessionID: string) =>
+      state.session_detail[sessionID] ?? null,
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -298,6 +371,56 @@ export const useMomosStore = defineStore("momos", {
       }
 
       this.attack_vectors[targetID] = result.data;
+    },
+
+    /* --- History --- */
+    async loadSessions(
+      projectID: string,
+      filters?: { target_id?: string; outcome?: TestSessionOutcome },
+    ) {
+      registerTestSessionHook();
+
+      const result = await getProjectTestSessions({
+        path: { project_id: projectID },
+        query: {
+          target_id: filters?.target_id,
+          outcome: filters?.outcome,
+        },
+      });
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load sessions for project: " + projectID);
+      }
+
+      this.sessions[projectID] = result.data;
+    },
+
+    async loadSessionDetail(sessionID: string): Promise<TestSessionDetailResponse> {
+      registerTestSessionHook();
+
+      const result = await getTestSession({ path: { session_id: sessionID } });
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load session: " + sessionID);
+      }
+
+      this.session_detail[sessionID] = result.data;
+      return result.data;
+    },
+
+    async deleteSession(sessionID: string) {
+      const result = await deleteTestSession({ path: { session_id: sessionID } });
+
+      if (result.response?.status !== 204) {
+        throw Error("Could not delete session: " + sessionID);
+      }
+
+      delete this.session_detail[sessionID];
+      for (const projectID of Object.keys(this.sessions)) {
+        this.sessions[projectID] = (this.sessions[projectID] ?? []).filter(
+          (s) => s.id !== sessionID,
+        );
+      }
     },
 
     /* --- Commands --- */
