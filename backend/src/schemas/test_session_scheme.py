@@ -100,8 +100,15 @@ class TestSessionResponse(TestSessionBase):
 
 
 class TestSessionDetailResponse(TestSessionResponse):
-    # Derived at read time (see DatabaseManager.get_test_session_detail) -
+    # Derived at read time (see TestSessionService.get_session_detail) -
     # not stored, so these can never go stale relative to the actual
     # vector/vulnerability rows.
     vector_counts: dict[str, int]
     vulnerability_count: int
+
+
+# Default/max page size for the session Logs tab's own pagination
+# (DatabaseManager.get_agent_logs_for_session / TestSessionService.
+# get_session_logs / session_router.py's GetTestSessionLogs) - one shared
+# constant instead of the same literal repeated across all three layers.
+DEFAULT_LOG_PAGE_SIZE = 200

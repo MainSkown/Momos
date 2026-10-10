@@ -7,7 +7,14 @@
       </div>
     </div>
 
-    <div v-if="!detail" class="text-center text-gray loading-placeholder">…</div>
+    <div v-if="loadError" class="column flex-center loading-placeholder">
+      <span class="text-gray">{{ $t("history.load_failed") }}</span>
+      <div class="button border retry-button" @click="loadSessionData">
+        {{ $t("history.retry") }}
+      </div>
+    </div>
+
+    <div v-else-if="!detail" class="text-center text-gray loading-placeholder">…</div>
 
     <template v-else>
       <div class="border session-meta">
@@ -21,10 +28,7 @@
 
         <div class="row gap-mid session-meta-row text-gray">
           <span>{{ $t("history.started_at") }}: {{ formatDateTime(detail.started_at) }}</span>
-          <span>
-            {{ $t("history.ended_at") }}:
-            {{ detail.ended_at ? formatDateTime(detail.ended_at) : $t("history.not_ended") }}
-          </span>
+          <span>{{ $t("history.ended_at") }}: {{ formatDateTime(detail.ended_at) }}</span>
           <span>{{ $t("history.active_duration") }}: {{ formattedActiveDuration }} {{ budgetLabel }}</span>
         </div>
 
@@ -100,11 +104,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { toast } from "vue3-toastify";
 import { useMomosStore } from "@/store/momos_store";
 import { getTestSessionAttackVectors, type ResponseAttackVector } from "@/api";
 import AttackVectors from "../OverviewPage/AttackVectors.vue";
 import SessionLogs from "./SessionLogs.vue";
-import { formatDuration, OUTCOME_CLASS, OUTCOME_LABEL_KEYS } from "./historyUtils";
+import { formatDateTime, formatDuration, OUTCOME_CLASS, OUTCOME_LABEL_KEYS } from "./historyUtils";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
@@ -156,11 +161,6 @@ const pipelineModeLabel = computed(() =>
     ? $t("settings.pipeline_mode_multi_agent")
     : $t("settings.pipeline_mode_single_agent"),
 );
-
-function formatDateTime(iso: string | undefined): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString();
-}
 
 const VECTOR_STATUS_ORDER = [
   "pending",
@@ -219,11 +219,26 @@ function onSelectVector(vector: ResponseAttackVector) {
   activeTab.value = "logs";
 }
 
-onMounted(async () => {
-  await store.loadSessionDetail(props.sessionId);
-  await store.loadTargets(detail.value?.project_id ?? store.openedProject);
-  await loadVectors();
-});
+const loadError = ref(false);
+
+async function loadSessionData() {
+  loadError.value = false;
+  try {
+    await store.loadSessionDetail(props.sessionId);
+    await store.loadTargets(detail.value?.project_id ?? store.openedProject);
+    await loadVectors();
+  } catch (err) {
+    // loadSessionDetail/loadTargets/loadVectors all throw on a failed/
+    // empty response (same pattern as deleteProject/loadAttackVectors) -
+    // uncaught, this left `detail` null forever with no feedback beyond
+    // the indefinite "…" placeholder.
+    console.error("Could not load session:", err);
+    loadError.value = true;
+    toast.error($t("history.load_failed"), { position: toast.POSITION.TOP_CENTER });
+  }
+}
+
+onMounted(loadSessionData);
 </script>
 
 <style scoped lang="css">
@@ -254,6 +269,11 @@ onMounted(async () => {
 
 .loading-placeholder {
   margin: auto;
+  gap: 10px;
+}
+
+.retry-button {
+  width: fit-content;
 }
 
 .session-meta {

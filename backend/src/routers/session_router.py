@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from src.schemas import (
     AgentLogResponse,
     AgentLogType,
-    AgentRunResponse,
+    DEFAULT_LOG_PAGE_SIZE,
     ResponseAttackVector,
     TestSessionDetailResponse,
     TestSessionOutcome,
@@ -21,6 +21,20 @@ router = APIRouter()
 class SessionLogsResponse(BaseModel):
     items: List[AgentLogResponse]
     total: int
+    # The page's actual starting offset - always equal to the `offset`
+    # query param, except when `from_end=True` resolved it server-side
+    # (see TestSessionService.get_session_logs) - returned so the caller
+    # never has to compute it itself.
+    offset: int
+
+
+class SessionRunOption(BaseModel):
+    """One filterable (agent_run_id, role) pair for the Logs tab's own
+    sub-run dropdown - deliberately not a full AgentRunResponse (see
+    DatabaseManager.get_run_options_for_session's own docstring for why
+    this isn't backed by the AgentRun table at all)."""
+    agent_run_id: str
+    role: Optional[str] = None
 
 
 @router.get(
@@ -78,12 +92,15 @@ def get_test_session_attack_vectors(session_id: str):
 
 @router.get(
     "/session/{session_id}/runs",
-    response_model=List[AgentRunResponse],
+    response_model=List[SessionRunOption],
     operation_id="GetTestSessionRuns",
 )
 def get_test_session_runs(session_id: str):
     try:
-        return TestSessionService.get_session_runs(session_id)
+        return [
+            SessionRunOption(agent_run_id=str(agent_run_id), role=role)
+            for agent_run_id, role in TestSessionService.get_session_runs(session_id)
+        ]
     except SessionDoesNotExistException as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception:
@@ -104,11 +121,16 @@ def get_test_session_logs(
     agent_run_id: Optional[str] = None,
     type: Optional[AgentLogType] = None,
     q: Optional[str] = None,
-    limit: int = 200,
+    limit: int = DEFAULT_LOG_PAGE_SIZE,
     offset: int = 0,
+    # True lands on the LAST page of the current filters in one request -
+    # the usual "see how it ended" entry point for opening a session -
+    # instead of the client probing for `total` first just to compute
+    # that offset itself (see get_agent_logs_for_session's own docstring).
+    from_end: bool = False,
 ):
     try:
-        items, total = TestSessionService.get_session_logs(
+        items, total, effective_offset = TestSessionService.get_session_logs(
             session_id,
             role=role,
             agent_run_id=agent_run_id,
@@ -116,8 +138,9 @@ def get_test_session_logs(
             q=q,
             limit=limit,
             offset=offset,
+            from_end=from_end,
         )
-        return SessionLogsResponse(items=items, total=total)
+        return SessionLogsResponse(items=items, total=total, offset=effective_offset)
     except SessionDoesNotExistException as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception:

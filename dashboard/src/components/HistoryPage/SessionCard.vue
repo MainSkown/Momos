@@ -65,7 +65,7 @@ import { toast } from "vue3-toastify";
 import { useMomosStore } from "@/store/momos_store";
 import type { TestSessionResponse } from "@/api";
 import Dialog from "../reusable/Dialog.vue";
-import { formatDuration, OUTCOME_CLASS, OUTCOME_LABEL_KEYS } from "./historyUtils";
+import { formatDateTime, formatDuration, OUTCOME_CLASS, OUTCOME_LABEL_KEYS } from "./historyUtils";
 
 const { t: $t } = useI18n();
 const store = useMomosStore();
@@ -91,9 +91,7 @@ const deleting = ref(false);
 const outcome = computed(() => props.session.outcome ?? "running");
 const outcomeLabel = computed(() => $t(OUTCOME_LABEL_KEYS[outcome.value]));
 const outcomeClass = computed(() => OUTCOME_CLASS[outcome.value]);
-const formattedStartedAt = computed(() =>
-  new Date(props.session.started_at ?? "").toLocaleString(),
-);
+const formattedStartedAt = computed(() => formatDateTime(props.session.started_at));
 const formattedActiveDuration = computed(() =>
   formatDuration(props.session.active_seconds ?? 0, $t),
 );

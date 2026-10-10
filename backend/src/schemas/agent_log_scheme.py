@@ -41,7 +41,7 @@ class AgentLogBase(SQLModel):
     # not passed in by any caller here. See agent_run_scheme.py's own
     # session_id for why this is nullable.
     session_id: Optional[uuid.UUID] = Field(
-        default=None, foreign_key="testsession.id"
+        default=None, foreign_key="testsession.id", index=True
     )
 
 
@@ -56,7 +56,7 @@ class AgentLog(AgentLogBase, table=True):
     )
 
     project_id: uuid.UUID = Field(foreign_key="project.id")
-    target_id: uuid.UUID = Field(foreign_key="target.id")
+    target_id: uuid.UUID = Field(foreign_key="target.id", index=True)
 
     target: Target = Relationship(back_populates="agent_logs")
 

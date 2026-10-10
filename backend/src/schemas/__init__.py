@@ -10,6 +10,7 @@ from .test_session_scheme import (
     TestSessionResponse,
     TestSessionDetailResponse,
     TestSessionOutcome,
+    DEFAULT_LOG_PAGE_SIZE,
 )
 from .kali_scheme import *
 from .ollama_scheme import *
@@ -22,4 +23,5 @@ __all__ = [
     "AgentRun", "AgentRunBase", "AgentRunResponse", "AgentRunState", "AGENT_RUN_ROLES",
     "AttackVector", "AttackVectorBase", "ResponseAttackVector", "AttackVectorStatus",
     "TestSession", "TestSessionBase", "TestSessionResponse", "TestSessionDetailResponse", "TestSessionOutcome",
+    "DEFAULT_LOG_PAGE_SIZE",
 ]

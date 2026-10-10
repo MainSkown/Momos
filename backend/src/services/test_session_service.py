@@ -1,10 +1,11 @@
+import uuid
 from typing import List, Optional, Tuple
 
 from src.core.database_manager import db_manager
 from src.schemas.agent_log_scheme import AgentLog, AgentLogType
-from src.schemas.agent_run_scheme import AgentRun
 from src.schemas.attack_vector_scheme import AttackVector, AttackVectorStatus
 from src.schemas.test_session_scheme import (
+    DEFAULT_LOG_PAGE_SIZE,
     TestSession,
     TestSessionDetailResponse,
     TestSessionOutcome,
@@ -33,10 +34,11 @@ class TestSessionService:
     @staticmethod
     def get_session_detail(session_id: str) -> TestSessionDetailResponse:
         """TestSessionResponse plus two counts derived at read time (see
-        test_session_scheme.py's own "Decisions" note - not stored, so
-        they can never go stale relative to the actual vector/vulnerability
-        rows): every AttackVectorStatus this session's vectors fall into,
-        and how many distinct Vulnerability rows they produced."""
+        TestSessionDetailResponse's own field comments in
+        test_session_scheme.py - not stored, so they can never go stale
+        relative to the actual vector/vulnerability rows): every
+        AttackVectorStatus this session's vectors fall into, and how many
+        distinct Vulnerability rows they produced."""
         session = TestSessionService.get_session(session_id)
         vectors = db_manager.get_attack_vectors_for_session(session_id)
 
@@ -59,9 +61,9 @@ class TestSessionService:
         return db_manager.get_attack_vectors_for_session(session_id)
 
     @staticmethod
-    def get_session_runs(session_id: str) -> List[AgentRun]:
+    def get_session_runs(session_id: str) -> List[Tuple[uuid.UUID, Optional[str]]]:
         TestSessionService.get_session(session_id)
-        return db_manager.get_agent_runs_for_session(session_id)
+        return db_manager.get_run_options_for_session(session_id)
 
     @staticmethod
     def get_session_logs(
@@ -70,9 +72,10 @@ class TestSessionService:
         agent_run_id: Optional[str] = None,
         log_type: Optional[AgentLogType] = None,
         q: Optional[str] = None,
-        limit: int = 200,
+        limit: int = DEFAULT_LOG_PAGE_SIZE,
         offset: int = 0,
-    ) -> Tuple[List[AgentLog], int]:
+        from_end: bool = False,
+    ) -> Tuple[List[AgentLog], int, int]:
         TestSessionService.get_session(session_id)
         return db_manager.get_agent_logs_for_session(
             session_id,
@@ -82,6 +85,7 @@ class TestSessionService:
             q=q,
             limit=limit,
             offset=offset,
+            from_end=from_end,
         )
 
     @staticmethod

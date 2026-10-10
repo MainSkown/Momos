@@ -7,7 +7,7 @@
       </select>
       <select v-model="runFilter" class="input-field">
         <option value="">{{ $t("history.filter_all_runs") }}</option>
-        <option v-for="r in runs" :key="r.id" :value="r.id">{{ runLabel(r) }}</option>
+        <option v-for="r in runs" :key="r.agent_run_id" :value="r.agent_run_id">{{ runLabel(r) }}</option>
       </select>
       <select v-model="typeFilter" class="input-field">
         <option value="">{{ $t("history.filter_all_types") }}</option>
@@ -68,14 +68,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getTestSessionLogs,
   getTestSessionRuns,
   type AgentLogResponse,
   type AgentLogType,
-  type AgentRunResponse,
+  type SessionRunOption,
 } from "@/api";
 import LogEntryList from "../reusable/LogEntryList.vue";
 
@@ -84,16 +84,19 @@ const { t: $t } = useI18n();
 const props = defineProps<{
   sessionId: string;
   // Set by SessionDetail right after a vector is clicked on the Attack
-  // Vectors tab - jumps the role/run filters to that vector's
-  // discovered_by_run_id and reloads. A plain prop + watcher (not an
-  // exposed imperative method) so this works whether or not this
-  // component happens to already be mounted - SessionDetail keeps both
-  // tabs mounted (v-show, not v-if) specifically so this state survives
+  // Vectors tab - jumps the role/run filters to that vector's assigned
+  // run (assigned_run_id, falling back to discovered_by_run_id if the
+  // vector was never assigned one - see SessionDetail's own
+  // onSelectVector) and reloads. A plain prop + watcher (not an exposed
+  // imperative method) so this works whether or not this component
+  // happens to already be mounted - SessionDetail keeps both tabs
+  // mounted (v-show, not v-if) specifically so this state survives
   // switching back and forth.
   jumpToRunId?: string | null;
 }>();
 
 const PAGE_SIZE = 200;
+const SEARCH_DEBOUNCE_MS = 350;
 
 type RoleOption = "single_agent" | "orchestrator" | "scouting" | "pentesting" | "reporting";
 const ROLE_OPTIONS: RoleOption[] = [
@@ -115,9 +118,9 @@ function roleLabel(role: string): string {
   return role in ROLE_LABEL_KEYS ? $t(ROLE_LABEL_KEYS[role as RoleOption]) : role;
 }
 
-function runLabel(run: AgentRunResponse): string {
+function runLabel(run: SessionRunOption): string {
   const label = run.role ? roleLabel(run.role) : "?";
-  return `${label} (${run.id.slice(0, 8)}…)`;
+  return `${label} (${run.agent_run_id.slice(0, 8)}…)`;
 }
 
 const roleFilter = ref("");
@@ -129,7 +132,7 @@ const entries = ref<AgentLogResponse[]>([]);
 const total = ref(0);
 const offset = ref(0);
 const loading = ref(false);
-const runs = ref<AgentRunResponse[]>([]);
+const runs = ref<SessionRunOption[]>([]);
 
 const logListRef = ref<InstanceType<typeof LogEntryList> | null>(null);
 
@@ -145,7 +148,7 @@ async function loadRuns() {
   runs.value = result.data ?? [];
 }
 
-async function fetchPage(off: number, limit: number) {
+async function fetchPage(off: number, limit: number, fromEnd = false) {
   const result = await getTestSessionLogs({
     path: { session_id: props.sessionId },
     query: {
@@ -155,6 +158,7 @@ async function fetchPage(off: number, limit: number) {
       q: searchQuery.value || undefined,
       limit,
       offset: off,
+      from_end: fromEnd,
     },
   });
 
@@ -167,23 +171,18 @@ async function fetchPage(off: number, limit: number) {
 
 // Resets to the LAST page of the current filters - a finished session is
 // usually opened to see how it ended, not how it started; "Load older
-// entries" walks backward from there.
+// entries" walks backward from there. from_end=true resolves the right
+// offset server-side in this one request (see getTestSessionLogs's own
+// comment) - this used to probe for `total` with a throwaway first
+// request before fetching the real last page, doubling every filter
+// change and settled search keystroke's round trips.
 async function resetAndLoadLast() {
   loading.value = true;
   try {
-    const probe = await fetchPage(0, PAGE_SIZE);
-
-    if (probe.total <= PAGE_SIZE) {
-      entries.value = probe.items;
-      offset.value = 0;
-      total.value = probe.total;
-    } else {
-      const lastOffset = Math.max(0, probe.total - PAGE_SIZE);
-      const last = await fetchPage(lastOffset, PAGE_SIZE);
-      entries.value = last.items;
-      offset.value = lastOffset;
-      total.value = last.total;
-    }
+    const page = await fetchPage(0, PAGE_SIZE, true);
+    entries.value = page.items;
+    offset.value = page.offset;
+    total.value = page.total;
   } catch (err) {
     console.error(err);
     entries.value = [];
@@ -249,7 +248,11 @@ watch([roleFilter, runFilter, typeFilter], resetAndLoadLast);
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 watch(searchQuery, () => {
   if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(resetAndLoadLast, 350);
+  searchDebounce = setTimeout(resetAndLoadLast, SEARCH_DEBOUNCE_MS);
+});
+
+onUnmounted(() => {
+  if (searchDebounce) clearTimeout(searchDebounce);
 });
 
 watch(

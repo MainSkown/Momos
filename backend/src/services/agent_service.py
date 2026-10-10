@@ -195,6 +195,26 @@ def _time_budget_exhausted(target: Target, run_state: dict) -> bool:
     return time_left <= 0
 
 
+def _classify_session_outcome(
+    final_status: AgentRunState,
+    finished_by_request: bool,
+    target: Target,
+    run_state: dict,
+) -> TestSessionOutcome:
+    """Shared by _run_agent's and _run_orchestrator's own post-loop
+    status decision - PAUSED mirrors final_status exactly; otherwise a
+    real finish/finish_task call, or the orchestrator's own natural "done"
+    condition (nothing pending/testing left - OrchestratorAgent._is_done),
+    both just mean "not a time-budget expiry" here, so
+    _time_budget_exhausted alone is enough to tell either of those apart
+    from TIME_EXPIRED without needing to know which one it actually was."""
+    if final_status == AgentRunState.PAUSED:
+        return TestSessionOutcome.PAUSED
+    if finished_by_request or not _time_budget_exhausted(target, run_state):
+        return TestSessionOutcome.FINISHED
+    return TestSessionOutcome.TIME_EXPIRED
+
+
 async def _broadcast_session(test_session: TestSession) -> None:
     await ws_registry.send_message(
         TestSessionUpdate(
@@ -206,7 +226,7 @@ async def _broadcast_session(test_session: TestSession) -> None:
     )
 
 
-async def _finalize_session(target_id: str, outcome: "TestSessionOutcome") -> None:
+async def _finalize_session(target_id: str, outcome: TestSessionOutcome) -> None:
     """Called once per whole pipeline (not per sub-run - a multi_agent
     session spans many), right after _run_agent/_run_orchestrator's own
     post-loop AgentRunState decision (or from finish_agent's direct
@@ -405,7 +425,7 @@ class AgentService:
         # resume - fall back to a fresh session rather than resume a
         # reference that no longer exists.
         if resuming_paused_run:
-            test_session = db_manager.get_current_session_for_target(target_id)
+            test_session = db_manager.get_latest_session_for_target(target_id)
             if test_session is None or test_session.outcome != TestSessionOutcome.PAUSED:
                 test_session = None
         else:
@@ -490,6 +510,14 @@ class AgentService:
             await ollama_manager.get_model_capabilities(project_settings.base_model_name)
         except Exception as e:
             _running_targets.pop(target_id, None)
+            # The TestSession above is already live (current_session_for_target
+            # is set, a WS update already went out) - without this it would
+            # sit at outcome="running" forever, with no AgentRun ever created
+            # to let a later start_agent recognize/resume it, and
+            # TestSessionService.delete_session refuses to delete a RUNNING
+            # session - only a backend restart's mark_orphaned_sessions_aborted
+            # would ever get it unstuck.
+            await _finalize_session(target_id, TestSessionOutcome.FAILED)
             raise ModelNotInstalledException(
                 f"Model '{project_settings.base_model_name}' is not "
                 f"installed or reachable: {e}",
@@ -599,6 +627,10 @@ class AgentService:
                 log_type="action",
                 content=f"Could not start agent: {e}",
             )
+            # See the identical comment on start_agent's own
+            # ModelNotInstalledException branch - the TestSession is already
+            # live by this point and would otherwise stay "running" forever.
+            await _finalize_session(target_id, TestSessionOutcome.FAILED)
             return
 
         await AgentService._run_agent(agent, target, project_settings, duration_seconds)
@@ -691,6 +723,8 @@ class AgentService:
                 log_type="action",
                 content=f"Could not start multi-agent pipeline: {e}",
             )
+            # See _prepare_and_run's own identical comment.
+            await _finalize_session(target_id, TestSessionOutcome.FAILED)
             return
 
         await AgentService._run_orchestrator(orchestrator, target, project_settings, duration_seconds)
@@ -1055,18 +1089,13 @@ class AgentService:
                 status=final_status,
                 remaining_seconds=final_remaining,
             )
-            # TestSession outcome - PAUSED mirrors final_status exactly;
-            # otherwise a real finish/finish_task always reads as FINISHED,
-            # and a natural exit that wasn't one of those is TIME_EXPIRED
-            # only if the time budget/safety cap actually ran out (see
-            # _time_budget_exhausted) - distinct from final_status above,
-            # which collapses both of those into the same AgentRunState.
-            if final_status == AgentRunState.PAUSED:
-                session_outcome = TestSessionOutcome.PAUSED
-            elif finished_by_request or not _time_budget_exhausted(target, run_state):
-                session_outcome = TestSessionOutcome.FINISHED
-            else:
-                session_outcome = TestSessionOutcome.TIME_EXPIRED
+            # TestSession outcome - see _classify_session_outcome's own
+            # docstring; distinct from final_status above, which collapses
+            # a real finish and a natural "done" condition into the same
+            # AgentRunState.FINISHED.
+            session_outcome = _classify_session_outcome(
+                final_status, finished_by_request, target, run_state
+            )
             await _finalize_session(target_id, session_outcome)
         except Exception as e:
             print(f"Agent run failed for target {target_id}: {e}")
@@ -1239,19 +1268,12 @@ class AgentService:
                 agent_run_id=agent_run_id,
                 role=role,
             )
-            # TestSession outcome - see _run_agent's own identical comment;
-            # the orchestrator's natural "done" condition (nothing pending/
-            # testing left - OrchestratorAgent._is_done) and the single
-            # agent's finish_task both just mean "not a time-budget expiry"
-            # here, so _time_budget_exhausted alone is enough to tell them
-            # apart from TIME_EXPIRED without needing to know which one it
-            # actually was.
-            if final_status == AgentRunState.PAUSED:
-                session_outcome = TestSessionOutcome.PAUSED
-            elif finished_by_request or not _time_budget_exhausted(target, run_state):
-                session_outcome = TestSessionOutcome.FINISHED
-            else:
-                session_outcome = TestSessionOutcome.TIME_EXPIRED
+            # TestSession outcome - see _classify_session_outcome's own
+            # docstring (shared with _run_agent's identical post-loop
+            # decision).
+            session_outcome = _classify_session_outcome(
+                final_status, finished_by_request, target, run_state
+            )
             await _finalize_session(target_id, session_outcome)
         except Exception as e:
             print(f"Orchestrator run failed for target {target_id}: {e}")

@@ -59,14 +59,14 @@ class AttackVectorBase(SQLModel):
     # until_vectors_checked scoped to only the current session instead of
     # every past one too - see DatabaseManager.get_attack_vectors_for_target.
     session_id: Optional[uuid.UUID] = Field(
-        default=None, foreign_key="testsession.id"
+        default=None, foreign_key="testsession.id", index=True
     )
 
 
 class AttackVector(AttackVectorBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     project_id: uuid.UUID = Field(foreign_key="project.id")
-    target_id: uuid.UUID = Field(foreign_key="target.id")
+    target_id: uuid.UUID = Field(foreign_key="target.id", index=True)
 
     target: Target = Relationship(back_populates="attack_vectors")
 

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy import delete, text, inspect, func
 from . import settings
-from typing import List, Optional, TypeVar, Type
+from typing import List, Optional, Tuple, TypeVar, Type
 
 # SQLModels Imports #
 from src.schemas.project_scheme import (
@@ -16,7 +16,11 @@ from src.schemas.vulnerability_scheme import Vulnerability
 from src.schemas.agent_log_scheme import AgentLog, AgentLogType
 from src.schemas.agent_run_scheme import AgentRun
 from src.schemas.attack_vector_scheme import AttackVector, AttackVectorStatus
-from src.schemas.test_session_scheme import TestSession, TestSessionOutcome
+from src.schemas.test_session_scheme import (
+    TestSession,
+    TestSessionOutcome,
+    DEFAULT_LOG_PAGE_SIZE,
+)
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -224,6 +228,30 @@ class DatabaseManager:
             conn.execute(text("ALTER TABLE agentrun ADD COLUMN IF NOT EXISTS session_id UUID"))
             conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS session_id UUID"))
             conn.execute(text("ALTER TABLE attackvector ADD COLUMN IF NOT EXISTS session_id UUID"))
+            conn.commit()
+
+        # Indexes for session_id (all three tables) and target_id
+        # (agentrun/agentlog/attackvector, which never had one despite
+        # being queried by it just as often) - create_all() already adds
+        # these for a brand-new database (the schemas now declare
+        # index=True), but an existing one needs them added explicitly
+        # the same way every other structural change in this file does.
+        # Named to match SQLModel/SQLAlchemy's own `ix_<table>_<column>`
+        # convention for `index=True`, so a fresh and a migrated database
+        # end up with identically-named indexes. Without these, every
+        # session-scoped read (get_attack_vectors_for_target,
+        # attack_vectors_all_checked, get_agent_logs_for_session, ...) is
+        # a full sequential scan - previously masked by
+        # delete_attack_vectors_for_target keeping these tables tiny, no
+        # longer true now that rows persist across every session a target
+        # has ever had.
+        with self.engine.connect() as conn:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_agentrun_session_id ON agentrun (session_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_agentlog_session_id ON agentlog (session_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_attackvector_session_id ON attackvector (session_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_agentrun_target_id ON agentrun (target_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_agentlog_target_id ON agentlog (target_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_attackvector_target_id ON attackvector (target_id)"))
             conn.commit()
 
     def get_session(self):
@@ -542,10 +570,12 @@ class DatabaseManager:
             return session.get(AttackVector, parsed_uuid)
 
     def get_attack_vectors_for_target(
-        self, target_id: str | uuid.UUID
+        self,
+        target_id: str | uuid.UUID,
+        session_id: str | uuid.UUID | None = None,
     ) -> List[AttackVector]:
         """Scoped to the target's CURRENT session (its most recently
-        started one, live or not - see get_current_session_for_target) so
+        started one, live or not - see get_latest_session_for_target) so
         the Overview board and the agents' own reads (propose/
         attack_vectors_all_checked) only ever see this run's vectors, not
         every session this target has ever had - AttackVector rows are no
@@ -554,14 +584,28 @@ class DatabaseManager:
         past run's vectors mixed together. Falls back to unscoped (every
         vector for this target) only if the target somehow has no session
         yet at all - defensive, since start_agent always creates one
-        before anything can propose a vector."""
+        before anything can propose a vector.
+
+        session_id is an optional pre-resolved value - a caller already
+        holding one in-process (orchestrator_agent.py/agent.py, via
+        run_registry.current_session_id_for_target - a plain dict lookup,
+        no DB round trip) should pass it, skipping get_latest_session_for_target's
+        own query entirely; this matters here specifically because this
+        method runs on effectively every agent/orchestrator turn. A caller
+        with no live run in process (e.g. AgentService.get_attack_vectors,
+        serving a plain REST read) omits it and falls back to resolving it
+        from the database as before."""
         parsed_uuid = self._parse_uuid(target_id)
-        current_session = self.get_current_session_for_target(parsed_uuid)
+        if session_id is not None:
+            current_test_session_id = self._parse_uuid(session_id)
+        else:
+            latest = self.get_latest_session_for_target(parsed_uuid)
+            current_test_session_id = latest.id if latest is not None else None
 
         with Session(self.engine) as session:
             statement = select(AttackVector).where(AttackVector.target_id == parsed_uuid)
-            if current_session is not None:
-                statement = statement.where(AttackVector.session_id == current_session.id)
+            if current_test_session_id is not None:
+                statement = statement.where(AttackVector.session_id == current_test_session_id)
             statement = statement.order_by(AttackVector.created_at)
             return session.exec(statement).all()
 
@@ -573,7 +617,11 @@ class DatabaseManager:
             session.refresh(merged)
             return merged
 
-    def attack_vectors_all_checked(self, target_id: str | uuid.UUID) -> bool:
+    def attack_vectors_all_checked(
+        self,
+        target_id: str | uuid.UUID,
+        session_id: str | uuid.UUID | None = None,
+    ) -> bool:
         """The stop condition for Target.run_mode == "until_vectors_checked":
         true once every AttackVector proposed for the target's CURRENT
         session (see get_attack_vectors_for_target's own comment on why
@@ -581,14 +629,20 @@ class DatabaseManager:
         reached a terminal status (anything but PENDING/TESTING). A
         session with zero vectors proposed yet is NOT "all checked" - it
         must return False, or a fresh run would stop before scouting ever
-        gets a chance to propose the first one."""
+        gets a chance to propose the first one. See
+        get_attack_vectors_for_target's own comment on the optional
+        session_id - same pre-resolved-value optimization, same reason."""
         parsed_uuid = self._parse_uuid(target_id)
-        current_session = self.get_current_session_for_target(parsed_uuid)
+        if session_id is not None:
+            current_test_session_id = self._parse_uuid(session_id)
+        else:
+            latest = self.get_latest_session_for_target(parsed_uuid)
+            current_test_session_id = latest.id if latest is not None else None
 
         with Session(self.engine) as session:
             scope = [AttackVector.target_id == parsed_uuid]
-            if current_session is not None:
-                scope = [AttackVector.session_id == current_session.id]
+            if current_test_session_id is not None:
+                scope = [AttackVector.session_id == current_test_session_id]
 
             total = session.exec(
                 select(func.count()).select_from(AttackVector).where(*scope)
@@ -642,12 +696,16 @@ class DatabaseManager:
             statement = statement.order_by(TestSession.started_at.desc())
             return session.exec(statement).all()
 
-    def get_current_session_for_target(
+    def get_latest_session_for_target(
         self, target_id: str | uuid.UUID
     ) -> Optional[TestSession]:
         """The target's most recently STARTED session, regardless of its
         outcome - live while it's RUNNING/PAUSED, otherwise simply the one
-        that just ended. This is what scopes both the live board's own
+        that just ended. Named "latest", not "current", specifically to
+        not be confused with run_registry.current_session_for_target (a
+        different thing: that dict only ever holds an entry while a
+        session is actually live, popped the moment it ends - see its own
+        module comment). This is what scopes both the live board's own
         reads (get_attack_vectors_for_target/attack_vectors_all_checked)
         and start_agent's own paused-session-reuse check to exactly one
         session at a time, and rolls over to the new one automatically the
@@ -676,11 +734,43 @@ class DatabaseManager:
             )
             return session.exec(statement).all()
 
-    def get_agent_runs_for_session(self, session_id: str | uuid.UUID) -> List[AgentRun]:
+    def get_run_options_for_session(
+        self, session_id: str | uuid.UUID
+    ) -> List[Tuple[uuid.UUID, Optional[str]]]:
+        """Every distinct (agent_run_id, role) pair this session's own
+        AgentLog rows were actually written under - the sub-run filter
+        dropdown's real data source (session_router.py's
+        GetTestSessionRuns). Deliberately NOT `select(AgentRun).where(
+        AgentRun.session_id == session_id)` (an earlier version of this
+        method did exactly that): single_agent mode's root run, and
+        multi_agent's orchestrator root run, are each a single row REUSED
+        across every session on that target (see upsert_agent_run's own
+        docstring - the (target_id, role) upsert lookup is what makes that
+        reuse possible) - the moment a newer session starts, that row's
+        session_id moves on with it, so a plain AgentRun filter made an
+        OLDER session's own root run silently vanish from its own
+        dropdown, even though its logs (AgentLog.session_id, stamped
+        independently per row at write time - see
+        run_registry.persist_and_broadcast) still correctly belong to it.
+        Querying AgentLog directly sidesteps the whole problem: it's the
+        actual ground truth for which agent_run_id values are filterable
+        in this session's own logs, and needs no AgentRun row to exist or
+        stay correctly attributed at all - single_agent mode's own
+        agent_run_id (always == target_id, never a real AgentRun.id - see
+        Agent.__init__'s own comment) works here for exactly the same
+        reason: get_agent_logs_for_session filters on this same column,
+        not on any AgentRun table."""
         parsed_uuid = self._parse_uuid(session_id)
 
         with Session(self.engine) as session:
-            statement = select(AgentRun).where(AgentRun.session_id == parsed_uuid)
+            statement = (
+                select(AgentLog.agent_run_id, AgentLog.role)
+                .where(
+                    AgentLog.session_id == parsed_uuid,
+                    AgentLog.agent_run_id.is_not(None),
+                )
+                .distinct()
+            )
             return session.exec(statement).all()
 
     def get_agent_logs_for_session(
@@ -690,16 +780,20 @@ class DatabaseManager:
         agent_run_id: str | uuid.UUID | None = None,
         log_type: Optional[AgentLogType] = None,
         q: Optional[str] = None,
-        limit: int = 200,
+        limit: int = DEFAULT_LOG_PAGE_SIZE,
         offset: int = 0,
-    ) -> tuple[List[AgentLog], int]:
+        from_end: bool = False,
+    ) -> Tuple[List[AgentLog], int, int]:
         """Server-side filtered/paginated log read for one session - the
         History Logs tab's own data source (unlike
         get_all_agent_logs_in_project/get_agent_logs_for_run, which are
         unfiltered and unpaginated, fine for a live single-run view but not
         for a session that can accumulate a very large transcript over
-        its lifetime). Returns (page, total) so the caller can render
-        pagination without a second round trip."""
+        its lifetime). Returns (page, total, offset) - the effective
+        offset is returned (not just echoed back) because from_end=True
+        computes it server-side from `total`, letting a caller opening a
+        session land on its last page (the usual "see how it ended" entry
+        point) in one round trip instead of probing for `total` first."""
         parsed_uuid = self._parse_uuid(session_id)
 
         with Session(self.engine) as session:
@@ -719,14 +813,17 @@ class DatabaseManager:
             total = session.exec(
                 select(func.count()).select_from(AgentLog).where(*filters)
             ).one()
+
+            effective_offset = max(0, total - limit) if from_end else offset
+
             statement = (
                 select(AgentLog)
                 .where(*filters)
                 .order_by(AgentLog.created_at)
-                .offset(offset)
+                .offset(effective_offset)
                 .limit(limit)
             )
-            return session.exec(statement).all(), total
+            return session.exec(statement).all(), total, effective_offset
 
     def delete_test_session(self, session_id: str | uuid.UUID) -> None:
         """Removes this session's own AttackVector/AgentLog/AgentRun rows,
@@ -773,7 +870,17 @@ class DatabaseManager:
                         AgentRun.session_id == test_session.id
                     )
                 ).one()
-                candidates = [t for t in (last_log_at, last_run_at) if t is not None]
+                # last_resumed_at is itself a floor candidate - a resume
+                # right before the crash (no new log/run row written yet in
+                # the window between resuming and the backend going down)
+                # would otherwise fall back to stale pre-pause activity
+                # that predates the resume, setting ended_at to a
+                # timestamp BEFORE the session's own last_resumed_at.
+                candidates = [
+                    t
+                    for t in (last_log_at, last_run_at, test_session.last_resumed_at)
+                    if t is not None
+                ]
                 last_activity = max(candidates) if candidates else test_session.started_at
 
                 if test_session.last_resumed_at is not None:

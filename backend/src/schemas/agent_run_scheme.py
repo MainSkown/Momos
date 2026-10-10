@@ -67,7 +67,7 @@ class AgentRunBase(SQLModel):
     # no other legitimate way to create a row without a live session (see
     # test_session_scheme.py); never actually left unset in practice.
     session_id: Optional[uuid.UUID] = Field(
-        default=None, foreign_key="testsession.id"
+        default=None, foreign_key="testsession.id", index=True
     )
 
 
@@ -81,7 +81,7 @@ class AgentRun(AgentRunBase, table=True):
     # upsert_agent_run/get_agent_run for how single_agent mode's call sites
     # keep working unchanged against this new shape.
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    target_id: uuid.UUID = Field(foreign_key="target.id")
+    target_id: uuid.UUID = Field(foreign_key="target.id", index=True)
     project_id: uuid.UUID = Field(foreign_key="project.id")
 
     target: Target = Relationship(back_populates="agent_runs")

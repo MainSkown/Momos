@@ -1036,6 +1036,29 @@ export type SessionLogsResponse = {
      * Total
      */
     total: number;
+    /**
+     * Offset
+     */
+    offset: number;
+};
+
+/**
+ * SessionRunOption
+ *
+ * One filterable (agent_run_id, role) pair for the Logs tab's own
+ * sub-run dropdown - deliberately not a full AgentRunResponse (see
+ * DatabaseManager.get_run_options_for_session's own docstring for why
+ * this isn't backed by the AgentRun table at all).
+ */
+export type SessionRunOption = {
+    /**
+     * Agent Run Id
+     */
+    agent_run_id: string;
+    /**
+     * Role
+     */
+    role?: string | null;
 };
 
 /**
@@ -2444,7 +2467,7 @@ export type GetTestSessionRunsResponses = {
      *
      * Successful Response
      */
-    200: Array<AgentRunResponse>;
+    200: Array<SessionRunOption>;
 };
 
 export type GetTestSessionRunsResponse = GetTestSessionRunsResponses[keyof GetTestSessionRunsResponses];
@@ -2482,6 +2505,10 @@ export type GetTestSessionLogsData = {
          * Offset
          */
         offset?: number;
+        /**
+         * From End
+         */
+        from_end?: boolean;
     };
     url: '/api/session/{session_id}/logs';
 };

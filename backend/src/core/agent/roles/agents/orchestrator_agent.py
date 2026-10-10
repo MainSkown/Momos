@@ -28,7 +28,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from src.core import db_manager, settings
-from src.core.agent import agent_tools
+from src.core.agent import agent_tools, run_registry
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 from .. import common
 from ..tools import orchestrator_tools
@@ -105,8 +105,14 @@ class OrchestratorAgent:
         # scouting's enumeration/proposed_vectors, the real source of
         # truth here (AttackVector rows) is written by the sub-agents this
         # role spawns, not by this role's own turn, so re-deriving it
-        # fresh every turn is the only way to see their results.
-        vectors = db_manager.get_attack_vectors_for_target(self.target_id)
+        # fresh every turn is the only way to see their results. Passing
+        # the already-known session_id (a plain in-memory dict lookup)
+        # skips get_attack_vectors_for_target's own DB round trip to
+        # re-derive it - this runs every orchestrator turn, so that
+        # otherwise-redundant query would run just as often.
+        vectors = db_manager.get_attack_vectors_for_target(
+            self.target_id, session_id=run_registry.current_session_id_for_target(self.target_id)
+        )
         lines = ["### Attack vector board (live - trust this over your own memory of earlier turns)"]
 
         if not vectors:
@@ -190,7 +196,9 @@ class OrchestratorAgent:
         discovered but never actually recorded."""
         if not self._scouting_done:
             return False
-        vectors = db_manager.get_attack_vectors_for_target(self.target_id)
+        vectors = db_manager.get_attack_vectors_for_target(
+            self.target_id, session_id=run_registry.current_session_id_for_target(self.target_id)
+        )
         if any(v.status in (AttackVectorStatus.PENDING, AttackVectorStatus.TESTING) for v in vectors):
             return False
         return not any(

@@ -23,7 +23,6 @@
         :session="session"
         :target-name="targetName(session.target_id)"
         @select="emit('select', $event)"
-        @deleted="onDeleted"
       />
 
       <div class="text-center no-sessions" v-if="sortedSessions.length === 0">
@@ -81,7 +80,21 @@ onMounted(() => {
   store.loadTargets(store.openedProject);
 });
 
-watch(() => store.openedProject, reload);
+// A project switch needs both: the new project's targets (or every card
+// shows a raw target_id instead of a name - Vulnerabilities.vue does the
+// same pairing in its own openedProject watcher), and the filters reset
+// (a target/outcome filter carried over from the previous project would
+// almost certainly match nothing in this one, silently showing an empty
+// list with no indication a stale filter is still active).
+watch(
+  () => store.openedProject,
+  (newProject) => {
+    targetFilter.value = "";
+    outcomeFilter.value = "";
+    reload();
+    store.loadTargets(newProject);
+  },
+);
 watch([targetFilter, outcomeFilter], reload);
 
 // Server returns newest-started-first already (see
@@ -95,11 +108,6 @@ const sortedSessions = computed(() => {
   const rest = sessions.filter((s) => s.outcome !== "running");
   return [...running, ...rest];
 });
-
-function onDeleted() {
-  // The store already removed it from every project's list - nothing
-  // else to do here.
-}
 </script>
 
 <style scoped lang="css">
