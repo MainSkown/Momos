@@ -3,7 +3,7 @@ services:
     build:
       context: ./dashboard
       target: dev-stage
-    ports:
+    ports: !override
       - "5173:5173"
     volumes:
       - ./dashboard:/app
