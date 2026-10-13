@@ -18,6 +18,8 @@ export const en = {
     targets:{
         targets: 'Targets',
         target: "Target",
+        add_new_target: "Add new target",
+        new_target: "New target",
         no_target: "Target is not defined",
         enter_name: "Enter target's name",
         name_empty: "Name can not be empty",

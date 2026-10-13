@@ -4,21 +4,9 @@
       {{ $t("targets.targets") }}</span
     >
     <div class="separator" />
-    <!-- Input box-->
-    <div class="row">
-      <div class="terminal-input-group" style="margin: 5px; width: 100%">
-        <input
-          v-model="target"
-          class="input-field"
-          :placeholder="$t('targets.enter_name')"
-          @keydown.enter="addTarget"
-        />
-      </div>
-      <div class="add-button button border" @click="addTarget">+</div>
-    </div>
 
     <!-- Table -->
-    <div class="flex flex-center">
+    <div class="flex flex-center" style="margin-top: 5px;">
       <div class="column table">
         <!-- Head-row -->
         <div class="row table-row">
@@ -138,6 +126,7 @@
             {{ $t("targets.no_targets") }}
           </div>
         </div>
+        <div class="add-button button border" @click="addTarget">{{$t('targets.add_new_target')}}</div>
       </div>
     </div>
   </div>
@@ -205,17 +194,8 @@ watch(
 
 const target = ref<string>("");
 
-function addTarget() {
-  const name = target.value;
-
-  if (name.length === 0) {
-    toast.error($t("targets.name_empty"), {
-      position: toast.POSITION.TOP_CENTER,
-    });
-  }
-
-  store.addTarget2Project(name, store.openedProject);
-  target.value = "";
+function addTarget() {  
+  store.addTarget2Project($t('targets.new_target'), store.openedProject);
 }
 
 function deleteTarget(id: string) {
@@ -232,14 +212,6 @@ function deleteTarget(id: string) {
   opacity: 0.4;
   pointer-events: none;
   cursor: not-allowed;
-}
-
-.add-button {
-  aspect-ratio: 1;
-  width: 5%;
-
-  font-size: x-large;
-  margin: 5px;
 }
 
 .table {
