@@ -1,0 +1,380 @@
+<template>
+  <div class="agent-log-screen scrollable-panel" ref="logScreenRef">
+    <template v-for="(entry, index) in entries" :key="entry.id">
+      <div
+        v-if="dividerLabel(entry, entries[index - 1])"
+        class="log-section-divider"
+      >
+        <span>{{ dividerLabel(entry, entries[index - 1]) }}</span>
+      </div>
+
+      <div class="log-entry">
+        <!-- Thinking -->
+        <div v-if="entry.type === 'thinking'" class="log-row">
+          <span class="material-icons-outlined log-icon log-icon--thinking"
+            >psychology</span
+          >
+          <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
+          <span class="log-text log-text--thinking">{{ entry.content }}</span>
+        </div>
+
+        <!-- Narrated action / status update -->
+        <div v-else-if="entry.type === 'action'" class="log-row">
+          <span class="material-icons-outlined log-icon log-icon--action"
+            >bolt</span
+          >
+          <span class="log-timestamp">{{ formatTimestamp(entry.created_at) }}</span>
+          <span class="log-text">{{ entry.content }}</span>
+        </div>
+
+        <!-- Tool usage -->
+        <div v-else class="tool-card border">
+          <div class="row tool-card-header">
+            <span class="material-icons-outlined log-icon log-icon--tool">{{
+              toolIcon(entry.tool_name)
+            }}</span>
+            <span class="tool-name">{{ toolLabel(entry.tool_name) }}</span>
+            <span class="log-timestamp tool-timestamp">{{
+              formatTimestamp(entry.created_at)
+            }}</span>
+          </div>
+          <div class="tool-content">{{ entry.content }}</div>
+        </div>
+      </div>
+    </template>
+
+    <div v-if="entries.length === 0" class="text-center no-logs">
+      {{ emptyText ?? $t("agent_logs.no_logs") }}
+    </div>
+
+    <div v-if="isRunning" class="row flex-center running-indicator">
+      <span>{{ $t("agent_logs.running") }}</span> <span class="loader" />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+// Shared entry-rendering body for the agent log stream - used by both
+// OverviewPage/AgentLogs.vue (live, project-wide, unfiltered) and
+// HistoryPage/SessionLogs.vue (one session, server-side filtered/
+// paginated). Owns only rendering + its own scroll container (exposed via
+// scrollToTop/scrollToBottom); loading the entries themselves, filtering,
+// and the active-agent HoverMenu stay with each caller - they differ too
+// much (one polls/WS-streams a live project, the other pages through one
+// finished session's own history) to share.
+import { nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import type { AgentLogResponse } from "@/api";
+
+const { t: $t } = useI18n();
+
+const props = withDefaults(
+  defineProps<{
+    entries: AgentLogResponse[];
+    isRunning?: boolean;
+    emptyText?: string;
+    // Scrolls to the newest entry whenever `entries` changes - the
+    // existing Overview behavior (tailing a live stream). History turns
+    // this off while paging through older entries and only reaches for
+    // scrollToBottom() itself once it's actually appending at the tail.
+    autoScroll?: boolean;
+    // Includes the date, not just the time - Overview only ever shows
+    // "right now"'s stream so the time alone is enough; a session from
+    // last week needs the date too.
+    showDate?: boolean;
+  }>(),
+  {
+    isRunning: false,
+    autoScroll: true,
+    showDate: false,
+  },
+);
+
+type ToolName =
+  | "install_kali_package"
+  | "run"
+  | "new_session"
+  | "switch_session"
+  | "close_session"
+  | "list_sessions"
+  | "interrupt_session"
+  | "switch_mode"
+  | "report_vulnerability"
+  | "log_attack_attempt"
+  | "finish_task"
+  | "propose_attack_vector"
+  | "report_outcome"
+  | "dispatch_pentest_batch"
+  | "request_report"
+  | "run_scouting";
+
+// Multi Agent mode's AgentLogResponse rows carry role/agent_run_id (always
+// "single_agent" for the Single Agent flow, never varying within one run -
+// see agent_service.py's _run_agent) - a divider is only ever meaningful
+// between two different Multi Agent sub-runs.
+type Role = "orchestrator" | "scouting" | "pentesting" | "reporting";
+
+const ROLE_LABELS: Record<Role, string> = {
+  orchestrator: $t("agent_logs.role_orchestrator"),
+  scouting: $t("agent_logs.role_scouting"),
+  pentesting: $t("agent_logs.role_pentesting"),
+  reporting: $t("agent_logs.role_reporting"),
+};
+
+function isKnownRole(role: string): role is Role {
+  return role in ROLE_LABELS;
+}
+
+const TOOL_LABELS: Record<ToolName, string> = {
+  install_kali_package: $t("agent_logs.tool_install_package"),
+  run: $t("agent_logs.tool_run"),
+  new_session: $t("agent_logs.tool_new_session"),
+  switch_session: $t("agent_logs.tool_switch_session"),
+  close_session: $t("agent_logs.tool_close_session"),
+  list_sessions: $t("agent_logs.tool_list_sessions"),
+  interrupt_session: $t("agent_logs.tool_interrupt_session"),
+  switch_mode: $t("agent_logs.tool_switch_mode"),
+  report_vulnerability: $t("agent_logs.tool_report_vulnerability"),
+  log_attack_attempt: $t("agent_logs.tool_log_attack_attempt"),
+  finish_task: $t("agent_logs.tool_finish_task"),
+  propose_attack_vector: $t("agent_logs.tool_propose_attack_vector"),
+  report_outcome: $t("agent_logs.tool_report_outcome"),
+  dispatch_pentest_batch: $t("agent_logs.tool_dispatch_pentest_batch"),
+  request_report: $t("agent_logs.tool_request_report"),
+  run_scouting: $t("agent_logs.tool_run_scouting"),
+};
+
+const TOOL_ICONS: Record<ToolName, string> = {
+  install_kali_package: "download",
+  run: "terminal",
+  new_session: "power_settings_new",
+  switch_session: "swap_horiz",
+  close_session: "link_off",
+  list_sessions: "list",
+  interrupt_session: "block",
+  switch_mode: "compare_arrows",
+  report_vulnerability: "bug_report",
+  log_attack_attempt: "history_edu",
+  finish_task: "task_alt",
+  propose_attack_vector: "flag",
+  report_outcome: "fact_check",
+  dispatch_pentest_batch: "call_split",
+  request_report: "summarize",
+  run_scouting: "travel_explore",
+};
+
+function isKnownTool(toolName: string): toolName is ToolName {
+  return toolName in TOOL_LABELS;
+}
+
+// Shows a divider right before the first entry of a new Multi Agent
+// sub-run (grouped by agent_run_id, not just role - two concurrent
+// pentesting sub-runs share the same role but are still two distinct
+// runs). Single Agent mode's role never varies within a run, so this
+// never fires for it.
+function dividerLabel(
+  entry: AgentLogResponse,
+  prevEntry: AgentLogResponse | undefined,
+): string | null {
+  if (!entry.role || !isKnownRole(entry.role)) return null;
+  if (prevEntry && prevEntry.agent_run_id === entry.agent_run_id) return null;
+
+  const label = ROLE_LABELS[entry.role];
+  const shortId = entry.agent_run_id ? entry.agent_run_id.slice(0, 8) : null;
+  return shortId ? `${label} (${shortId}…)` : label;
+}
+
+function toolLabel(toolName?: string | null): string {
+  if (!toolName) return "";
+  return isKnownTool(toolName) ? TOOL_LABELS[toolName] : toolName;
+}
+
+function toolIcon(toolName?: string | null): string {
+  if (!toolName || !isKnownTool(toolName)) return "build";
+  return TOOL_ICONS[toolName];
+}
+
+function formatTimestamp(createdAt: string): string {
+  const date = new Date(createdAt);
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  if (!props.showDate) return time;
+  return `${date.toLocaleDateString()} ${time}`;
+}
+
+const logScreenRef = ref<HTMLElement | null>(null);
+
+function scrollToTop() {
+  if (logScreenRef.value) logScreenRef.value.scrollTop = 0;
+}
+
+function scrollToBottom() {
+  if (logScreenRef.value) logScreenRef.value.scrollTop = logScreenRef.value.scrollHeight;
+}
+
+// Low-level scroll position access for a caller doing its own
+// stay-in-place compensation around a "load older entries" prepend (see
+// SessionLogs.vue) - everything else should prefer scrollToTop/
+// scrollToBottom above.
+function getScrollTop(): number {
+  return logScreenRef.value?.scrollTop ?? 0;
+}
+
+function getScrollHeight(): number {
+  return logScreenRef.value?.scrollHeight ?? 0;
+}
+
+function setScrollTop(value: number) {
+  if (logScreenRef.value) logScreenRef.value.scrollTop = value;
+}
+
+watch(
+  () => props.entries,
+  async () => {
+    if (!props.autoScroll) return;
+    await nextTick();
+    scrollToBottom();
+  },
+  { deep: true },
+);
+
+defineExpose({ scrollToTop, scrollToBottom, getScrollTop, getScrollHeight, setScrollTop });
+</script>
+
+<style scoped lang="css">
+.agent-log-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--black);
+  border-bottom: 2px solid var(--border-primary);
+
+  padding: 10px var(--spacing-md) var(--spacing-md) var(--spacing-md);
+
+  flex: 1;
+  min-height: 0;
+}
+
+.log-row {
+  display: flex;
+  align-items: start ;
+  text-justify: center;
+  gap: 8px;
+}
+
+.log-icon {
+  font-size: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.log-icon--thinking {
+  color: var(--text-gray-dark);
+}
+
+.log-icon--action {
+  color: var(--red-primary);
+}
+
+.log-icon--tool {
+  color: var(--red-primary);
+}
+
+.log-timestamp {
+  color: var(--text-gray-darker);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.log-text {
+  color: var(--text-gray-light);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  /* Tool/thinking content often has real newlines (e.g. nmap_scan's
+     per-port digest) - the default `white-space: normal` silently
+     collapses them into spaces, squashing multi-line output onto one
+     line. Match .tool-content's handling below. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-text--thinking {
+  color: var(--text-gray-dark);
+  font-style: italic;
+}
+
+.tool-card {
+  padding: 8px 10px;
+  background-color: var(--card-bg);
+  border-color: var(--border-subtle);
+}
+
+.tool-card-header {
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tool-name {
+  color: var(--red-light);
+  font-size: 0.8rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tool-timestamp {
+  margin-left: auto;
+}
+
+.tool-content {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-white);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 26px;
+}
+
+.no-logs {
+  color: var(--text-gray-dark);
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.log-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-gray-dark);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-section-divider::before,
+.log-section-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-subtle);
+}
+
+.running-indicator {
+  gap: 8px;
+  padding: 8px;
+  color: var(--text-gray-dark);
+  font-size: 0.85rem;
+  border-top: 2px solid var(--border-primary);
+}
+</style>

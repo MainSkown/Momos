@@ -73,17 +73,6 @@ def _render_transcript(logs: List[AgentLog]) -> str:
     return transcript
 
 
-def _last_real_raw_output(logs: List[AgentLog]) -> Optional[str]:
-    """The evidence agent_tools._verify_claim_against_evidence checks
-    report_vulnerability's proof_of_concept against - reporting never
-    calls run() itself, so this stands in for "the agent's own most recent
-    real tool output" with the pentesting run's actual last one instead."""
-    for log in reversed(logs):
-        if log.raw_output:
-            return log.raw_output
-    return None
-
-
 class ReportingState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     finish_summary: Optional[str]
@@ -112,7 +101,6 @@ class ReportingAgent:
         self.context_window = context_window or common.DEFAULT_CONTEXT_WINDOW_FALLBACK
 
         self.transcript_text = _render_transcript(pentesting_logs)
-        self._last_raw_output = _last_real_raw_output(pentesting_logs)
 
         self._get_model_name = lambda: getattr(self, "model_name", "")
 
@@ -123,7 +111,6 @@ class ReportingAgent:
             self._has_tested,
             self._clear_tested,
             self._on_reported,
-            self._get_last_raw_output,
             self._get_model_name,
         )
 
@@ -139,18 +126,17 @@ class ReportingAgent:
     def _has_tested(self) -> bool:
         # Constant True - reporting's evidence is the pentesting run's own
         # already-real transcript, not something reporting freshly tests
-        # itself. The actual check that matters here is
-        # _verify_claim_against_evidence (see _get_last_raw_output below),
-        # not this proof-of-a-fresh-action gate.
+        # itself. That transcript was already checked once, at the moment
+        # pentesting claimed it, by its own report_outcome's
+        # _verify_claim_against_evidence call - reporting doesn't repeat
+        # that check (see create_vulnerability_tool's verify_evidence
+        # docstring for why it can't act on a rejection anyway).
         return True
 
     def _clear_tested(self):
         # No-op - reporting makes exactly one report_vulnerability call
         # per run, ever; there is no "next claim" to re-gate before.
         pass
-
-    def _get_last_raw_output(self) -> Optional[str]:
-        return self._last_raw_output
 
     def _on_reported(self, vulnerability: Vulnerability):
         self.created_vulnerability = vulnerability

@@ -61,6 +61,14 @@ class AgentRunBase(SQLModel):
     # Which AttackVector this run is/was working on - set for pentesting
     # and reporting runs, None for single_agent/orchestrator/scouting.
     attack_vector_id: Optional[uuid.UUID] = None
+    # Which TestSession this run belongs to - stamped by run_registry.py's
+    # persist_run_state/start_sub_run from current_session_for_target, not
+    # passed in by any caller here. Nullable only because this table has
+    # no other legitimate way to create a row without a live session (see
+    # test_session_scheme.py); never actually left unset in practice.
+    session_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="testsession.id", index=True
+    )
 
 
 class AgentRun(AgentRunBase, table=True):
@@ -73,7 +81,7 @@ class AgentRun(AgentRunBase, table=True):
     # upsert_agent_run/get_agent_run for how single_agent mode's call sites
     # keep working unchanged against this new shape.
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    target_id: uuid.UUID = Field(foreign_key="target.id")
+    target_id: uuid.UUID = Field(foreign_key="target.id", index=True)
     project_id: uuid.UUID = Field(foreign_key="project.id")
 
     target: Target = Relationship(back_populates="agent_runs")

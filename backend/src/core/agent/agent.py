@@ -22,7 +22,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from . import agent_tools
+from . import agent_tools, run_registry
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
 from src.core import db_manager, settings, tool_groups
@@ -789,8 +789,13 @@ class Agent:
         # start_attack_vector/report_outcome as they happen, so re-deriving
         # it fresh every turn is the only way to see the model's own recent
         # calls reflected back to it. Same pattern/reasoning as
-        # OrchestratorAgent._render_context_message's own vector board.
-        vectors = db_manager.get_attack_vectors_for_target(self.target_id)
+        # OrchestratorAgent._render_context_message's own vector board,
+        # including the pre-resolved session_id (skips a redundant DB
+        # round trip on every turn - see get_attack_vectors_for_target's
+        # own comment).
+        vectors = db_manager.get_attack_vectors_for_target(
+            self.target_id, session_id=run_registry.current_session_id_for_target(self.target_id)
+        )
         lines.append("### Attack vector board (live - trust this over your own memory of earlier turns)")
         if not vectors:
             lines.append(
@@ -1387,7 +1392,8 @@ class Agent:
 
         def _vectors_all_checked() -> bool:
             return run_mode == "until_vectors_checked" and db_manager.attack_vectors_all_checked(
-                self.target_id
+                self.target_id,
+                session_id=run_registry.current_session_id_for_target(self.target_id),
             )
 
         def _advance_time_left(delta: float) -> None:

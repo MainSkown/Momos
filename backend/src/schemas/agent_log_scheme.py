@@ -36,6 +36,13 @@ class AgentLogBase(SQLModel):
     # group a target's logs by role/run instead of one flat stream.
     agent_run_id: Optional[uuid.UUID] = None
     role: Optional[str] = None
+    # Which TestSession this entry belongs to - stamped by
+    # run_registry.persist_and_broadcast from current_session_for_target,
+    # not passed in by any caller here. See agent_run_scheme.py's own
+    # session_id for why this is nullable.
+    session_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="testsession.id", index=True
+    )
 
 
 class AgentLog(AgentLogBase, table=True):
@@ -49,7 +56,7 @@ class AgentLog(AgentLogBase, table=True):
     )
 
     project_id: uuid.UUID = Field(foreign_key="project.id")
-    target_id: uuid.UUID = Field(foreign_key="target.id")
+    target_id: uuid.UUID = Field(foreign_key="target.id", index=True)
 
     target: Target = Relationship(back_populates="agent_logs")
 

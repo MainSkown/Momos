@@ -6,6 +6,7 @@
       <ContextView class="context-view" :title="currentToolLabel">
         <Overview v-if="currentTool == TOOLS_KEYS.OVERVIEW" />
         <Vulnerabilities v-if="currentTool == TOOLS_KEYS.VULNERABILITIES" />
+        <HistoryPage v-if="currentTool == TOOLS_KEYS.HISTORY" />
         <ProjectSettingsPage v-if="currentTool == TOOLS_KEYS.PROJECT_CONFIGURATION" />
       </ContextView>
     </div>
@@ -23,6 +24,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import ProjectSettingsPage from "./ProjectSettingsPage/ProjectSettingsPage.vue";
 import Vulnerabilities from "./Vulnerabilities/Vulnerabilities.vue";
+import HistoryPage from "./HistoryPage/HistoryPage.vue";
 
 const store = useMomosStore()
 const { t: $t } = useI18n();

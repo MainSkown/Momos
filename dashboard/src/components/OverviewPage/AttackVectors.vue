@@ -8,8 +8,8 @@
     <div class="separator" />
 
     <div class="column attack-vectors-body">
-      <div v-if="!displayTargetId" class="text-center text-gray no-vectors">
-        {{ $t("attack_vectors.no_running_target") }}
+      <div v-if="showEmptyState" class="text-center text-gray no-vectors">
+        {{ emptyText ?? $t("attack_vectors.no_running_target") }}
       </div>
 
       <div v-else class="board-columns scrollable-panel">
@@ -26,7 +26,11 @@
             v-for="vector in vectorsFor(column.status)"
             :key="vector.id"
             class="border vector-card"
-            :class="column.status === 'tested_vulnerable' ? 'severity-critical' : ''"
+            :class="[
+              column.status === 'tested_vulnerable' ? 'severity-critical' : '',
+              isDataDriven ? 'vector-card-clickable' : '',
+            ]"
+            @click="onVectorClick(vector)"
           >
             <span
               v-if="vector.linked_vulnerability_id"
@@ -49,7 +53,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useMomosStore } from "@/store/momos_store";
-import type { AttackVectorStatus } from "@/api/types.gen";
+import type { AttackVectorStatus, ResponseAttackVector } from "@/api/types.gen";
+
+const props = defineProps<{
+  // When provided, the board is purely data-driven and skips the store/
+  // displayTargetId path below entirely - this is History's SessionDetail
+  // reusing the same board, read-only, for one specific (possibly long-
+  // finished) session instead of "whichever target is running/just ran".
+  // Overview keeps mounting this component with no props at all, so its
+  // own behavior is completely unchanged.
+  vectors?: ResponseAttackVector[];
+  // Overrides the "no running target" message for the data-driven case
+  // (e.g. "This session has no attack vectors").
+  emptyText?: string;
+}>();
+
+const emit = defineEmits<{
+  "select-vector": [vector: ResponseAttackVector];
+}>();
 
 const store = useMomosStore();
 
@@ -61,6 +82,8 @@ const COLUMNS: { status: AttackVectorStatus; labelKey: string }[] = [
   { status: "inconclusive", labelKey: "attack_vectors.status_inconclusive" },
 ];
 
+const isDataDriven = computed(() => props.vectors !== undefined);
+
 // Attack vectors are per-target, but (like AgentLogs/UserConsole) this
 // card is project-wide - only one target can ever be running in a
 // project at a time (see AgentService.start_agent's own exclusivity
@@ -71,24 +94,37 @@ const runningTargetId = computed(() => store.getRunningTarget(store.openedProjec
 // live, but deliberately does NOT clear back to null when the run ends:
 // the last run's board stays on screen (so a finished pentest's results
 // are still readable) until a NEW run actually starts, either on the
-// same target (which wipes and repopulates it - see
-// delete_attack_vectors_for_target's own docstring on the backend) or a
-// different one in this project.
+// same target (which starts a fresh session - see TestSession's own
+// docstring on the backend) or a different one in this project. Unused
+// entirely in data-driven mode.
 const displayTargetId = ref<string | null>(runningTargetId.value);
 
+const showEmptyState = computed(() =>
+  isDataDriven.value ? (props.vectors?.length ?? 0) === 0 : !displayTargetId.value,
+);
+
 function vectorsFor(status: AttackVectorStatus) {
+  if (isDataDriven.value) {
+    return (props.vectors ?? []).filter((v) => v.status === status);
+  }
   if (!displayTargetId.value) return [];
   return store.getAttackVectors(displayTargetId.value).filter((v) => v.status === status);
+}
+
+function onVectorClick(vector: ResponseAttackVector) {
+  if (isDataDriven.value) emit("select-vector", vector);
 }
 
 async function loadForTarget(targetID: string | null) {
   if (targetID) await store.loadAttackVectors(store.openedProject, targetID);
 }
 
-onMounted(() => loadForTarget(displayTargetId.value));
+onMounted(() => {
+  if (!isDataDriven.value) loadForTarget(displayTargetId.value);
+});
 
 watch(runningTargetId, (newTarget) => {
-  if (!newTarget) return;
+  if (isDataDriven.value || !newTarget) return;
   displayTargetId.value = newTarget;
   loadForTarget(newTarget);
 });
@@ -99,6 +135,7 @@ watch(runningTargetId, (newTarget) => {
 watch(
   () => store.openedProject,
   (newProject) => {
+    if (isDataDriven.value) return;
     displayTargetId.value = store.getRunningTarget(newProject);
     loadForTarget(displayTargetId.value);
   },
@@ -155,6 +192,14 @@ watch(
   gap: 4px;
   padding: 6px;
   font-size: 0.8rem;
+}
+
+.vector-card-clickable {
+  cursor: pointer;
+}
+
+.vector-card-clickable:hover {
+  background: var(--hover-bg);
 }
 
 .vector-reported-icon {

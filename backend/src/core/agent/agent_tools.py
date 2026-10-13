@@ -2834,10 +2834,24 @@ def create_vulnerability_tool(
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
     on_reported: Callable[[Vulnerability], None],
-    get_last_raw_output: Callable[[], Optional[str]],
+    get_last_raw_output: Optional[Callable[[], Optional[str]]],
     get_model_name: Callable[[], str],
+    verify_evidence: bool = True,
 ):
-    """Builds a report_vulnerability tool bound to a specific project/target."""
+    """Builds a report_vulnerability tool bound to a specific project/target.
+
+    verify_evidence gates the _verify_claim_against_evidence check below.
+    Single-agent mode leaves it True: it still has run() and every other
+    tool available, so it can act on a rejection by gathering real evidence
+    and trying again. build_reporting_agent_tools passes False instead -
+    reporting has exactly one tool (this one), max_turns=6, and no run() of
+    its own; a rejection would just burn its turn budget rephrasing the
+    same already-fixed transcript with nothing it can do to "re-verify",
+    stalling the run with created_vulnerability left None (see the
+    orchestrator's linked_vulnerability_id wait in _is_done). The evidence
+    this records was already vetted once, at the moment it was claimed, by
+    pentesting_tools.create_report_outcome_tool's own
+    _verify_claim_against_evidence check."""
 
     @tool(REPORT_VULNERABILITY_TOOL_NAME)
     async def report_vulnerability(
@@ -2869,11 +2883,15 @@ def create_vulnerability_tool(
         if gate_error:
             return gate_error
 
-        verification_error = await _verify_claim_against_evidence(
-            project_id, "vulnerability report", proof_of_concept, get_last_raw_output()
-        )
-        if verification_error:
-            return verification_error
+        if verify_evidence:
+            verification_error = await _verify_claim_against_evidence(
+                project_id,
+                "vulnerability report",
+                proof_of_concept,
+                get_last_raw_output() if get_last_raw_output else None,
+            )
+            if verification_error:
+                return verification_error
 
         try:
             # SQLModel table models don't run Pydantic validators on
@@ -3675,6 +3693,7 @@ def build_pentesting_agent_tools(
     on_raw_output: Callable[[str], None],
     on_ports_changed: Callable[[List[int]], None],
     on_outcome_reported: Callable[[str, str, List[str]], None],
+    get_last_raw_output: Callable[[], Optional[str]],
     allow_shell: bool = True,
     allow_install_packages: bool = True,
     enabled_tools: Optional[List[str]] = None,
@@ -3741,6 +3760,7 @@ def build_pentesting_agent_tools(
             get_mode,
             has_tested,
             on_outcome_reported,
+            get_last_raw_output,
         )
     )
     return tools
@@ -3753,7 +3773,6 @@ def build_reporting_agent_tools(
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
     on_reported: Callable[[Vulnerability], None],
-    get_last_raw_output: Callable[[], Optional[str]],
     get_model_name: Callable[[], str],
 ) -> list:
     """Reporting gets exactly one tool: report_vulnerability, reused as-is
@@ -3765,7 +3784,11 @@ def build_reporting_agent_tools(
     already-persisted transcript, not something it freshly tests itself.
     No shell, no session, no other target-touching tool at all (see the
     tool matrix in the implementation plan) - reporting never acts on the
-    target directly."""
+    target directly. verify_evidence=False for the same reason: reporting
+    has no run() to re-verify with and only max_turns=6, so
+    _verify_claim_against_evidence's "re-verify with a real run() call"
+    rejection would be a dead end here, not something it can act on - see
+    create_vulnerability_tool's own docstring."""
     return [
         create_vulnerability_tool(
             project_id,
@@ -3774,8 +3797,9 @@ def build_reporting_agent_tools(
             has_tested,
             clear_tested,
             on_reported,
-            get_last_raw_output,
+            None,
             get_model_name,
+            verify_evidence=False,
         )
     ]
 

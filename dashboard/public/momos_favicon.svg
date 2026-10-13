@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+  <defs>
+    <linearGradient id="machine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef4444"/>
+      <stop offset="1" stop-color="#991b1b"/>
+    </linearGradient>
+  </defs>
+  <rect width="300" height="300" rx="40" fill="#0a0a0a"/>
+  <g transform="translate(16 14) scale(0.89)">
+  <!-- the machine being looked down on -->
+  <path d="M 112,192 H 188 L 250,298 Q 150,320 50,298 Z" fill="url(#machine)" stroke="url(#machine)" stroke-width="6" stroke-linejoin="round"/>
+  <!-- pupil -->
+  <path d="m 120.2,166.8 c 3.5,-17.5 14.8,-28.6 29.5,-28.5 14.7,0.1 29,11.4 32.3,29 z" fill="#0a0a0a" stroke="#ef4444" stroke-width="13" stroke-linejoin="round"/>
+  <!-- heavy upper lid -->
+  <path d="m 295,209 c 0,0 -64.4,-42.7 -145,-42.7 -80.6,0 -145.4,41.9 -146.7,42.7 0,0 65.7,-103.2 146.3,-103.2 80.6,0 146.7,101.8 145.4,103.2 z" fill="none" stroke="#ef4444" stroke-width="13" stroke-linejoin="round"/>
+  <!-- mocking brow -->
+  <path d="M 8,128 C 107,117 89,4 234,87" fill="none" stroke="#ef4444" stroke-width="15" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -7,6 +7,7 @@ from src.schemas import (
     AgentRunResponse,
     KaliCreationStage,
     ResponseAttackVector,
+    TestSessionResponse,
 )
 
 # Separate registries for cleaner typing definitions
@@ -33,6 +34,7 @@ class WsTypes(str, Enum):
     AgentRunTimer = "AgentRunTimer"
     AgentContextUsage = "AgentContextUsage"
     AttackVectorUpdate = "AttackVectorUpdate"
+    TestSessionUpdate = "TestSessionUpdate"
 
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -201,6 +203,17 @@ class AttackVectorUpdate(OutboundMessage):
     target_id: str
     type: Literal[WsTypes.AttackVectorUpdate]
     vector: ResponseAttackVector
+
+class TestSessionUpdate(OutboundMessage):
+    """Pushed whenever a TestSession is created or its outcome/ended_at/
+    active_seconds changes (see agent_service.py's session create/resume
+    in start_agent and _finalize_session) - an open History list applies
+    this directly instead of polling .../sessions, the same way
+    AttackVectorUpdate already does for the live board."""
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.TestSessionUpdate]
+    session: TestSessionResponse
 
 # --- Union Typings ---
 #! Must be at the end of this file - filled on run

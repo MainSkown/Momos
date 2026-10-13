@@ -98,6 +98,7 @@ def create_propose_attack_vector_tool(
                 project_id=project_id,
                 target_id=target_id,
                 discovered_by_run_id=agent_run_id,
+                session_id=run_registry.current_session_id_for_target(target_id),
             )
             new_vector = await loop.run_in_executor(None, db_manager.add_attack_vector, vector)
             saved.append(new_vector)
