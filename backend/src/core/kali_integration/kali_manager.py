@@ -411,9 +411,14 @@ class KaliManger:
         self,
         container_name: str = "momos-kali-worker",
         packages: Sequence[str] | None = None,
+        image: str = "kalilinux/kali-rolling:latest",
     ):
         self.container_name = container_name
         self.container = None
+        # Testability seam, not a behavior change - default is the real
+        # production image, so nothing changes unless a caller (tests only,
+        # so far) explicitly overrides it. See docs/testing-plan.md §1.4a.
+        self.image = image
         self.packages = (
             tuple(packages) if packages is not None else DEFAULT_KALI_PACKAGES
         )
@@ -537,7 +542,7 @@ class KaliManger:
         print("Starting container")
         self._report(on_stage, KaliCreationStage.starting_container)
         self.container = self.client.containers.run(
-            image="kalilinux/kali-rolling:latest",
+            image=self.image,
             name=self.container_name,
             detach=True,
             tty=True,
