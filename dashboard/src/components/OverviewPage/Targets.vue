@@ -11,11 +11,11 @@
         <!-- Head-row -->
         <div class="row table-row">
           <!-- Name -->
-          <div class="border cell text-center">
+          <div class="border cell text-center text-bold">
             <span>{{ $t("targets.name") }}</span>
           </div>
           <!-- Target -->
-          <div class="border cell text-center">
+          <div class="border cell text-center text-bold">
             <span>{{ $t("targets.target") }}</span>
           </div>
           <!-- Settings -->
