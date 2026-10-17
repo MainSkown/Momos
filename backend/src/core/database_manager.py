@@ -27,9 +27,14 @@ T = TypeVar("T", bound=SQLModel)
 
 class DatabaseManager:
     def __init__(self, db_url: str):
+        # create_engine is lazy (SQLAlchemy doesn't open a socket until the
+        # first actual use) - init_db() is NOT called here on purpose, since
+        # this class is instantiated at import time (module-level
+        # db_manager below) and every backend module that imports it would
+        # otherwise require a live, correctly-provisioned Postgres just to
+        # be imported. Callers that need the schema to exist call init_db()
+        # explicitly (main.py's lifespan, in production).
         self.engine = create_engine(db_url, echo=True)
-
-        self.init_db()
 
     def init_db(self):
         with self.engine.connect() as conn:

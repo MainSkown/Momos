@@ -21,6 +21,11 @@ from src.schemas import export_json_schema, OllamaModelsList
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # == Startup ==
+    # Must run before mark_orphaned_sessions_aborted() below - that call
+    # queries tables init_db() creates. See DatabaseManager.__init__'s own
+    # comment for why this isn't done at construction time instead.
+    db_manager.init_db()
+
     export_json_schema(Path("models.schema.json"))
 
     base_dir = Path(__file__).resolve().parent
