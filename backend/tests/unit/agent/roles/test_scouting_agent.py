@@ -37,18 +37,20 @@ def _make_agent(monkeypatch, allow_shell=False):
     return agent
 
 
-# --- Dead dedup-code confirmation (crawler finding #2) ---
+# --- Dead dedup-code fix confirmation (crawler finding #2) ---
 #
-# role-agents-graphs.md / role-tools-modules.md both claim
-# _pending_proposed_vectors is dead: nothing in build_scouting_agent_tools
-# ever calls back into it, so the "already proposed - don't repeat" block
-# in _render_context_message never has anything to show. Proven here by
-# going through the REAL propose_attack_vector tool (not poking the
-# private buffer directly) and showing it never gets written.
+# role-agents-graphs.md / role-tools-modules.md both claimed
+# _pending_proposed_vectors was dead: nothing in build_scouting_agent_tools
+# called back into it, so the "already proposed - don't repeat" block in
+# _render_context_message never had anything to show. Fixed by rebuilding
+# propose_attack_vector (in __init__) wired to
+# ScoutingAgent._register_proposed_vector. Proven here by going through the
+# REAL propose_attack_vector tool (not poking the private buffer directly)
+# and showing it now gets written, and that a repeat name is deduped.
 
 
 @pytest.mark.asyncio
-async def test_propose_attack_vector_never_populates_the_dedup_buffer(monkeypatch):
+async def test_propose_attack_vector_populates_the_dedup_buffer(monkeypatch):
     agent = _make_agent(monkeypatch)
 
     fake_db = MagicMock()
@@ -63,18 +65,42 @@ async def test_propose_attack_vector_never_populates_the_dedup_buffer(monkeypatc
     result = await propose_tool.ainvoke({"descriptions": ["vsftpd 2.3.4 on port 21 - check backdoor"]})
 
     assert "Recorded 1 attack vector" in result
-    # The real bug: even after a real, successful propose call, the buffer
-    # _call_model drains into ScoutingState.proposed_vectors is still
-    # empty - nothing in the production tool-building path ever appends
-    # to it, so the "don't repeat these" context block can never render.
-    assert agent._pending_proposed_vectors == []
+    # The fix: a real, successful propose call now writes into the buffer
+    # _call_model drains into ScoutingState.proposed_vectors - the "don't
+    # repeat these" context block has something to render.
+    assert agent._pending_proposed_vectors == ["vsftpd 2.3.4 on port 21 - check backdoor"]
 
-    # Confirm the state update _call_model would produce is equally empty,
-    # proving the whole pipeline (tool -> buffer -> state) is dark, not
-    # just the buffer in isolation.
+    # Confirm the state update _call_model would produce is equally
+    # populated, proving the whole pipeline (tool -> buffer -> state) is
+    # wired, not just the buffer in isolation.
     state_update_proposed_vectors = list({"proposed_vectors": []}.get("proposed_vectors") or [])
     state_update_proposed_vectors.extend(agent._pending_proposed_vectors)
-    assert state_update_proposed_vectors == []
+    assert state_update_proposed_vectors == ["vsftpd 2.3.4 on port 21 - check backdoor"]
+
+
+@pytest.mark.asyncio
+async def test_propose_attack_vector_rejects_an_already_proposed_duplicate(monkeypatch):
+    agent = _make_agent(monkeypatch)
+
+    fake_db = MagicMock()
+    fake_db.add_attack_vector.side_effect = lambda v: v
+    monkeypatch.setattr(scouting_tools, "db_manager", fake_db)
+
+    propose_tool = next(
+        t for t in agent.tools if t.name == scouting_tools.PROPOSE_ATTACK_VECTOR_TOOL_NAME
+    )
+    agent._mark_tested()
+
+    first = await propose_tool.ainvoke({"descriptions": ["vsftpd 2.3.4 on port 21 - check backdoor"]})
+    assert "Recorded 1 attack vector" in first
+
+    second = await propose_tool.ainvoke({"descriptions": ["vsftpd 2.3.4 on port 21 - check backdoor"]})
+
+    # The duplicate must be rejected, not saved again, and the buffer must
+    # not grow a second copy of the same description.
+    assert "Skipped 1 already-proposed duplicate" in second
+    assert fake_db.add_attack_vector.call_count == 1
+    assert agent._pending_proposed_vectors == ["vsftpd 2.3.4 on port 21 - check backdoor"]
 
 
 # --- Enumeration merge logic (pure-ish, via the real _record_enumeration) ---

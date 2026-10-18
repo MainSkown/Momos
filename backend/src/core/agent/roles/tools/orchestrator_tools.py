@@ -333,18 +333,31 @@ def create_dispatch_pentest_batch_tool(
                 print(f"dispatch_pentest_batch: pentesting sub-run for {vector_id} failed: {e}")
                 error = e
             finally:
+                # persist_run_state/cleanup_sub_run are wrapped in their
+                # own try/except (log and continue), NOT allowed to
+                # propagate out of this finally - release_agent_slot right
+                # below is this finally block's own responsibility to
+                # guarantee, and a persistence failure must never be able
+                # to skip it and leak the slot acquire_agent_slot already
+                # granted above.
                 if agent_run_id is not None:
-                    await run_registry.persist_run_state(
-                        project_id=project_id,
-                        target_id=target_id,
-                        status=AgentRunState.FINISHED,
-                        remaining_seconds=0,
-                        agent_run_id=agent_run_id,
-                        role="pentesting",
-                        parent_run_id=orchestrator_run_id,
-                        attack_vector_id=vector_id,
-                    )
-                    run_registry.cleanup_sub_run(target_id, agent_run_id)
+                    try:
+                        await run_registry.persist_run_state(
+                            project_id=project_id,
+                            target_id=target_id,
+                            status=AgentRunState.FINISHED,
+                            remaining_seconds=0,
+                            agent_run_id=agent_run_id,
+                            role="pentesting",
+                            parent_run_id=orchestrator_run_id,
+                            attack_vector_id=vector_id,
+                        )
+                        run_registry.cleanup_sub_run(target_id, agent_run_id)
+                    except Exception as persist_error:
+                        print(
+                            "dispatch_pentest_batch: failed to persist/"
+                            f"clean up run state for {agent_run_id}: {persist_error}"
+                        )
                 await run_registry.release_agent_slot(project_id)
 
             if error is not None:
@@ -355,7 +368,12 @@ def create_dispatch_pentest_batch_tool(
             summary = outcome.get("summary") or agent.finish_summary or "(no outcome reported)"
             return f"{vector_id} [{refreshed.status}]: {summary}"
 
-        results = await asyncio.gather(*(run_one(vid) for vid in vector_ids))
+        # dict.fromkeys preserves first-seen order while dropping repeats -
+        # the same id listed twice in one batch must dispatch exactly one
+        # sub-agent for it, not two concurrent ones racing to flip the same
+        # vector PENDING->TESTING.
+        unique_vector_ids = list(dict.fromkeys(vector_ids))
+        results = await asyncio.gather(*(run_one(vid) for vid in unique_vector_ids))
         return "\n".join(results)
 
     return dispatch_pentest_batch

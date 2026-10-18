@@ -310,7 +310,7 @@ async def run_graph_loop(
     target_id: Optional[str] = None,
     run_mode: str = "timer",
     safety_cap: Optional[int] = None,
-    check_done_mid_turn: bool = True,
+    check_done_mid_turn: bool = False,
 ):
     """Runs `app` (a compiled LangGraph, interrupt_before=["tools"]) until
     it's done, stopped, or runs out of budget - yielding raw BaseMessages,
@@ -320,23 +320,34 @@ async def run_graph_loop(
     agent turn.
 
     `input_data=None` resumes an existing checkpoint; a real dict (e.g.
-    `{"messages": [...]}`) starts fresh. When `check_done_mid_turn` is true
-    (the default), `is_done()` is ALSO checked right after every processed
-    node update, not just at the top of the outer loop - a role's own
-    finish tool setting its "I'm done" flag mid-step stops this
-    immediately rather than paying for one more (wasted) LLM turn. The
-    orchestrator passes `check_done_mid_turn=False`: it has no finish tool
-    of its own (see OrchestratorAgent._is_done's own docstring) - its
-    "done" condition is externally derived from the AttackVector board, so
-    the SAME astream() call that just ran e.g. dispatch_pentest_batch and
-    resolved every vector to a terminal status would otherwise be cut off
-    right there, before the orchestrator's own next turn - already
-    streaming in as part of that same call, since the graph's only
-    unconditional edge is tools->agent - ever got to see that result and
-    react to it (e.g. call request_report on a real finding). Checking
-    only at the top of the outer loop instead means the orchestrator
+    `{"messages": [...]}`) starts fresh. When `check_done_mid_turn` is true,
+    `is_done()` is ALSO checked right after every processed node update,
+    not just at the top of the outer loop - a role's own finish tool
+    setting its "I'm done" flag mid-step stops this immediately rather
+    than paying for one more (wasted) LLM turn. This is NOT the default
+    (every current caller passes `check_done_mid_turn=False` explicitly):
+    for pentesting/scouting/reporting, the tools node is what sets
+    finish_summary/scouting_done, but the AGENT node - which runs right
+    after it on the same astream() call, since the graph's only
+    unconditional edge is tools->agent - is what actually checkpoints that
+    result. Returning as soon as the tools-node update makes is_done()
+    true cuts the loop off before that checkpointing agent-node turn ever
+    streams, so a resumed run re-reads a stale `None` and repeats a turn
+    it already finished. The orchestrator has the same reason to pass
+    False: it has no finish tool of its own (see
+    OrchestratorAgent._is_done's own docstring) - its "done" condition is
+    externally derived from the AttackVector board, so the SAME astream()
+    call that just ran e.g. dispatch_pentest_batch and resolved every
+    vector to a terminal status would otherwise be cut off right there,
+    before the orchestrator's own next turn ever got to see that result
+    and react to it (e.g. call request_report on a real finding).
+    Checking only at the top of the outer loop instead means every role
     always gets that turn first; `is_done()` only ends the run once it
-    reports being done AFTER having seen the board itself.
+    reports being done AFTER having seen the board/checkpoint itself.
+    `check_done_mid_turn=True` remains available for a future role that
+    deliberately wants the early-exit performance tradeoff and has no
+    checkpointing node depending on seeing the same turn - it is not
+    currently used by any role.
     `requires_interrupt(tool_call_names)` decides whether a turn
     paused right before "tools" needs human approval - callers build
     their own predicate (typically from turn_conflict + their own

@@ -77,6 +77,14 @@ class ScoutingAgent:
         self._has_real_action: bool = False
         self._pending_enumeration: Dict[str, dict] = {}
         self._pending_proposed_vectors: List[str] = []
+        # Every description ever accepted this run (both already drained
+        # into persisted proposed_vectors AND still sitting in
+        # _pending_proposed_vectors) - the real dedup check
+        # _register_proposed_vector needs, since _pending_proposed_vectors
+        # alone gets cleared every _call_model turn and so can't catch a
+        # repeat proposed several turns after the first one. Seeded from
+        # the checkpoint on resume - see start_agent.
+        self._proposed_vector_history: set = set()
 
         self._get_model_name = lambda: getattr(self, "model_name", "")
 
@@ -96,6 +104,25 @@ class ScoutingAgent:
             allow_install_packages,
             enabled_tools,
         )
+        # build_scouting_agent_tools's own propose_attack_vector doesn't
+        # know about _register_proposed_vector (it has no reason to - that
+        # dedup buffer is this class's own state, not a generic tool-
+        # building concern) - rebuilt here, in place, wired to it, rather
+        # than widening that shared builder's signature for one role's
+        # internal bookkeeping.
+        self.tools = [
+            t
+            for t in self.tools
+            if t.name != scouting_tools.PROPOSE_ATTACK_VECTOR_TOOL_NAME
+        ] + [
+            scouting_tools.create_propose_attack_vector_tool(
+                project_id,
+                target_id,
+                agent_run_id,
+                self._has_tested,
+                self._register_proposed_vector,
+            )
+        ]
 
         self.changeModel(model_name=model_name, reasoning=reasoning)
         self.app = self._build_graph()
@@ -105,6 +132,22 @@ class ScoutingAgent:
 
     def _record_enumeration(self, entries: Dict[str, dict]):
         self._pending_enumeration.update(entries)
+
+    def _register_proposed_vector(self, description: str) -> bool:
+        """The real dedup check+update propose_attack_vector needs - see
+        scouting_tools.create_propose_attack_vector_tool's own docstring.
+        Returns False (reject, don't save) for a description already in
+        _proposed_vector_history; otherwise records it into both that
+        history set (permanent, for future dedup checks) and
+        _pending_proposed_vectors (drained into the persisted
+        ScoutingState.proposed_vectors by _call_model, so the "already
+        proposed - don't repeat" context block actually has something to
+        show) and returns True."""
+        if description in self._proposed_vector_history:
+            return False
+        self._proposed_vector_history.add(description)
+        self._pending_proposed_vectors.append(description)
+        return True
 
     def _mark_tested(self):
         self._has_real_action = True
@@ -256,6 +299,10 @@ class ScoutingAgent:
         if existing_state.values:
             input_data = None
             self.finish_summary = existing_state.values.get("finish_summary", self.finish_summary)
+            # Resuming a crashed/paused run - reseed the dedup history from
+            # whatever's already persisted so a vector proposed before the
+            # crash isn't proposed again as if new.
+            self._proposed_vector_history = set(existing_state.values.get("proposed_vectors") or [])
         else:
             target_scope: AgentTargetScope = {
                 "name": target.name,
@@ -316,5 +363,6 @@ class ScoutingAgent:
             requires_interrupt,
             on_tool_message=on_tool_message,
             max_turns=max_turns,
+            check_done_mid_turn=False,
         ):
             yield event

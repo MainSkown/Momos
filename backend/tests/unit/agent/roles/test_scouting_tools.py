@@ -87,6 +87,55 @@ async def test_propose_attack_vector_mixed_list_saves_only_non_empty(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_propose_attack_vector_without_register_proposed_never_dedupes(monkeypatch, ids):
+    # register_proposed is optional (defaults to None) - a caller that
+    # doesn't pass it (e.g. this test, or any other direct caller of the
+    # tool factory) gets the old no-dedup behavior unchanged.
+    fake_db = _wire_db(monkeypatch)
+    tool = scouting_tools.create_propose_attack_vector_tool(
+        ids["project_id"], ids["target_id"], ids["agent_run_id"], has_tested=lambda: True
+    )
+
+    await tool.ainvoke({"descriptions": ["same vector"]})
+    result = await tool.ainvoke({"descriptions": ["same vector"]})
+
+    assert "Recorded 1 attack vector" in result
+    assert fake_db.add_attack_vector.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_propose_attack_vector_register_proposed_rejects_duplicate(monkeypatch, ids):
+    # The real dedup wiring, exercised directly against the tool factory's
+    # own register_proposed parameter - ScoutingAgent._register_proposed_vector
+    # is one real implementation of this callable, but the tool's own
+    # check/skip/report logic is what's pinned here.
+    fake_db = _wire_db(monkeypatch)
+    seen = set()
+
+    def register_proposed(description: str) -> bool:
+        if description in seen:
+            return False
+        seen.add(description)
+        return True
+
+    tool = scouting_tools.create_propose_attack_vector_tool(
+        ids["project_id"],
+        ids["target_id"],
+        ids["agent_run_id"],
+        has_tested=lambda: True,
+        register_proposed=register_proposed,
+    )
+
+    first = await tool.ainvoke({"descriptions": ["vsftpd 2.3.4 - check known backdoor"]})
+    second = await tool.ainvoke({"descriptions": ["vsftpd 2.3.4 - check known backdoor"]})
+
+    assert "Recorded 1 attack vector" in first
+    assert "Recorded 1 attack vector" not in second
+    assert "Skipped 1 already-proposed duplicate" in second
+    fake_db.add_attack_vector.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_finish_scouting_calls_on_finish_exactly_once():
     calls = []
     tool = scouting_tools.create_finish_scouting_tool(on_finish=lambda s: calls.append(s))

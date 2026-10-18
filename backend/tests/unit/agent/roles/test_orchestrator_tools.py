@@ -245,18 +245,19 @@ async def test_drain_sub_agent_persists_real_messages(monkeypatch, ids):
     assert persisted[0]["role"] == "pentesting"
 
 
-# --- dispatch_pentest_batch: duplicate vector id in one call ---
+# --- dispatch_pentest_batch: duplicate vector id in one call (fixed) ---
 
 
 @pytest.mark.asyncio
-async def test_dispatch_pentest_batch_duplicate_id_runs_the_sub_agent_twice(monkeypatch, ids):
+async def test_dispatch_pentest_batch_duplicate_id_runs_the_sub_agent_once(monkeypatch, ids):
     # role-tools-modules.md's finding: the same vector id passed twice in
-    # one call can have both coroutines read PENDING before either writes
-    # TESTING, so the pentest runs twice on one vector. Modeled here with
-    # a fake get_attack_vector that returns a FRESH "still pending" vector
-    # on every call - exactly what both concurrent reads would see if they
-    # interleave before either write commits, since there's no per-call
-    # id-level locking anywhere in run_one.
+    # one call used to have both coroutines read PENDING before either
+    # wrote TESTING, so the pentest ran twice on one vector. Fixed by
+    # deduping vector_ids (dict.fromkeys, order-preserving) before
+    # dispatching - confirmed here with a fake get_attack_vector that
+    # would return a FRESH "still pending" vector on every call (what both
+    # concurrent reads would have seen pre-fix), showing only one sub-agent
+    # is ever constructed for the id now.
     fake_db = _wire_common_mocks(monkeypatch, ids)
     fake_db.get_attack_vector.side_effect = lambda vid: MagicMock(
         id=vid, target_id=ids["target_id"], status=AttackVectorStatus.PENDING, description="d"
@@ -267,19 +268,22 @@ async def test_dispatch_pentest_batch_duplicate_id_runs_the_sub_agent_twice(monk
         ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
     )
 
-    await tool.ainvoke({"vector_ids": ["dup-vector", "dup-vector"]})
+    result = await tool.ainvoke({"vector_ids": ["dup-vector", "dup-vector"]})
 
-    # Two full sub-agent constructions for the SAME vector id - no
-    # dedup exists in run_one at all.
-    assert len(_FakeSubAgent.instances) == 2
-    assert orchestrator_tools.run_registry.start_sub_run.await_count == 2
+    # Exactly one sub-agent construction for the deduped id.
+    assert len(_FakeSubAgent.instances) == 1
+    assert orchestrator_tools.run_registry.start_sub_run.await_count == 1
+    # And exactly one result line, not two.
+    assert result.count("dup-vector") == 1
 
 
-# --- dispatch_pentest_batch: slot leak if persist_run_state raises ---
+# --- dispatch_pentest_batch: slot leak if persist_run_state raises (fixed) ---
 
 
 @pytest.mark.asyncio
-async def test_dispatch_pentest_batch_leaks_slot_if_persist_run_state_raises(monkeypatch, ids):
+async def test_dispatch_pentest_batch_releases_slot_even_if_persist_run_state_raises(
+    monkeypatch, ids
+):
     fake_db = _wire_common_mocks(monkeypatch, ids)
     fake_db.get_attack_vector.return_value = MagicMock(
         id="v-1", target_id=ids["target_id"], status=AttackVectorStatus.PENDING, description="d"
@@ -294,14 +298,16 @@ async def test_dispatch_pentest_batch_leaks_slot_if_persist_run_state_raises(mon
         ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
     )
 
-    with pytest.raises(RuntimeError):
-        await tool.ainvoke({"vector_ids": ["v-1"]})
+    # persist_run_state's failure is logged and swallowed inside the
+    # finally block, not left to propagate - the tool call completes
+    # normally.
+    result = await tool.ainvoke({"vector_ids": ["v-1"]})
 
-    # acquire ran, but persist_run_state raising inside the SAME finally
-    # block as release_agent_slot skips every statement after it -
-    # release_agent_slot is never reached. This is the real leak.
+    # acquire ran, and - the fix - release_agent_slot ran too, even though
+    # persist_run_state raised in the same finally block. No slot leak.
     orchestrator_tools.run_registry.acquire_agent_slot.assert_awaited_once()
-    orchestrator_tools.run_registry.release_agent_slot.assert_not_awaited()
+    orchestrator_tools.run_registry.release_agent_slot.assert_awaited_once()
+    assert "v-1" in result
 
 
 # --- request_report: each guard checked in order ---

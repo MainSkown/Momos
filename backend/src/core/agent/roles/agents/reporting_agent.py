@@ -233,5 +233,6 @@ class ReportingAgent:
             is_done,
             requires_interrupt,
             max_turns=max_turns,
+            check_done_mid_turn=False,
         ):
             yield event
