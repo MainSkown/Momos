@@ -41,7 +41,7 @@ asyncio_mode = "auto"
 markers = [
     "live_tools: real Docker/tool-execution integration tests (slow, needs Docker; see docs/testing-plan.md §1.4a) - excluded by default, run explicitly with -m live_tools",
 ]
-addopts = "-m 'not live_tools'"
+addopts = "-m 'not live_tools' --import-mode=importlib"
 # TestSession/TestSessionOutcome are application schema names, not pytest
 # test classes - pytest's own name heuristic flags them on every module
 # that imports test_session_scheme, which will only get noisier as more

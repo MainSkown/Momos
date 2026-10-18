@@ -5,6 +5,10 @@ cleanup - starting pgvector/pgvector:pg16 is slow enough that a fresh
 container per test would make this whole tier painfully slow for no extra
 bug-finding power."""
 
+import uuid
+
+import docker
+import docker.errors
 import pytest
 from sqlalchemy import text
 from testcontainers.community.postgres import PostgresContainer
@@ -66,3 +70,61 @@ def _clean_database(pg_container):
         if tables:
             conn.execute(text(f"TRUNCATE TABLE {', '.join(tables)} CASCADE"))
             conn.commit()
+
+
+@pytest.fixture(scope="session")
+def generic_container():
+    """A real, plain `alpine` container (no custom image, no pentest
+    tools) - used only by test_kali_session.py to exercise
+    KaliManger/KaliSession's actual exec/timeout/cleanup plumbing through
+    create_terminal_tools, per docs/testing-plan.md §1.4a tier 1. Session-
+    scoped (not per-test) since starting a container is slow relative to
+    the plumbing tests themselves; each test wires its own fresh
+    KaliManger onto this one shared container instead of getting a fresh
+    container per test.
+
+    `tty=True` alone (no `stdin_open`) is enough to keep the container's
+    default `/bin/sh` running in the background - confirmed empirically,
+    and exactly what KaliManger._create_container itself relies on for the
+    production Kali image.
+
+    Two small, deliberate additions on top of the stock image - both
+    testability requirements of KaliManger's own code, not a "configured
+    Kali" in any real sense: `bash` (open_session's real callers default to
+    DEFAULT_SESSION_COMMAND = "/bin/bash", which plain Alpine doesn't ship)
+    and a `momos` user with a home directory (open_session's own default
+    `user` param is KALI_USERS.momos, and _open_session_sync execs into
+    that user's home directory unconditionally). Without either, every
+    session-opening call in kali_manager.py would fail before any of the
+    actual plumbing being tested ever ran - this is the minimum needed to
+    exercise that code at all, not a reimplementation of
+    KaliManger._configure_container (which assumes a Debian/apt-based
+    image and is deliberately NOT run here - see
+    backend/tests/integration/tools/conftest.py's live_kali_session for
+    the same reasoning applied to the tools tier)."""
+    client = docker.from_env()
+    name = f"momos-test-generic-{uuid.uuid4().hex[:8]}"
+    container = client.containers.run(
+        "alpine:3.21",
+        name=name,
+        detach=True,
+        tty=True,
+        remove=True,
+    )
+    try:
+        for setup_cmd in (
+            ["apk", "add", "--no-cache", "bash"],
+            ["adduser", "-D", "momos"],
+        ):
+            result = container.exec_run(setup_cmd, user="root")
+            if result.exit_code != 0:
+                raise RuntimeError(
+                    f"generic_container setup command {setup_cmd} failed: "
+                    f"{result.output.decode(errors='replace')}"
+                )
+        yield container
+    finally:
+        try:
+            container.stop(timeout=5)
+        except docker.errors.NotFound:
+            pass
