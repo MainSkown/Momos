@@ -23,6 +23,8 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
 
+      - run: cp ../.env.example .env
+
       - run: uv sync --group dev
 
       - run: uv run pytest --cov
@@ -41,6 +43,8 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+
+      - run: cp ../.env.example .env
 
       - run: uv sync --group dev
 
