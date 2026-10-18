@@ -114,7 +114,7 @@ beforeEach(() => {
 });
 
 describe("AgentRunButton websocket hook teardown", () => {
-  it("registers hooks onMounted but never removes them onUnmounted (confirmed resource leak)", async () => {
+  it("registers hooks onMounted and removes them onUnmounted (fixed resource leak)", async () => {
     const { wrapper } = mountButton(makeTarget());
     await flushPromises();
 
@@ -135,13 +135,12 @@ describe("AgentRunButton websocket hook teardown", () => {
 
     wrapper.unmount();
 
-    // Bug: unlike UserConsole.vue (which collects each add_hook's {delete}
-    // handle and calls it onUnmounted), AgentRunButton's onUnmounted only
-    // clears its own timers/rAF handle and never calls remove_hook/delete
-    // for any of the four hooks it registered. The callback - now a
-    // closure over a torn-down component - is still live in the hooks map.
-    expect(client.hook_exists("AgentRunTimer", registeredCallback)).toBe(true);
-    expect(client.remove_hook).not.toHaveBeenCalled();
+    // Fixed: AgentRunButton now collects each add_hook's {delete} handle
+    // (hook_handles) and calls it onUnmounted, same as UserConsole.vue -
+    // the callback is genuinely gone afterward instead of staying live in
+    // the hooks map as a closure over a torn-down component.
+    expect(client.hook_exists("AgentRunTimer", registeredCallback)).toBe(false);
+    expect(client.remove_hook).toHaveBeenCalledWith("AgentRunTimer", registeredCallback);
   });
 });
 

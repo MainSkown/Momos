@@ -82,8 +82,8 @@ function mountDetail() {
   });
 }
 
-describe("SessionDetail.loadVectors error handling (confirmed bug)", () => {
-  it("swallows a real attack-vector API failure into the same empty state as 'no attack vectors', with no error view", async () => {
+describe("SessionDetail.loadVectors error handling (fixed)", () => {
+  it("shows the error view on a real attack-vector API failure, instead of the same empty state as 'no attack vectors'", async () => {
     vi.mocked(getTestSessionAttackVectors).mockResolvedValue({
       data: undefined,
       error: { message: "backend exploded" },
@@ -92,18 +92,16 @@ describe("SessionDetail.loadVectors error handling (confirmed bug)", () => {
     const wrapper = mountDetail();
     await flushPromises();
 
-    // loadVectors never checks result.error, so it never throws, so
-    // loadSessionData's catch block (which would set loadError) never
-    // runs - no error view is shown for a real backend failure.
-    expect(wrapper.text()).not.toContain("history.load_failed");
-    expect(wrapper.find(".retry-button").exists()).toBe(false);
-
-    const av = wrapper.findComponent(AttackVectorsStub);
-    expect(av.exists()).toBe(true);
-    expect(av.props("vectors")).toEqual([]);
+    // Fixed: loadVectors now throws on result.error, so loadSessionData's
+    // existing catch block (which already handles loadSessionDetail/
+    // loadTargets failing the same way) sets loadError and shows the
+    // retry view instead of silently rendering an empty vector list.
+    expect(wrapper.text()).toContain("history.load_failed");
+    expect(wrapper.find(".retry-button").exists()).toBe(true);
+    expect(wrapper.findComponent(AttackVectorsStub).exists()).toBe(false);
   });
 
-  it("produces the exact same rendered state for a genuinely empty vector list (proves the two are indistinguishable)", async () => {
+  it("still renders normally for a genuinely empty vector list (proves the two are now distinguishable)", async () => {
     vi.mocked(getTestSessionAttackVectors).mockResolvedValue({
       data: [] as ResponseAttackVector[],
     } as never);

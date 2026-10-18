@@ -264,14 +264,16 @@ export const en = {
         severity_medium: "Medium",
         severity_high: "High",
         severity_critical: "Critical",
-        severity_locked_by_vector: "Locked - derived from the CVSS vector (score: {score})",
+        severity_derived_from_vector: "Severity and score are derived from the CVSS vector and recomputed by the server - edit the vector field to change them (current score: {score})",
         filter_name: "Filter by name...",
         filter_target: "Target",
         filter_model: "Model",
         filter_all_targets: "All targets",
         filter_all_models: "All models",
         filter_date_from: "From",
-        filter_date_to: "To"
+        filter_date_to: "To",
+        load_failed: "Could not load vulnerabilities",
+        retry: "Retry"
     },
 
     history: {

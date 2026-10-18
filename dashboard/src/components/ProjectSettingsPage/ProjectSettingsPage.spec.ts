@@ -89,8 +89,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("ProjectSettingsPage load_settings out-of-order race (confirmed bug)", () => {
-  it("project A's late-resolving fetch overwrites project B's just-loaded settings after a mid-flight switch", async () => {
+describe("ProjectSettingsPage load_settings out-of-order race (fixed)", () => {
+  it("project A's late-resolving fetch no longer overwrites project B's just-loaded settings after a mid-flight switch", async () => {
     let resolveA!: (value: unknown) => void;
 
     vi.mocked(getProjectSettings).mockImplementation(
@@ -133,19 +133,17 @@ describe("ProjectSettingsPage load_settings out-of-order race (confirmed bug)", 
     });
     await flushPromises();
 
-    // Bug: load_settings never checks that `projectID` still equals
-    // store.openedProject after the await - it unconditionally overwrites
-    // project_settings with A's stale data even though "project-b" is the
-    // project actually open. Project B's page now silently displays
-    // project A's base model.
+    // Fixed: load_settings now bails out when `projectID` no longer
+    // equals store.openedProject after the await, so A's stale data never
+    // overwrites project_settings - project B's page keeps showing its own
+    // base model.
     expect(
       fieldGroupControl(wrapper, "models.base_model", "button").text(),
-    ).toBe("project-a-model");
+    ).toBe("project-b-model");
 
-    // The deeper consequence: the very next edit autosaves under B's id
-    // (captured from store.openedProject at edit time) while the body it
-    // sends is still A's stale object (what load_settings left behind in
-    // project_settings) with just this edit applied on top.
+    // The deeper consequence is fixed too: the next edit still autosaves
+    // under B's id, and now the body it sends is genuinely B's own
+    // settings (with just this edit applied), not A's stale object.
     await fieldGroupControl(wrapper, "settings.should_interrupt", "input").setValue(true);
     await vi.advanceTimersByTimeAsync(800);
 
@@ -155,7 +153,7 @@ describe("ProjectSettingsPage load_settings out-of-order race (confirmed bug)", 
       body: ProjectSettings;
     };
     expect(call.path.project_id).toBe("project-b");
-    expect(call.body.base_model_name).toBe("project-a-model");
+    expect(call.body.base_model_name).toBe("project-b-model");
     expect(call.body.should_interrupt).toBe(true);
   });
 });

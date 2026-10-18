@@ -205,6 +205,13 @@ const isFormValid = (val?: tTarget): boolean => {
   if (ipv6 && !ipv6Pattern.test(ipv6)) return false;
   // if (domain && !domainPattern.test(domain)) return false;
 
+  // updatePorts() already strips invalid entries out of localTarget.ports
+  // before this ever runs, so the check above can never actually see (or
+  // block on) a port the user just typed that's still visibly flagged red
+  // in the input - arePortsInvalid() reads the raw, unfiltered input
+  // instead, which is the only place that port is still visible.
+  if (arePortsInvalid()) return false;
+
   if (ports && ports.length > 0) {
     const arePortsValid = ports.every((p) => p >= 1 && p <= 65535);
     if (!arePortsValid) return false;

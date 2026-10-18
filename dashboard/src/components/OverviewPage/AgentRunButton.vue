@@ -626,6 +626,14 @@ const onAgentMessage: tCallback = (message) => {
 
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 
+// Hook callbacks are fresh closures every time this component's <script
+// setup> runs (i.e. every mount) - without capturing and removing them on
+// unmount, ws_client's hook_exists (a reference-equality check) never
+// matches a previous mount's closure, so remounting stacks additional
+// handlers that each independently react to the same message. Mirrors
+// UserConsole.vue's own hook_handles/onUnmounted pattern exactly.
+const hook_handles: Array<{ delete: () => void } | undefined> = [];
+
 // An external event (another tab pausing it, the run finishing/failing,
 // duration running out, ...) can change the run's status mid-hold - cancel
 // the visual hold immediately rather than leaving a stale filling ring
@@ -642,16 +650,16 @@ onMounted(() => {
   loadBuildStatus();
 
   if (!ws_client.hook_exists("AgentRunTimer", onRunTimer))
-    ws_client.add_hook("AgentRunTimer", onRunTimer);
+    hook_handles.push(ws_client.add_hook("AgentRunTimer", onRunTimer));
 
   if (!ws_client.hook_exists("AgentInterruptRequest", onInterruptRequest))
-    ws_client.add_hook("AgentInterruptRequest", onInterruptRequest);
+    hook_handles.push(ws_client.add_hook("AgentInterruptRequest", onInterruptRequest));
 
   if (!ws_client.hook_exists("KaliCreationStage", onKaliStage))
-    ws_client.add_hook("KaliCreationStage", onKaliStage);
+    hook_handles.push(ws_client.add_hook("KaliCreationStage", onKaliStage));
 
   if (!ws_client.hook_exists("AgentMessage", onAgentMessage))
-    ws_client.add_hook("AgentMessage", onAgentMessage);
+    hook_handles.push(ws_client.add_hook("AgentMessage", onAgentMessage));
 
   tickInterval = setInterval(() => {
     displayNow.value = Date.now();
@@ -659,6 +667,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  hook_handles.forEach((handle) => handle?.delete());
+
   if (tickInterval) clearInterval(tickInterval);
   if (holdRevealHandle) clearTimeout(holdRevealHandle);
   if (holdTimeoutHandle) clearTimeout(holdTimeoutHandle);

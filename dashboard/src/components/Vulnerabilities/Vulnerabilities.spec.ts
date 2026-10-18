@@ -139,7 +139,7 @@ describe("Vulnerabilities filters", () => {
     expect(cardTitles(wrapper)).toEqual(["Exact model vuln"]);
   });
 
-  it("confirmed bug: targetFilter is not reset on project switch, so switching projects can silently empty the list", async () => {
+  it("fixed: targetFilter is reset on project switch, so switching projects no longer silently empties the list", async () => {
     const targets = [
       makeTarget({ id: "target-a", project_id: "project-a", name: "A" }),
       makeTarget({ id: "target-b", project_id: "project-b", name: "B" }),
@@ -186,16 +186,16 @@ describe("Vulnerabilities filters", () => {
     store.openedProject = "project-b";
     await flushPromises();
 
-    // Bug: targetFilter is never reset on project switch. It is still
-    // "target-a", which project B's vulnerability (found_in "target-b")
-    // never matches - so the list renders empty even though project B
-    // genuinely has one vulnerability, with nothing in the UI explaining
-    // why.
-    expect(cardTitles(wrapper)).toEqual([]);
-    expect(wrapper.find(".no-vulns").exists()).toBe(true);
+    // Fixed: the project-change watcher now resets targetFilter (along
+    // with modelFilter/date range) back to "" before loading the new
+    // project's vulnerabilities, so project B's own vulnerability
+    // (found_in "target-b") is no longer excluded by a stale filter value
+    // left over from project A.
+    expect(cardTitles(wrapper)).toEqual(["Vuln B"]);
+    expect(wrapper.find(".no-vulns").exists()).toBe(false);
   });
 
-  it("confirmed bug/race: a slow, stale response for the previously-open project overwrites the current project's data", async () => {
+  it("fixed: a slow, stale response for the previously-open project no longer overwrites the current project's data", async () => {
     let resolveA!: (value: unknown) => void;
     let resolveB!: (value: unknown) => void;
 
@@ -230,13 +230,13 @@ describe("Vulnerabilities filters", () => {
     resolveA({ data: [makeVuln({ id: "va", name: "Vuln A" })] });
     await flushPromises();
 
-    // Bug: loadVulnerabilities has no request cancellation or project-id
-    // check, so project A's late, stale response unconditionally
-    // overwrites the list even though project B is the one open.
-    expect(cardTitles(wrapper)).toEqual(["Vuln A"]);
+    // Fixed: loadVulnerabilities now bails out when store.openedProject no
+    // longer matches the project this fetch was for, so project A's late,
+    // stale response is discarded instead of overwriting project B's list.
+    expect(cardTitles(wrapper)).toEqual(["Vuln B"]);
   });
 
-  it("confirmed bug: a backend {error} response renders the same empty state as 'no vulnerabilities', with no error shown", async () => {
+  it("fixed: a backend {error} response shows a distinct error state, not the empty-vulnerabilities placeholder", async () => {
     vi.mocked(getAllVulnerabilitiesInProject).mockResolvedValue({
       data: undefined,
       error: { message: "boom" },
@@ -245,9 +245,9 @@ describe("Vulnerabilities filters", () => {
     const { wrapper } = mountComponent();
     await flushPromises();
 
-    expect(wrapper.find(".no-vulns").exists()).toBe(true);
-    expect(wrapper.text()).toContain("vulnerabilities.no_vulnerabilities");
-    // No distinct error text/state exists anywhere in the rendered output.
-    expect(wrapper.text()).not.toMatch(/error|fail/i);
+    expect(wrapper.find(".no-vulns").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("vulnerabilities.no_vulnerabilities");
+    expect(wrapper.text()).toContain("vulnerabilities.load_failed");
+    expect(wrapper.find(".retry-button").exists()).toBe(true);
   });
 });

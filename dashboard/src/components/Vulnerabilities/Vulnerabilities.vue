@@ -1,53 +1,65 @@
 <template>
   <div class="column layout-container">
-    <!-- Filter bar -->
-    <div class="row gap-low filter-bar">
-      <input
-        v-model="nameFilter"
-        class="input-field"
-        :placeholder="$t('vulnerabilities.filter_name')"
-      />
-      <select v-model="targetFilter" class="input-field">
-        <option value="">{{ $t("vulnerabilities.filter_all_targets") }}</option>
-        <option v-for="t in projectTargets" :key="t.id" :value="t.id">
-          {{ t.name }}
-        </option>
-      </select>
-      <select v-model="modelFilter" class="input-field">
-        <option value="">{{ $t("vulnerabilities.filter_all_models") }}</option>
-        <option v-for="m in distinctModels" :key="m" :value="m">{{ m }}</option>
-      </select>
-      <input
-        type="date"
-        v-model="dateFrom"
-        class="input-field"
-        :title="$t('vulnerabilities.filter_date_from')"
-      />
-      <input
-        type="date"
-        v-model="dateTo"
-        class="input-field"
-        :title="$t('vulnerabilities.filter_date_to')"
-      />
-    </div>
-
-    <div class="column gap-low scrollable-panel vuln-list">
-      <VulnerabilityCard
-        v-for="v in filteredVulnerabilities"
-        :key="v.id"
-        :vulnerability="v"
-        :target-name="targetName(v.found_in)"
-        @updated="onUpdated"
-        @deleted="onDeleted"
-      />
-
+    <div v-if="loadError" class="column flex-center load-error">
+      <span class="text-gray">{{ $t("vulnerabilities.load_failed") }}</span>
       <div
-        class="text-center no-vulns"
-        v-if="filteredVulnerabilities.length === 0"
+        class="button border retry-button"
+        @click="loadVulnerabilities(store.openedProject)"
       >
-        {{ $t("vulnerabilities.no_vulnerabilities") }}
+        {{ $t("vulnerabilities.retry") }}
       </div>
     </div>
+
+    <template v-else>
+      <!-- Filter bar -->
+      <div class="row gap-low filter-bar">
+        <input
+          v-model="nameFilter"
+          class="input-field"
+          :placeholder="$t('vulnerabilities.filter_name')"
+        />
+        <select v-model="targetFilter" class="input-field">
+          <option value="">{{ $t("vulnerabilities.filter_all_targets") }}</option>
+          <option v-for="t in projectTargets" :key="t.id" :value="t.id">
+            {{ t.name }}
+          </option>
+        </select>
+        <select v-model="modelFilter" class="input-field">
+          <option value="">{{ $t("vulnerabilities.filter_all_models") }}</option>
+          <option v-for="m in distinctModels" :key="m" :value="m">{{ m }}</option>
+        </select>
+        <input
+          type="date"
+          v-model="dateFrom"
+          class="input-field"
+          :title="$t('vulnerabilities.filter_date_from')"
+        />
+        <input
+          type="date"
+          v-model="dateTo"
+          class="input-field"
+          :title="$t('vulnerabilities.filter_date_to')"
+        />
+      </div>
+
+      <div class="column gap-low scrollable-panel vuln-list">
+        <VulnerabilityCard
+          v-for="v in filteredVulnerabilities"
+          :key="v.id"
+          :vulnerability="v"
+          :target-name="targetName(v.found_in)"
+          @updated="onUpdated"
+          @deleted="onDeleted"
+        />
+
+        <div
+          class="text-center no-vulns"
+          v-if="filteredVulnerabilities.length === 0"
+        >
+          {{ $t("vulnerabilities.no_vulnerabilities") }}
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -63,14 +75,30 @@ const { t: $t } = useI18n();
 const store = useMomosStore();
 
 const vulnerabilities = ref<tVulnerability[]>([]);
+const loadError = ref(false);
 
 async function loadVulnerabilities(project_id: string) {
   if (!project_id) {
     vulnerabilities.value = [];
+    loadError.value = false;
     return;
   }
 
   const result = await getAllVulnerabilitiesInProject({ path: { project_id } });
+
+  // A slower response for a project the user has since navigated away
+  // from must not overwrite whatever the now-current project's own
+  // request already loaded.
+  if (store.openedProject !== project_id) return;
+
+  if (result.error) {
+    console.error("Failed to fetch vulnerabilities:", result.error);
+    vulnerabilities.value = [];
+    loadError.value = true;
+    return;
+  }
+
+  loadError.value = false;
   vulnerabilities.value = result.data ?? [];
 }
 
@@ -82,6 +110,16 @@ onMounted(() => {
 watch(
   () => store.openedProject,
   (newProject) => {
+    // Each of these reads as "all targets"/"all models"/unbounded dates
+    // again - a filter value left over from the previous project would
+    // otherwise silently match nothing in the new one (e.g. a target id
+    // that only exists in the project just left), rendering the same
+    // empty state as "this project has no vulnerabilities".
+    targetFilter.value = "";
+    modelFilter.value = "";
+    dateFrom.value = "";
+    dateTo.value = "";
+
     loadVulnerabilities(newProject);
     store.loadTargets(newProject);
   },
@@ -170,5 +208,14 @@ function onDeleted(id: string) {
   color: var(--text-gray-dark);
   margin-top: auto;
   margin-bottom: auto;
+}
+
+.load-error {
+  margin: auto;
+  gap: 10px;
+}
+
+.retry-button {
+  width: fit-content;
 }
 </style>

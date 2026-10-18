@@ -512,14 +512,27 @@ async function createNewKaliUser() {
   loading_dict.value[project_id] = true;
   delete stage_dict.value[project_id];
 
-  const result = await createKaliUser({ path: { project_id } });
+  // Only set once this call genuinely handed off to a pending server-side
+  // client - at that point onKaliCreated's websocket push (not this
+  // function) is what eventually clears loading_dict. The finally below
+  // resets it for every OTHER path out of this function, including a
+  // thrown exception, so a future branch added here can't reintroduce a
+  // stuck "connecting" state by forgetting to reset it itself.
+  let awaitingClientConfirmation = false;
 
-  if (!result.data) {
-    console.error("Did not retrieve user_id");
-    return;
+  try {
+    const result = await createKaliUser({ path: { project_id } });
+
+    if (!result.data) {
+      console.error("Did not retrieve user_id");
+      return;
+    }
+
+    // it only returns client_id, client is being initiated - socket will tell when it's done
+    awaitingClientConfirmation = true;
+  } finally {
+    if (!awaitingClientConfirmation) loading_dict.value[project_id] = false;
   }
-
-  // it only returns client_id, client is being initiated - socket will tell when it's done
 }
 
 const onKaliCreated: tCallback = (message) => {

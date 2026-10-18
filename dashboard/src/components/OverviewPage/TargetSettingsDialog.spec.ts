@@ -58,7 +58,7 @@ describe("TargetSettingsDialog ports validation/save gap", () => {
     document.body.innerHTML = "";
   });
 
-  it("flags an out-of-range typed port red, yet the debounced save still fires with it silently dropped (confirmed gap)", async () => {
+  it("flags an out-of-range typed port red, and the debounced save stays blocked while it's showing (fixed)", async () => {
     const { store, portsInput } = mountDialog(makeTarget());
 
     await portsInput().setValue("99999");
@@ -69,16 +69,12 @@ describe("TargetSettingsDialog ports validation/save gap", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
 
-    // isFormValid()'s port-range check only ever inspects
-    // localTarget.ports, which updatePorts() has already pre-filtered
-    // down to valid values alone (99999 never made it in) - so that
-    // check can never see, and therefore never block on, the very port
-    // that is still visibly flagged red in the input above. The
-    // debounced save fires anyway, silently dropping the invalid port.
-    expect(store.updateTarget).toHaveBeenCalledTimes(1);
-    expect(store.updateTarget).toHaveBeenCalledWith(
-      expect.objectContaining({ ports: [] }),
-    );
+    // Fixed: isFormValid() now also checks arePortsInvalid() - the raw,
+    // unfiltered input - instead of only localTarget.ports (which
+    // updatePorts() had already silently pre-filtered down to valid
+    // values alone, 99999 never making it in). The debounced save stays
+    // blocked for as long as the red flag is showing.
+    expect(store.updateTarget).not.toHaveBeenCalled();
   });
 
   it("accepts and displays valid ports correctly", async () => {

@@ -88,7 +88,7 @@ beforeEach(() => {
 });
 
 describe("UserConsole createNewKaliUser loading-flag gap", () => {
-  it("confirmed bug: a failed connect leaves loading_dict stuck true, showing 'connecting' forever", async () => {
+  it("fixed: a failed connect resets loading_dict, returning to the connect prompt instead of hanging on 'connecting'", async () => {
     vi.mocked(createKaliUser).mockResolvedValue({
       data: undefined,
       error: { message: "boom" },
@@ -103,13 +103,13 @@ describe("UserConsole createNewKaliUser loading-flag gap", () => {
     await connectButton.trigger("click");
     await flushPromises();
 
-    // Bug: createNewKaliUser's `if (!result.data) { ...; return; }` branch
-    // never resets loading_dict[project_id] back to false, and no
-    // CreatedKaliUserMessage will ever arrive to do it via onKaliCreated -
-    // the console is stuck showing the "connecting" placeholder.
-    expect(wrapper.find(".connecting").exists()).toBe(true);
-    expect(wrapper.text()).toContain("console.connecting");
-    expect(wrapper.find(".connect-button").exists()).toBe(false);
+    // Fixed: createNewKaliUser's `if (!result.data) { ...; return; }`
+    // branch now resets loading_dict[project_id] back to false (via the
+    // try/finally) since no CreatedKaliUserMessage will ever arrive to do
+    // it via onKaliCreated - the console returns to its empty "connect"
+    // state instead of hanging on "connecting" forever.
+    expect(wrapper.find(".connecting").exists()).toBe(false);
+    expect(wrapper.find(".connect-button").exists()).toBe(true);
   });
 
   it("contrast: a successful connect followed by the CreatedKaliUserMessage push clears the loading flag", async () => {
