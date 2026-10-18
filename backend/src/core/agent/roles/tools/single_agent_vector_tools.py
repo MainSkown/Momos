@@ -21,7 +21,7 @@ import asyncio
 from typing import Callable, List, Literal, Optional
 from langchain_core.tools import tool
 from src.core import db_manager
-from src.core.agent import run_registry
+from src.core.agent import agent_tools, run_registry
 from src.schemas.attack_vector_scheme import AttackVector, AttackVectorStatus
 
 PROPOSE_ATTACK_VECTOR_TOOL_NAME = "propose_attack_vector"
@@ -147,6 +147,7 @@ def create_report_outcome_tool(
     set_current_vector_id: Callable[[Optional[str]], None],
     has_tested: Callable[[], bool],
     clear_tested: Callable[[], None],
+    get_last_raw_output: Optional[Callable[[], Optional[str]]] = None,
 ):
     """Same resolution logic as pentesting_tools.create_report_outcome_tool
     (status/result_summary update, new_vectors enqueued as fresh pending
@@ -154,7 +155,18 @@ def create_report_outcome_tool(
     start_attack_vector most recently selected (get_current_vector_id),
     not one bound at tool-build time - and, unlike pentesting's version,
     this does NOT end the run: the single agent picks its own next pending
-    vector afterward."""
+    vector afterward.
+
+    `get_last_raw_output`, when given, feeds the same
+    agent_tools._verify_claim_against_evidence second opinion
+    pentesting_tools.create_report_outcome_tool already gates a
+    "vulnerable" claim on - this tool previously had no such check at all
+    (only the has_tested() proof-of-A-call gate above, which only proves
+    THAT a run() happened, never what it showed). Optional/defaulted to
+    None (check skipped, the old behavior unchanged) purely so every
+    existing caller that doesn't pass it keeps building a working tool -
+    a caller that wires in a real raw-output source gets the stricter,
+    correct gate."""
 
     @tool(REPORT_OUTCOME_TOOL_NAME)
     async def report_outcome(
@@ -187,6 +199,13 @@ def create_report_outcome_tool(
                 "real attempt first. report_outcome requires a real tool "
                 "result you have seen, not just a plan for one."
             )
+
+        if outcome == "vulnerable" and get_last_raw_output is not None:
+            verification_error = await agent_tools._verify_claim_against_evidence(
+                project_id, "attack outcome", summary, get_last_raw_output()
+            )
+            if verification_error:
+                return verification_error
 
         loop = asyncio.get_running_loop()
 

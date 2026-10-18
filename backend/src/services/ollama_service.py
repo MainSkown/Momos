@@ -7,6 +7,10 @@ from src.schemas import (
     parse_parameter_size,
     OllamaQueueDetails,
 )
+from src.utils.exceptions import (
+    ModelAlreadyDownloadedException,
+    ModelAlreadyDownloadingException,
+)
 import asyncio
 
 
@@ -18,6 +22,12 @@ class OllamaService:
     _current_download: str | None = None
     _queued_models: list[str] = []
     _worker_task: asyncio.Task | None = None
+
+    # Guards the check-then-act in download_model: the "already
+    # queued/downloaded" check and the _queued_models.append below it must
+    # be atomic, or two concurrent calls for the same model can both pass
+    # the check before either appends.
+    _download_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     async def get_models_list() -> OllamaModelsList:
@@ -62,17 +72,22 @@ class OllamaService:
 
     @classmethod
     async def download_model(cls, model_name: str):
-        if model_name == cls._current_download or model_name in cls._queued_models:
-            raise ValueError(f"Model '{model_name}' is already downloading or queued.")
-        
-        # Check if already downloaded
-        downloaded = await cls.get_models_list()
-        if any(model_name == model.name for model in downloaded.models):
-            raise ValueError(f"Model {model_name} already downloaded")
-        
-        cls._queued_models.append(model_name)
-        await cls._download_queue.put(model_name)
-        
+        async with cls._download_lock:
+            if model_name == cls._current_download or model_name in cls._queued_models:
+                raise ModelAlreadyDownloadingException(
+                    f"Model '{model_name}' is already downloading or queued.", model_name
+                )
+
+            # Check if already downloaded
+            downloaded = await cls.get_models_list()
+            if any(model_name == model.name for model in downloaded.models):
+                raise ModelAlreadyDownloadedException(
+                    f"Model {model_name} already downloaded", model_name
+                )
+
+            cls._queued_models.append(model_name)
+            await cls._download_queue.put(model_name)
+
         cls._ensure_worker_running()
         
     @classmethod

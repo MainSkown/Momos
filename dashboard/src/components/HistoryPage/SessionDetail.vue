@@ -207,6 +207,14 @@ async function loadVectors() {
   const result = await getTestSessionAttackVectors({
     path: { session_id: props.sessionId },
   });
+
+  // Matches loadSessionDetail/loadTargets/deleteProject's own convention
+  // (throw on a failed response) - loadSessionData's catch block below
+  // already assumes this and shows the error view for it.
+  if (result.error) {
+    throw new Error(JSON.stringify(result.error));
+  }
+
   vectors.value = result.data ?? [];
 }
 

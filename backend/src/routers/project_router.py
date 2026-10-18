@@ -10,6 +10,7 @@ from src.schemas import (
 )
 from src.core import tool_groups
 from src.core.pipeline_modes import PIPELINE_MODE_IDS
+from src.utils.exceptions import ProjectDoesNotExistException
 
 router = APIRouter()
 
@@ -47,6 +48,11 @@ def create_project(data: ProjectRequest):
 def get_project_settings(project_id: str):
     try:
         return ProjectService.get_project_settings(project_id)
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
     except Exception as e:
         print(
             f"Exception happened when getting project {project_id} settings: ", str(e)
@@ -83,7 +89,14 @@ async def update_project_settings(project_id: str, data: ProjectSettingsBody):
     # is_project_running is the same exclusivity check AgentService.start_agent
     # itself enforces, so this can only ever reject a change that would have
     # raced a live run either way.
-    current_settings = ProjectService.get_project_settings(project_id)
+    try:
+        current_settings = ProjectService.get_project_settings(project_id)
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
     if data.pipeline_mode != current_settings.pipeline_mode and AgentService.is_project_running(
         project_id
     ):

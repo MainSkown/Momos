@@ -3,7 +3,7 @@ class ProjectDoesNotExistException(Exception):
         super().__init__(message)
         self.project_id = project_id
         
-class TargetDoesNotExistException(Exception):
+class TargetDoesNotExistException(ValueError):
     def __init__(self, message, target_id: str):
         super().__init__(message)
         self.target_id = target_id
@@ -35,3 +35,22 @@ class SessionIsRunningException(Exception):
     def __init__(self, message, session_id: str):
         super().__init__(message)
         self.session_id = session_id
+
+class InvalidProjectIdException(ValueError):
+    def __init__(self, message, project_id: str):
+        super().__init__(message)
+        self.project_id = project_id
+
+class InvalidTargetDataException(ValueError):
+    def __init__(self, message):
+        super().__init__(message)
+
+class ModelAlreadyDownloadingException(ValueError):
+    def __init__(self, message, model_name: str):
+        super().__init__(message)
+        self.model_name = model_name
+
+class ModelAlreadyDownloadedException(ValueError):
+    def __init__(self, message, model_name: str):
+        super().__init__(message)
+        self.model_name = model_name

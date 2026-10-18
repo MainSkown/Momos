@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Session, create_engine, select
-from sqlalchemy import delete, text, inspect, func
+from sqlalchemy import delete, text, inspect, func, or_
 from . import settings
 from typing import List, Optional, Tuple, TypeVar, Type
 
@@ -27,9 +27,14 @@ T = TypeVar("T", bound=SQLModel)
 
 class DatabaseManager:
     def __init__(self, db_url: str):
+        # create_engine is lazy (SQLAlchemy doesn't open a socket until the
+        # first actual use) - init_db() is NOT called here on purpose, since
+        # this class is instantiated at import time (module-level
+        # db_manager below) and every backend module that imports it would
+        # otherwise require a live, correctly-provisioned Postgres just to
+        # be imported. Callers that need the schema to exist call init_db()
+        # explicitly (main.py's lifespan, in production).
         self.engine = create_engine(db_url, echo=True)
-
-        self.init_db()
 
     def init_db(self):
         with self.engine.connect() as conn:
@@ -319,20 +324,28 @@ class DatabaseManager:
             return merged_settings
 
     def clear_model_references(self, model_name: str) -> None:
-        """Nulls out base_model_name/parsing_model_name on any project's
-        settings that reference model_name - called right before the model
-        itself is deleted from Ollama, so a project can never keep pointing
-        at a model that no longer exists."""
+        """Nulls out every one of the six model-name fields (base_model_name/
+        parsing_model_name plus the four per-role fields - see
+        ProjectSettingsBase in project_scheme.py) on any project's settings
+        that reference model_name - called right before the model itself is
+        deleted from Ollama, so a project can never keep pointing at a model
+        that no longer exists."""
+        model_fields = (
+            "base_model_name",
+            "parsing_model_name",
+            "orchestrator_model_name",
+            "scouting_model_name",
+            "pentesting_model_name",
+            "reporting_model_name",
+        )
         with Session(self.engine) as session:
             statement = select(ProjectSettings).where(
-                (ProjectSettings.base_model_name == model_name)
-                | (ProjectSettings.parsing_model_name == model_name)
+                or_(*[getattr(ProjectSettings, field) == model_name for field in model_fields])
             )
             for settings in session.exec(statement).all():
-                if settings.base_model_name == model_name:
-                    settings.base_model_name = ""
-                if settings.parsing_model_name == model_name:
-                    settings.parsing_model_name = ""
+                for field in model_fields:
+                    if getattr(settings, field) == model_name:
+                        setattr(settings, field, "")
                 session.add(settings)
             session.commit()
 

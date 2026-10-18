@@ -39,8 +39,21 @@ export const ipv6Pattern =
 export const domainPattern = 
   /^(?!:\/\/)[a-zA-Z0-9-_]+(\.[a-zA-Z0-9-_]+)*(\.[a-zA-Z]{2,11})?$/;
 
+function looksIPv4Shaped(t: string): boolean {
+  const segments = t.split(".");
+  return segments.length === 4 && segments.every((s) => /^\d+$/.test(s));
+}
+
 export function isAddressValid(t: string | undefined): boolean {
   if (!t) return true;
+
+  // IPv4-shaped values (four dot-separated all-digit segments) must pass
+  // ipv4Pattern's own range check (0-255 per octet) - otherwise they'd fall
+  // through to domainPattern, which treats numeric labels like any other
+  // domain label and would wrongly accept out-of-range octets (e.g. "256.0.0.1").
+  if (looksIPv4Shaped(t)) {
+    return ipv4Pattern.test(t);
+  }
 
   return ipv4Pattern.test(t) || ipv6Pattern.test(t) || domainPattern.test(t);
 }

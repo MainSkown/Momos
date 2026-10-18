@@ -655,6 +655,12 @@ async function load_settings(projectID: string) {
     path: { project_id: projectID },
   });
 
+  // A slower fetch for a project the user has since navigated away from
+  // must not clobber whatever the now-current project's own fetch already
+  // loaded (or is still loading) - this page is reused across project
+  // switches without unmounting, so project_settings is shared state.
+  if (store.openedProject !== projectID) return;
+
   if (result.error) {
     console.error("Failed to fetch settings:", result.error);
     project_settings.value = null;

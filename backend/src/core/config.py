@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -38,15 +40,21 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Constructs the SQLAlchemy connection string from env vars."""
+        """Constructs the SQLAlchemy connection string from env vars.
+        Userinfo is percent-encoded (safe="" - '@'/':'/'/' in a credential
+        must never pass through raw) since sqlalchemy.engine.make_url splits
+        userinfo from host on the first unencoded '@'/':' it finds."""
+        user = quote(self.POSTGRES_USER, safe="")
+        password = quote(self.POSTGRES_PASSWORD, safe="")
         return (
-            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"postgresql://{user}:{password}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
-        
+
     @property
     def ollama_url(self) -> str:
-        return f"http://{self.OLLAMA_HOST}:{self.OLLAMA_PORT}"
+        host = quote(self.OLLAMA_HOST, safe="")
+        return f"http://{host}:{self.OLLAMA_PORT}"
 
 
 settings = Settings()

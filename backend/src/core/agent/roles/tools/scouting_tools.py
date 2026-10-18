@@ -8,7 +8,7 @@ with the Single Agent flow (nmap_scan, the terminal tools, ...) stays
 defined once in agent_tools.py - nothing here duplicates a tool body."""
 
 import asyncio
-from typing import Callable, List
+from typing import Callable, List, Optional
 from langchain_core.tools import tool
 from src.core import db_manager
 from src.core.agent import agent_tools, run_registry
@@ -53,6 +53,7 @@ def create_propose_attack_vector_tool(
     target_id: str,
     agent_run_id: str,
     has_tested: Callable[[], bool],
+    register_proposed: Optional[Callable[[str], bool]] = None,
 ):
     """Builds propose_attack_vector, scouting's only terminal action.
     Takes a batch of descriptions in one call - each local-model tool-call
@@ -62,7 +63,17 @@ def create_propose_attack_vector_tool(
     monotonic "has at least one real tool call happened this run" flag
     (never cleared, unlike the Single Agent flow's per-claim has_tested/
     clear_tested cycle) so the agent can't fabricate vectors out of thin
-    air before ever actually scanning anything."""
+    air before ever actually scanning anything.
+
+    `register_proposed`, when given, is the actual dedup check+update:
+    called once per cleaned description, returning False for one already
+    known (skipped - never saved, never broadcast) or True for a genuinely
+    new one (which the caller is now expected to remember, same call,
+    before returning). Optional/defaulted so a caller that doesn't care
+    about dedup (e.g. a direct unit test of this tool alone) still works -
+    ScoutingAgent is the one real caller that wires in its own
+    _register_proposed_vector, which is what keeps the "already proposed -
+    don't repeat" buffer it renders every turn from going stale."""
 
     @tool(PROPOSE_ATTACK_VECTOR_TOOL_NAME)
     async def propose_attack_vector(descriptions: List[str]) -> str:
@@ -90,9 +101,17 @@ def create_propose_attack_vector_tool(
         if not cleaned:
             return "descriptions cannot be empty."
 
+        new_descriptions = []
+        duplicate_descriptions = []
+        for description in cleaned:
+            if register_proposed is not None and not register_proposed(description):
+                duplicate_descriptions.append(description)
+            else:
+                new_descriptions.append(description)
+
         loop = asyncio.get_running_loop()
         saved = []
-        for description in cleaned:
+        for description in new_descriptions:
             vector = AttackVector(
                 description=description,
                 project_id=project_id,
@@ -105,7 +124,15 @@ def create_propose_attack_vector_tool(
             await run_registry.broadcast_attack_vector(new_vector)
 
         lines = "\n".join(f"- {v.description}" for v in saved)
-        return f"Recorded {len(saved)} attack vector(s):\n{lines}"
+        result = f"Recorded {len(saved)} attack vector(s):\n{lines}" if saved else ""
+        if duplicate_descriptions:
+            dup_lines = "\n".join(f"- {d}" for d in duplicate_descriptions)
+            dup_note = (
+                f"Skipped {len(duplicate_descriptions)} already-proposed "
+                f"duplicate(s):\n{dup_lines}"
+            )
+            result = f"{result}\n{dup_note}" if result else dup_note
+        return result
 
     return propose_attack_vector
 

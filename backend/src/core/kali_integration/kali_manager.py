@@ -411,9 +411,14 @@ class KaliManger:
         self,
         container_name: str = "momos-kali-worker",
         packages: Sequence[str] | None = None,
+        image: str = "kalilinux/kali-rolling:latest",
     ):
         self.container_name = container_name
         self.container = None
+        # Testability seam, not a behavior change - default is the real
+        # production image, so nothing changes unless a caller (tests only,
+        # so far) explicitly overrides it. See docs/testing-plan.md §1.4a.
+        self.image = image
         self.packages = (
             tuple(packages) if packages is not None else DEFAULT_KALI_PACKAGES
         )
@@ -532,12 +537,16 @@ class KaliManger:
                 )
 
             self.container = None
-            existing_container.remove(force=True)
+            if existing_container is not None:
+                # A failed restart() above already set existing_container to
+                # None - nothing to remove in that case, a fresh container
+                # gets built below exactly as if none had been found at all.
+                existing_container.remove(force=True)
 
         print("Starting container")
         self._report(on_stage, KaliCreationStage.starting_container)
         self.container = self.client.containers.run(
-            image="kalilinux/kali-rolling:latest",
+            image=self.image,
             name=self.container_name,
             detach=True,
             tty=True,
@@ -1302,10 +1311,13 @@ class KaliManger:
 
     async def _remove_from_registry(self, session: KaliSession) -> None:
         async with self.sessions_lock:
-            self.sessions.pop(
-                self._session_key(session.target_id, session.agent_run_id, session.name),
-                None,
-            )
+            key = self._session_key(session.target_id, session.agent_run_id, session.name)
+            # Identity check, not just a key match - a slow/stale cleanup
+            # for THIS session can otherwise race a close+reopen that
+            # reused the same key, and delete a different, newly-opened
+            # session's live registry entry out from under it.
+            if self.sessions.get(key) is session:
+                self.sessions.pop(key, None)
 
     async def _close_session_locked(self, session: KaliSession, reason: str) -> None:
         """Actually closes the socket. Caller must already hold
@@ -1492,9 +1504,16 @@ class KaliManger:
         # Create IPv4 table
         await self.execute("nft add table ip MOMOS_IPv4", user=KALI_USERS.root)
 
-        # Create output chain
+        # Create output chain. Default policy is `drop`, not `accept` - the
+        # specific allow rules added below are each an explicit ACCEPT
+        # verdict, so they still work fine against a `drop` base policy,
+        # but this way, if ANY call further down this un-transacted
+        # sequence raises (a real failure mode - e.g. "ct helper" below),
+        # the chain's own policy already locks egress down rather than
+        # leaving the container wide open until the (also un-added) final
+        # `drop` rule would have been reached. Fail-closed, not fail-open.
         await self.execute(
-            "nft 'add chain ip MOMOS_IPv4 OUTPUT { type filter hook output priority 0; policy accept; }'",
+            "nft 'add chain ip MOMOS_IPv4 OUTPUT { type filter hook output priority 0; policy drop; }'",
             user=KALI_USERS.root,
         )
 
@@ -1566,9 +1585,10 @@ class KaliManger:
         # Prepare IPv6 table
         await self.execute("nft add table ip6 MOMOS_IPv6", user=KALI_USERS.root)
 
-        # Create output chain
+        # Create output chain - same fail-closed `policy drop` reasoning as
+        # the ipv4 table above.
         await self.execute(
-            "nft 'add chain ip6 MOMOS_IPv6 OUTPUT { type filter hook output priority 0; policy accept; }'",
+            "nft 'add chain ip6 MOMOS_IPv6 OUTPUT { type filter hook output priority 0; policy drop; }'",
             user=KALI_USERS.root,
         )
 
