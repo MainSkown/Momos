@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Session, create_engine, select
-from sqlalchemy import delete, text, inspect, func
+from sqlalchemy import delete, text, inspect, func, or_
 from . import settings
 from typing import List, Optional, Tuple, TypeVar, Type
 
@@ -324,20 +324,28 @@ class DatabaseManager:
             return merged_settings
 
     def clear_model_references(self, model_name: str) -> None:
-        """Nulls out base_model_name/parsing_model_name on any project's
-        settings that reference model_name - called right before the model
-        itself is deleted from Ollama, so a project can never keep pointing
-        at a model that no longer exists."""
+        """Nulls out every one of the six model-name fields (base_model_name/
+        parsing_model_name plus the four per-role fields - see
+        ProjectSettingsBase in project_scheme.py) on any project's settings
+        that reference model_name - called right before the model itself is
+        deleted from Ollama, so a project can never keep pointing at a model
+        that no longer exists."""
+        model_fields = (
+            "base_model_name",
+            "parsing_model_name",
+            "orchestrator_model_name",
+            "scouting_model_name",
+            "pentesting_model_name",
+            "reporting_model_name",
+        )
         with Session(self.engine) as session:
             statement = select(ProjectSettings).where(
-                (ProjectSettings.base_model_name == model_name)
-                | (ProjectSettings.parsing_model_name == model_name)
+                or_(*[getattr(ProjectSettings, field) == model_name for field in model_fields])
             )
             for settings in session.exec(statement).all():
-                if settings.base_model_name == model_name:
-                    settings.base_model_name = ""
-                if settings.parsing_model_name == model_name:
-                    settings.parsing_model_name = ""
+                for field in model_fields:
+                    if getattr(settings, field) == model_name:
+                        setattr(settings, field, "")
                 session.add(settings)
             session.commit()
 

@@ -34,24 +34,23 @@ def _settings(**overrides):
 # ollama_manager.py as one area.
 
 
-def test_database_url_does_not_percent_encode_special_characters():
-    """A Postgres password containing '@' is embedded into the connection
-    string raw. sqlalchemy.create_engine (what DatabaseManager actually
-    uses) parses the URL with its own make_url, which splits userinfo from
-    host on the FIRST '@' - the embedded '@' in the password creates an
-    extra, wrong split point. The result isn't an error, it's silent
-    corruption: the password is truncated and the host gains the rest of
-    the password as a prefix - a real connection would then fail to
-    authenticate (or worse, resolve a wrong host) with no indication the
-    original password was ever different."""
+def test_database_url_percent_encodes_special_characters_and_round_trips():
+    """A Postgres password containing '@' must survive intact through
+    sqlalchemy.engine.make_url (what DatabaseManager's create_engine parses
+    the URL with internally), which splits userinfo from host on the FIRST
+    unencoded '@' it finds. Without percent-encoding the password, that
+    split lands in the wrong place: the password gets truncated and the
+    host gains the rest of the password as a prefix - a real connection
+    would then fail to authenticate (or worse, resolve a wrong host) with
+    no indication the original password was ever different."""
     settings = _settings(POSTGRES_PASSWORD="p@ssword")
 
-    assert settings.database_url == "postgresql://user:p@ssword@localhost:5432/db"
+    assert settings.database_url == "postgresql://user:p%40ssword@localhost:5432/db"
 
     parsed = sqlalchemy.engine.make_url(settings.database_url)
 
-    assert parsed.password != "p@ssword"
-    assert parsed.host != "localhost"
+    assert parsed.password == "p@ssword"
+    assert parsed.host == "localhost"
 
 
 def test_database_url_round_trips_a_plain_password():
