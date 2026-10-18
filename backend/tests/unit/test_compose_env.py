@@ -66,4 +66,10 @@ def test_missing_credentials_fail_loudly(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "POSTGRES_PASSWORD" in result.stderr
+    # Which required var's interpolation error surfaces first is
+    # unspecified - confirmed non-deterministic across repeated runs
+    # (compose doesn't guarantee a stable service/variable iteration
+    # order), so assert the generic "point at .env" shape every one of
+    # docker-compose.yml's `:?set X in .env` required-var errors shares,
+    # not one specific variable name.
+    assert "in .env" in result.stderr
