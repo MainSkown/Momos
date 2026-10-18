@@ -16,6 +16,7 @@ vi.mock("@/api", () => ({
   getProjectTestSessions: vi.fn(),
   getTestSession: vi.fn(),
   deleteTestSession: vi.fn(),
+  getUserSettings: vi.fn(),
 }));
 
 vi.mock("@/websockets/websocket_client", () => {
@@ -29,8 +30,10 @@ import {
   deleteProject,
   deleteTarget,
   getOllamaDownloadQueueDetails,
+  getUserSettings,
   updateTarget,
   type ResponseTarget,
+  type UserSettings,
 } from "@/api";
 import { useWebSocketClient } from "@/websockets/websocket_client";
 import { useMomosStore } from "@/store/momos_store";
@@ -69,6 +72,63 @@ describe("updateTarget", () => {
     expect(
       (store.targets as unknown as Record<string, ResponseTarget>)["-1"],
     ).toBeUndefined();
+  });
+});
+
+describe("loadUserSettings", () => {
+  function makeUserSettings(overrides: Partial<UserSettings> = {}): UserSettings {
+    return {
+      notify_agent_finished: false,
+      notify_vulnerability_found: false,
+      notify_agent_paused: false,
+      notify_agent_error: false,
+      accent_color: "red",
+      global_max_concurrent_agents: 1,
+      ...overrides,
+    };
+  }
+
+  it("stores whatever GetUserSettings returns, as the shared source other parts of the app read live state from", async () => {
+    const settings = makeUserSettings({ accent_color: "blue", notify_agent_finished: true });
+    vi.mocked(getUserSettings).mockResolvedValue({
+      data: settings,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.loadUserSettings();
+
+    expect(store.user_settings).toEqual(settings);
+    expect(store.getUserSettings).toEqual(settings);
+  });
+
+  it("throws instead of silently leaving stale/null state on a failed fetch", async () => {
+    vi.mocked(getUserSettings).mockResolvedValue({
+      error: { detail: "boom" },
+      response: { status: 500 },
+    } as never);
+    const store = useMomosStore();
+
+    await expect(store.loadUserSettings()).rejects.toThrow();
+    expect(store.user_settings).toBeNull();
+  });
+});
+
+describe("setUserSettings", () => {
+  it("replaces the stored user settings in place, mirroring setProjectSettings's role for project settings", () => {
+    const store = useMomosStore();
+    const settings: UserSettings = {
+      notify_agent_finished: true,
+      notify_vulnerability_found: false,
+      notify_agent_paused: false,
+      notify_agent_error: false,
+      accent_color: "green",
+      global_max_concurrent_agents: 3,
+    };
+
+    store.setUserSettings(settings);
+
+    expect(store.user_settings).toEqual(settings);
   });
 });
 

@@ -12,6 +12,9 @@ import '@fontsource/material-icons/index.css'
 import '@fontsource/material-icons-outlined/index.css'
 import "md-editor-v3/lib/style.css";
 import "@/assets/md-editor.css";
+import { useMomosStore } from '@/store/momos_store'
+import { applyPersistedAccentColor } from '@/bootstrap/applyPersistedAccentColor'
+import { registerAgentNotificationHooks } from '@/websockets/notification_hooks'
 
 const pinia = createPinia()
 const app = createApp(App)
@@ -25,5 +28,13 @@ app.use(
   } as ToastContainerOptions,
 )
 app.use(i18n)
+
+// Applied before mount so the persisted accent color is already in place
+// for the first render - see applyPersistedAccentColor's own docstring.
+await applyPersistedAccentColor(useMomosStore())
+
+// Registered once, globally, regardless of which page/dialog is open - the
+// user expects a notification even when nowhere near the relevant project.
+registerAgentNotificationHooks()
 
 app.mount('#app')

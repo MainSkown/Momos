@@ -57,6 +57,98 @@
   --transition-slow: 350ms ease;
 }
 
+/* Accent preset: blue. Applied via data-accent="blue" on <html> (see useAccentTheme). */
+:root[data-accent="blue"] {
+  --red-primary: #2563eb;
+  --red-dark: #1e40af;
+  --red-darker: #1e3a8a;
+  --red-hover: #1d4ed8;
+  --red-light: #3b82f6;
+  --red-lighter: #60a5fa;
+
+  --border-primary: rgba(37, 99, 235, 0.3);
+  --border-secondary: rgba(37, 99, 235, 0.5);
+  --border-subtle: rgba(37, 99, 235, 0.2);
+
+  --shadow-red-strong: 0 0 20px rgba(37, 99, 235, 0.3);
+  --shadow-red-medium: 0 0 15px rgba(37, 99, 235, 0.4);
+  --shadow-red-subtle: 0 0 10px rgba(37, 99, 235, 0.3);
+  --shadow-red-weak: 0 0 8px rgba(37, 99, 235, 0.25);
+
+  --hover-bg: rgba(37, 99, 235, 0.1);
+  --active-bg: #1e40af;
+  --disabled-bg: #1e3a8a;
+}
+
+/* Accent preset: green. Applied via data-accent="green" on <html> (see useAccentTheme). */
+:root[data-accent="green"] {
+  --red-primary: #16a34a;
+  --red-dark: #166534;
+  --red-darker: #14532d;
+  --red-hover: #15803d;
+  --red-light: #22c55e;
+  --red-lighter: #4ade80;
+
+  --border-primary: rgba(22, 163, 74, 0.3);
+  --border-secondary: rgba(22, 163, 74, 0.5);
+  --border-subtle: rgba(22, 163, 74, 0.2);
+
+  --shadow-red-strong: 0 0 20px rgba(22, 163, 74, 0.3);
+  --shadow-red-medium: 0 0 15px rgba(22, 163, 74, 0.4);
+  --shadow-red-subtle: 0 0 10px rgba(22, 163, 74, 0.3);
+  --shadow-red-weak: 0 0 8px rgba(22, 163, 74, 0.25);
+
+  --hover-bg: rgba(22, 163, 74, 0.1);
+  --active-bg: #166534;
+  --disabled-bg: #14532d;
+}
+
+/* Accent preset: purple. Applied via data-accent="purple" on <html> (see useAccentTheme). */
+:root[data-accent="purple"] {
+  --red-primary: #9333ea;
+  --red-dark: #6b21a8;
+  --red-darker: #581c87;
+  --red-hover: #7e22ce;
+  --red-light: #a855f7;
+  --red-lighter: #c084fc;
+
+  --border-primary: rgba(147, 51, 234, 0.3);
+  --border-secondary: rgba(147, 51, 234, 0.5);
+  --border-subtle: rgba(147, 51, 234, 0.2);
+
+  --shadow-red-strong: 0 0 20px rgba(147, 51, 234, 0.3);
+  --shadow-red-medium: 0 0 15px rgba(147, 51, 234, 0.4);
+  --shadow-red-subtle: 0 0 10px rgba(147, 51, 234, 0.3);
+  --shadow-red-weak: 0 0 8px rgba(147, 51, 234, 0.25);
+
+  --hover-bg: rgba(147, 51, 234, 0.1);
+  --active-bg: #6b21a8;
+  --disabled-bg: #581c87;
+}
+
+/* Accent preset: orange. Applied via data-accent="orange" on <html> (see useAccentTheme). */
+:root[data-accent="orange"] {
+  --red-primary: #ea580c;
+  --red-dark: #9a3412;
+  --red-darker: #7c2d12;
+  --red-hover: #c2410c;
+  --red-light: #f97316;
+  --red-lighter: #fb923c;
+
+  --border-primary: rgba(234, 88, 12, 0.3);
+  --border-secondary: rgba(234, 88, 12, 0.5);
+  --border-subtle: rgba(234, 88, 12, 0.2);
+
+  --shadow-red-strong: 0 0 20px rgba(234, 88, 12, 0.3);
+  --shadow-red-medium: 0 0 15px rgba(234, 88, 12, 0.4);
+  --shadow-red-subtle: 0 0 10px rgba(234, 88, 12, 0.3);
+  --shadow-red-weak: 0 0 8px rgba(234, 88, 12, 0.25);
+
+  --hover-bg: rgba(234, 88, 12, 0.1);
+  --active-bg: #9a3412;
+  --disabled-bg: #7c2d12;
+}
+
 html,
 body {
   margin: 0;

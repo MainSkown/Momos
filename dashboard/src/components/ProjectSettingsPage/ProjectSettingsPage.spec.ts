@@ -37,7 +37,10 @@ function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings
   };
 }
 
-function mountPage(openedProject = "project-a") {
+function mountPage(
+  openedProject = "project-a",
+  momosOverrides: { user_settings?: { global_max_concurrent_agents?: number } | null } = {},
+) {
   // ProjectSettingsPage teleports its save-status text into this element
   // (see its <Teleport to="#context-header-extra"> at the top of the
   // template) - it must exist in the DOM or Vue warns and renders nothing
@@ -49,9 +52,17 @@ function mountPage(openedProject = "project-a") {
 
   const pinia = createTestingPinia({
     stubActions: true,
-    initialState: { momos: { openedProject, running_targets: {}, projects: [] } },
+    initialState: {
+      momos: { openedProject, running_targets: {}, projects: [], ...momosOverrides },
+    },
   });
   const store = useMomosStore(pinia);
+
+  // Stubbed by default (stubActions: true) means this would otherwise be a
+  // bare vi.fn() returning undefined - the component's own onMounted calls
+  // `.catch()` on the result, which would throw against that. Tests that
+  // care about failure instead override this per-call.
+  vi.mocked(store.loadUserSettings).mockResolvedValue(undefined);
 
   const wrapper = mount(ProjectSettingsPage, {
     global: {
@@ -59,7 +70,12 @@ function mountPage(openedProject = "project-a") {
       // ProjectSettingsPage.vue's template calls the global $t injected by
       // the app's i18n plugin directly (not the local `t` from its own
       // useI18n() call) - mirrors TargetSettingsDialog.spec.ts's pattern.
-      mocks: { $t: (key: string) => key },
+      // Params are serialized (not just dropped) so interpolated values
+      // (e.g. the capped-globally note's {cap}) are actually assertable.
+      mocks: {
+        $t: (key: string, params?: Record<string, unknown>) =>
+          params ? `${key}::${JSON.stringify(params)}` : key,
+      },
     },
   });
 
@@ -155,5 +171,82 @@ describe("ProjectSettingsPage load_settings out-of-order race (fixed)", () => {
     expect(call.path.project_id).toBe("project-b");
     expect(call.body.base_model_name).toBe("project-b-model");
     expect(call.body.should_interrupt).toBe(true);
+  });
+});
+
+describe("ProjectSettingsPage global concurrency cap note", () => {
+  function mockMultiAgentSettings(maxConcurrentAgents: number) {
+    vi.mocked(getProjectSettings).mockResolvedValue({
+      data: makeSettings({
+        pipeline_mode: "multi_agent",
+        max_concurrent_agents: maxConcurrentAgents,
+      }),
+    } as never);
+  }
+
+  function cappedNote(wrapper: VueWrapper) {
+    return wrapper.find(".capped-globally-note");
+  }
+
+  it("shows the note with the cap interpolated when the project's value strictly exceeds the global cap", async () => {
+    mockMultiAgentSettings(5);
+    const { wrapper } = mountPage("project-a", {
+      user_settings: { global_max_concurrent_agents: 2 },
+    });
+    await flushPromises();
+
+    const note = cappedNote(wrapper);
+    expect(note.exists()).toBe(true);
+    expect(note.text()).toContain("settings.capped_globally_note");
+    expect(note.text()).toContain('"cap":2');
+  });
+
+  it("does not show the note when the project's value exactly equals the global cap", async () => {
+    mockMultiAgentSettings(2);
+    const { wrapper } = mountPage("project-a", {
+      user_settings: { global_max_concurrent_agents: 2 },
+    });
+    await flushPromises();
+
+    expect(cappedNote(wrapper).exists()).toBe(false);
+  });
+
+  it("does not show the note when the project's value is below the global cap", async () => {
+    mockMultiAgentSettings(1);
+    const { wrapper } = mountPage("project-a", {
+      user_settings: { global_max_concurrent_agents: 2 },
+    });
+    await flushPromises();
+
+    expect(cappedNote(wrapper).exists()).toBe(false);
+  });
+
+  it("shows the note immediately on mount, before any field edit", async () => {
+    mockMultiAgentSettings(10);
+    const { wrapper } = mountPage("project-a", {
+      user_settings: { global_max_concurrent_agents: 3 },
+    });
+    await flushPromises();
+
+    expect(cappedNote(wrapper).exists()).toBe(true);
+  });
+
+  it("shows no note and triggers loadUserSettings when user_settings has not loaded yet", async () => {
+    mockMultiAgentSettings(5);
+    const { wrapper, store } = mountPage("project-a", { user_settings: null });
+    await flushPromises();
+
+    expect(cappedNote(wrapper).exists()).toBe(false);
+    expect(store.loadUserSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call loadUserSettings again when user_settings is already populated before mount", async () => {
+    mockMultiAgentSettings(5);
+    const { store } = mountPage("project-a", {
+      user_settings: { global_max_concurrent_agents: 2 },
+    });
+    await flushPromises();
+
+    expect(store.loadUserSettings).not.toHaveBeenCalled();
   });
 });

@@ -638,7 +638,7 @@ export type OllamaQueueDetails = {
 /**
  * OutboundTraffic
  */
-export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate | TestSessionUpdate;
+export type OutboundTraffic = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate | VulnerabilityFound | TestSessionUpdate;
 
 /**
  * ProjectRequest
@@ -1267,6 +1267,70 @@ export type TestSessionUpdate = {
 };
 
 /**
+ * UserSettings
+ */
+export type UserSettings = {
+    /**
+     * Notify Agent Finished
+     */
+    notify_agent_finished?: boolean;
+    /**
+     * Notify Vulnerability Found
+     */
+    notify_vulnerability_found?: boolean;
+    /**
+     * Notify Agent Paused
+     */
+    notify_agent_paused?: boolean;
+    /**
+     * Notify Agent Error
+     */
+    notify_agent_error?: boolean;
+    /**
+     * Accent Color
+     */
+    accent_color?: string;
+    /**
+     * Global Max Concurrent Agents
+     */
+    global_max_concurrent_agents?: number;
+    /**
+     * Id
+     */
+    id?: number;
+};
+
+/**
+ * UserSettingsBase
+ */
+export type UserSettingsBase = {
+    /**
+     * Notify Agent Finished
+     */
+    notify_agent_finished?: boolean;
+    /**
+     * Notify Vulnerability Found
+     */
+    notify_vulnerability_found?: boolean;
+    /**
+     * Notify Agent Paused
+     */
+    notify_agent_paused?: boolean;
+    /**
+     * Notify Agent Error
+     */
+    notify_agent_error?: boolean;
+    /**
+     * Accent Color
+     */
+    accent_color?: string;
+    /**
+     * Global Max Concurrent Agents
+     */
+    global_max_concurrent_agents?: number;
+};
+
+/**
  * ValidationError
  */
 export type ValidationError = {
@@ -1317,6 +1381,36 @@ export type VulnerabilityBase = {
 };
 
 /**
+ * VulnerabilityFound
+ *
+ * Pushed whenever a Vulnerability is recorded (see
+ * run_registry.broadcast_vulnerability_found, called from
+ * agent_tools.py's report_vulnerability right after
+ * db_manager.add_vulnerability succeeds) - unlike AttackVectorUpdate/
+ * TestSessionUpdate, nothing previously broadcast when a new
+ * Vulnerability was found; the Vulnerabilities tab only ever polled
+ * .../vulnerabilities on demand. This is the one live-push hook the
+ * browser-notification feature (user-options-settings.md) has to react
+ * to a finding as it happens, instead of waiting for the next poll.
+ */
+export type VulnerabilityFound = {
+    /**
+     * Type
+     */
+    type: 'VulnerabilityFound';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    vulnerability: ResponseVulnerability;
+};
+
+/**
  * WebSocketError
  */
 export type WebSocketError = {
@@ -1337,6 +1431,11 @@ export type WebsocketTrafficSchema = {
     inbound_traffic: InboundTraffic;
     outbound_traffic: OutboundTraffic;
 };
+
+/**
+ * OutboundTraffic
+ */
+export type OutboundTrafficWritable = ReceiveCommandOutputMessage | ConsoleSessionCreatedMessage | ConsoleSessionClosedMessage | CreatedKaliUserMessage | KaliCreationStageMessage | KaliContainerActiveMessage | ModelPullingUpdate | AgentMessage | AgentInterruptRequest | AgentRunStatus | AgentRunTimer | AgentContextUsage | AttackVectorUpdate | VulnerabilityFoundWritable | TestSessionUpdate;
 
 /**
  * ResponseVulnerability
@@ -1378,6 +1477,44 @@ export type ResponseVulnerabilityWritable = {
      * Found By Model
      */
     found_by_model?: string | null;
+};
+
+/**
+ * VulnerabilityFound
+ *
+ * Pushed whenever a Vulnerability is recorded (see
+ * run_registry.broadcast_vulnerability_found, called from
+ * agent_tools.py's report_vulnerability right after
+ * db_manager.add_vulnerability succeeds) - unlike AttackVectorUpdate/
+ * TestSessionUpdate, nothing previously broadcast when a new
+ * Vulnerability was found; the Vulnerabilities tab only ever polled
+ * .../vulnerabilities on demand. This is the one live-push hook the
+ * browser-notification feature (user-options-settings.md) has to react
+ * to a finding as it happens, instead of waiting for the next poll.
+ */
+export type VulnerabilityFoundWritable = {
+    /**
+     * Type
+     */
+    type: 'VulnerabilityFound';
+    error?: WebSocketError | null;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    vulnerability: ResponseVulnerabilityWritable;
+};
+
+/**
+ * WebsocketTrafficSchema
+ */
+export type WebsocketTrafficSchemaWritable = {
+    inbound_traffic: InboundTraffic;
+    outbound_traffic: OutboundTrafficWritable;
 };
 
 export type GetAllProjectsData = {
@@ -2530,6 +2667,47 @@ export type GetTestSessionLogsResponses = {
 };
 
 export type GetTestSessionLogsResponse = GetTestSessionLogsResponses[keyof GetTestSessionLogsResponses];
+
+export type GetUserSettingsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/user-settings';
+};
+
+export type GetUserSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserSettings;
+};
+
+export type GetUserSettingsResponse = GetUserSettingsResponses[keyof GetUserSettingsResponses];
+
+export type UpdateUserSettingsData = {
+    body: UserSettingsBase;
+    path?: never;
+    query?: never;
+    url: '/api/user-settings';
+};
+
+export type UpdateUserSettingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateUserSettingsError = UpdateUserSettingsErrors[keyof UpdateUserSettingsErrors];
+
+export type UpdateUserSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserSettings;
+};
+
+export type UpdateUserSettingsResponse = UpdateUserSettingsResponses[keyof UpdateUserSettingsResponses];
 
 export type WsTypesData = {
     body?: never;

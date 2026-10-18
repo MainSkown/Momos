@@ -151,6 +151,9 @@
                   class="input-field border full-width"
                   :disabled="isScanRunning"
                 />
+                <span v-if="isCappedGlobally" class="text-gray capped-globally-note">
+                  {{ $t("settings.capped_globally_note", { cap: globalCap }) }}
+                </span>
               </div>
 
               <template v-if="isMultiAgent">
@@ -566,6 +569,14 @@ const isMultiAgent = computed(
   () => project_settings.value?.pipeline_mode === "multi_agent",
 );
 
+const globalCap = computed(() => store.user_settings?.global_max_concurrent_agents ?? null);
+const isCappedGlobally = computed(
+  () =>
+    globalCap.value !== null &&
+    project_settings.value?.max_concurrent_agents != null &&
+    project_settings.value.max_concurrent_agents > globalCap.value,
+);
+
 const promptDialogTitle = computed(() =>
   isMultiAgent.value ? t("settings.pipeline_prompts_title") : t("settings.starting_prompt"),
 );
@@ -774,6 +785,15 @@ async function confirmDeleteProject() {
 onMounted(async () => {
   await load_settings(store.openedProject);
   store.loadRunningTarget(store.openedProject);
+
+  // user_settings is normally already populated by main.ts's boot-time
+  // loadUserSettings call (see applyPersistedAccentColor) - this only
+  // covers a slow/failed boot fetch, or this component mounting before
+  // boot finishes, so the globally-capped note stays reliably correct
+  // rather than depending on that load order elsewhere.
+  if (store.user_settings === null) {
+    store.loadUserSettings().catch((error) => console.error("Failed to load user settings:", error));
+  }
 });
 
 watch(

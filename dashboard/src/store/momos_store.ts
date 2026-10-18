@@ -24,6 +24,8 @@ import {
   type TestSessionDetailResponse,
   type TestSessionOutcome,
   type TestSessionUpdate as TestSessionUpdateMessage,
+  getUserSettings,
+  type UserSettings,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -68,6 +70,13 @@ interface State {
   session_detail: {
     [session_id: string]: TestSessionDetailResponse;
   };
+  // Global, user-wide preferences (notification toggles, accent color, the
+  // live concurrency cap) - a singleton, unlike every other map above
+  // which is keyed per project/target/session. Null until loadUserSettings
+  // resolves at least once (app boot - see main.ts) so a reader (e.g. the
+  // notification websocket hooks below) can tell "not loaded yet" apart
+  // from "loaded, every toggle off".
+  user_settings: UserSettings | null;
 }
 
 // Registered once for the app's lifetime (not per-component-mount, unlike
@@ -179,6 +188,7 @@ export const useMomosStore = defineStore("momos", {
     attack_vectors: {},
     sessions: {},
     session_detail: {},
+    user_settings: null,
   }),
 
   getters: {
@@ -194,6 +204,7 @@ export const useMomosStore = defineStore("momos", {
     getSessions: (state) => (projectID: string) => state.sessions[projectID] ?? [],
     getSessionDetail: (state) => (sessionID: string) =>
       state.session_detail[sessionID] ?? null,
+    getUserSettings: (state) => state.user_settings,
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -369,6 +380,21 @@ export const useMomosStore = defineStore("momos", {
 
     setProjectSettings(projectID: string, settings: ProjectSettings) {
       this.project_settings[projectID] = settings;
+    },
+
+    /* User Settings */
+    async loadUserSettings() {
+      const result = await getUserSettings();
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load user settings");
+      }
+
+      this.user_settings = result.data;
+    },
+
+    setUserSettings(settings: UserSettings) {
+      this.user_settings = settings;
     },
 
     async loadRunningTarget(projectID: string) {
