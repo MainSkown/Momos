@@ -47,27 +47,27 @@ def fake_kali_registry(monkeypatch, fake_manager):
 # --- Bug 4: create_user has no dedupe, every hook gets registered twice ----
 
 
-async def test_create_user_called_twice_registers_every_websocket_hook_twice(
+async def test_create_user_called_twice_registers_every_websocket_hook_once(
     fresh_ws_registry, fake_kali_registry
 ):
-    """Confirmed real bug: create_user has no check for an existing
-    active/pending user for the same project, so two calls each run
-    KaliUser.create, and EACH call does three ws_registry.add_hook calls on
-    a brand-new KaliUser instance - add_hook's own de-dupe check compares
-    bound methods, and two different instances' bound methods never compare
-    equal, so nothing collapses the duplicates. A double-created user means
-    every console command could execute twice."""
+    """_create_user must check for an existing active/pending user for the
+    same project and skip creating a second one - otherwise two calls would
+    each run KaliUser.create, and EACH call does three ws_registry.add_hook
+    calls on a brand-new KaliUser instance (add_hook's own de-dupe check
+    compares bound methods, and two different instances' bound methods
+    never compare equal, so nothing would collapse the duplicates). A
+    double-created user means every console command could execute twice."""
     registry = KaliUserRegistry()
 
     await registry._create_user("project-a", uuid.uuid4())
     await registry._create_user("project-a", uuid.uuid4())
 
-    assert len(registry.active_users) == 2
+    assert len(registry.active_users) == 1
     from src.websocket import WsTypes
 
-    assert len(fresh_ws_registry.hooks[WsTypes.SendCommandMessage]) == 2
-    assert len(fresh_ws_registry.hooks[WsTypes.CreateConsoleSessionMessage]) == 2
-    assert len(fresh_ws_registry.hooks[WsTypes.CloseConsoleSessionMessage]) == 2
+    assert len(fresh_ws_registry.hooks[WsTypes.SendCommandMessage]) == 1
+    assert len(fresh_ws_registry.hooks[WsTypes.CreateConsoleSessionMessage]) == 1
+    assert len(fresh_ws_registry.hooks[WsTypes.CloseConsoleSessionMessage]) == 1
 
 
 async def test_create_user_failure_leaves_no_pending_residue(

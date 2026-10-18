@@ -158,6 +158,18 @@ class KaliUserRegistry:
         )  # client_id -> project_id, in process of creation
 
     async def create_user(self, project_id: str) -> str:
+        # Dedupe: if a Kali client for this project is already active, or
+        # another create_user call for it is already in flight, hand back
+        # THAT one's client_id instead of kicking off a second full build -
+        # see _create_user's own guard below for why a second one must
+        # never actually get created. No `await` between this check and
+        # the pending_users write below, so two near-simultaneous calls
+        # can't interleave on the event loop and both pass this check.
+        existing = self.get_client_for_project(project_id)
+        if existing is not None:
+            existing_client_id, _pending = existing
+            return str(existing_client_id)
+
         client_id = uuid.uuid4()
         self.pending_users[client_id] = project_id
 
@@ -166,6 +178,25 @@ class KaliUserRegistry:
         return str(client_id)
 
     async def _create_user(self, project_id: str, client_id: uuid.UUID):
+        # Belt-and-suspenders guard against the same race create_user's own
+        # check above handles - this runs as a separately-scheduled task,
+        # so another call for the same project can still complete (or
+        # itself go pending) in the gap between that check and this task
+        # actually running. Without this, a second call squeezed into that
+        # gap would still fully construct a second KaliUser and register
+        # every websocket hook a second time - every console command would
+        # then run twice (see add_hook's own bound-method de-dupe, which
+        # can't collapse hooks bound to two different KaliUser instances).
+        already_registered = self.get_active_user_for_project(
+            project_id
+        ) is not None or any(
+            pid == project_id and cid != client_id
+            for cid, pid in self.pending_users.items()
+        )
+        if already_registered:
+            self.pending_users.pop(client_id, None)
+            return
+
         try:
             user = await KaliUser.create(project_id, client_id)
         except Exception as e:

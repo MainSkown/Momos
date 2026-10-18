@@ -33,27 +33,28 @@ def _ok_exec_run(*_args, **_kwargs):
 # --- Bug 1: failed start() on an exited/stopped existing container ---------
 
 
-def test_failed_restart_of_existing_container_crashes_instead_of_rebuilding(
+def test_failed_restart_of_existing_container_rebuilds_cleanly(
     manager, fake_docker_client
 ):
-    """docs/testing-plan.md's crawler report suspects _create_container falls
-    through to `existing_container.remove(force=True)` on a None reference
-    when the restart attempt fails. Confirmed by reading the source: the
-    except block sets `existing_container = None`, and the `if existing_container
-    is not None and existing_container.status == "running"` guard correctly
-    short-circuits (no AttributeError there), but the code unconditionally
-    falls through afterwards to `existing_container.remove(force=True)` with
-    no further None-check - that line is where the AttributeError actually
-    fires, not a clean rebuild."""
+    """A failed restart() on an exited/stopped existing container must lead
+    to the same clean-rebuild path as "no existing container found" - not a
+    crash. _create_container sets `existing_container = None` in the except
+    block, and must guard the later `existing_container.remove(force=True)`
+    call (or re-fetch the container) so it's never called on that now-None/
+    stale reference."""
     existing = fake_docker_client.containers.get.return_value
     existing.status = "exited"
     existing.start.side_effect = docker.errors.APIError("container could not restart")
 
-    with pytest.raises(AttributeError):
-        manager._create_container(on_stage=None)
+    new_container = fake_docker_client.containers.run.return_value
+    new_container.exec_run.side_effect = _ok_exec_run
+
+    manager._create_container(on_stage=None)
 
     existing.start.assert_called_once()
-    fake_docker_client.containers.run.assert_not_called()
+    existing.remove.assert_not_called()
+    fake_docker_client.containers.run.assert_called_once()
+    assert manager.container is new_container
 
 
 # --- Reuse / rebuild fast paths ---------------------------------------------
@@ -143,18 +144,13 @@ def test_post_setup_verification_failure_raises(manager, fake_docker_client):
 # --- Bug 2: prepare_nftables fails open, not closed -------------------------
 
 
-async def test_prepare_nftables_fails_open_when_a_rule_after_the_output_chain_fails(
+async def test_prepare_nftables_fails_closed_when_a_rule_after_the_output_chain_fails(
     manager, monkeypatch
 ):
-    """The OUTPUT chain is created with `policy accept`, and the final
-    per-family `drop` rule is what actually locks egress down - everything
-    in between is a separate, un-transacted execute() call. Confirmed via
-    the real command sequence: if ANY call after the chain is created (here,
-    the ftp-helper ct object, which is call #3 of the ipv4 sequence) raises,
-    prepare_nftables aborts and propagates the exception - the drop rule
-    for ipv4 (and the entire ipv6 table) never gets added, while the accept
-    policy from the already-created chain stays in effect. That's fail-open,
-    not fail-closed."""
+    """The OUTPUT chain's effective default must be deny (drop) from the
+    moment it's created, so that if ANY later call (here, the ftp-helper ct
+    object, which is call #3 of the ipv4 sequence) raises, egress is still
+    blocked rather than left wide open on the chain's `policy accept`."""
     recorded_commands = []
 
     async def fake_execute(command, user=None, timeout_seconds=120):
@@ -171,8 +167,7 @@ async def test_prepare_nftables_fails_open_when_a_rule_after_the_output_chain_fa
     with pytest.raises(RuntimeError, match="Operation not supported"):
         await manager.prepare_nftables(target)
 
-    assert any("add chain ip MOMOS_IPv4 OUTPUT" in c and "policy accept" in c for c in recorded_commands)
-    assert not any("OUTPUT meta skuid momos drop" in c for c in recorded_commands)
+    assert not any("policy accept" in c for c in recorded_commands)
 
 
 async def test_prepare_nftables_happy_path_installs_the_drop_rule_last_per_family(manager, monkeypatch):
@@ -199,14 +194,13 @@ async def test_prepare_nftables_happy_path_installs_the_drop_rule_last_per_famil
 # --- Bug 3: _remove_from_registry pops by key, no identity check -----------
 
 
-async def test_remove_from_registry_pops_by_key_with_no_identity_check(manager):
-    """Confirmed real race: a slow cleanup for session A (e.g. its
-    _session_io's EOFError/OSError handler calling _remove_from_registry
-    after a long-blocked read finally returns) can delete a DIFFERENT,
-    newly-opened session B that reused the same (target_id, agent_run_id,
-    name) key in the meantime. _remove_from_registry only pops by key, with
-    no check that the entry it's removing is still the same object it was
-    asked to remove."""
+async def test_remove_from_registry_only_pops_the_same_identity(manager):
+    """A slow cleanup for session A (e.g. its _session_io's EOFError/OSError
+    handler calling _remove_from_registry after a long-blocked read finally
+    returns) must NOT delete a DIFFERENT, newly-opened session B that reused
+    the same (target_id, agent_run_id, name) key in the meantime -
+    _remove_from_registry must check the registry's current value at that
+    key IS session A (identity, not just key) before popping."""
     key = manager._session_key("target-1", "run-1", "default")
 
     session_a = _make_session(name="default", target_id="target-1", agent_run_id="run-1")
@@ -222,9 +216,8 @@ async def test_remove_from_registry_pops_by_key_with_no_identity_check(manager):
     # A's own (now-stale) cleanup finally runs.
     await manager._remove_from_registry(session_a)
 
-    assert key not in manager.sessions, (
-        "confirmed bug: A's stale cleanup deleted B's live registry entry "
-        "instead of leaving it alone"
+    assert manager.sessions.get(key) is session_b, (
+        "A's stale cleanup must leave B's live registry entry alone"
     )
 
 

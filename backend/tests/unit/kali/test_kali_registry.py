@@ -46,7 +46,7 @@ def registry(monkeypatch):
 # --- Bug 5: get_manager holds its lock across the entire container build ---
 
 
-async def test_get_manager_holds_its_lock_across_the_whole_container_build(
+async def test_get_manager_if_exists_for_an_unrelated_project_does_not_block_during_a_build(
     registry, monkeypatch
 ):
     blocking_manager = _BlockingManager()
@@ -57,26 +57,23 @@ async def test_get_manager_holds_its_lock_across_the_whole_container_build(
     build_task = asyncio.create_task(registry.get_manager("project-a"))
     await asyncio.wait_for(blocking_manager.began.wait(), timeout=1)
 
-    # The build is genuinely still in flight, and the registry's own lock is
-    # held for the whole thing - not released after the dict mutation.
-    assert registry._lock.locked()
+    # project-a's build is genuinely still in flight - the registry's own
+    # lock must already be released (it only ever guards the dict check/
+    # insert, not the build itself), so an UNRELATED project's
+    # get_manager_if_exists call resolves immediately instead of waiting
+    # behind it.
+    assert not registry._lock.locked()
 
     second_task = asyncio.create_task(registry.get_manager_if_exists("project-b"))
-    await asyncio.sleep(0.2)
-    assert not second_task.done(), (
-        "confirmed bug: an unrelated project's get_manager_if_exists call "
-        "blocked for the whole duration of project-a's container build"
-    )
+    manager_b = await asyncio.wait_for(second_task, timeout=1)
+    assert manager_b is None
 
     blocking_manager.release.set()
     manager_a = await build_task
-    manager_b = await second_task
-
     assert manager_a is blocking_manager
-    assert manager_b is None
 
 
-async def test_delete_manager_for_unrelated_project_also_blocks_during_a_build(
+async def test_delete_manager_for_unrelated_project_does_not_block_during_a_build(
     registry, monkeypatch
 ):
     blocking_manager = _BlockingManager()
@@ -88,12 +85,10 @@ async def test_delete_manager_for_unrelated_project_also_blocks_during_a_build(
     await asyncio.wait_for(blocking_manager.began.wait(), timeout=1)
 
     delete_task = asyncio.create_task(registry.delete_manager("project-b"))
-    await asyncio.sleep(0.2)
-    assert not delete_task.done()
+    await asyncio.wait_for(delete_task, timeout=1)
 
     blocking_manager.release.set()
     await build_task
-    await delete_task
 
 
 # --- Standard lifecycle coverage --------------------------------------------
