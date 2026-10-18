@@ -76,6 +76,10 @@ async def test_create_user_failure_leaves_no_pending_residue(
     fake_kali_registry.get_manager.side_effect = RuntimeError("docker build failed")
     registry = KaliUserRegistry()
     client_id = uuid.uuid4()
+    # Must actually be pending before the call, same as the success-path
+    # sibling test - otherwise "not in pending_users" afterward is true
+    # regardless of whether the failure path's own pop() ever runs.
+    registry.pending_users[client_id] = "project-a"
 
     await registry._create_user("project-a", client_id)
 

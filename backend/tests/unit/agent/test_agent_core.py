@@ -383,5 +383,10 @@ class TestTrimMessagesForModel:
 
         trimmed = agent._trim_messages_for_model(messages)
 
+        # trimmed is always [first, notice] + recent - trimmed[1] is the
+        # inserted SystemMessage notice itself, never a ToolMessage by
+        # construction regardless of whether the skip-forward logic below
+        # actually works. The real claim this test is named for lives at
+        # trimmed[2] (recent[0]), the kept window's own first message.
         assert trimmed[0] is messages[0]
-        assert not isinstance(trimmed[1], ToolMessage)
+        assert not isinstance(trimmed[2], ToolMessage)

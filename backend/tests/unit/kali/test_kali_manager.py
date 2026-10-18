@@ -308,6 +308,7 @@ async def test_open_session_enforces_per_target_cap_across_owners(manager, monke
         sock.close()
 
 
+@pytest.mark.timeout(10)
 async def test_run_in_current_session_real_socket_roundtrip_with_idle_window(manager, monkeypatch):
     """LS tier (no Docker): a real socket pair stands in for the exec socket,
     proving the actual read-window/send logic, not just a scripted return
@@ -328,10 +329,14 @@ async def test_run_in_current_session_real_socket_roundtrip_with_idle_window(man
     )
     t.join(timeout=2)
 
-    assert "hi" in output
+    # Exact match, not a substring check - NO_OUTPUT_MESSAGE ("...wait
+    # window)") itself contains "hi" (wit-HI-n), so a looser "hi" in
+    # output assertion would pass even on the no-real-echo fallback path.
+    assert output.strip() == "hi"
     server.close()
 
 
+@pytest.mark.timeout(10)
 async def test_interrupt_session_while_io_lock_held_writes_directly_without_waiting(
     manager, monkeypatch
 ):

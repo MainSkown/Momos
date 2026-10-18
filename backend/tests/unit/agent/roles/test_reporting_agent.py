@@ -130,9 +130,34 @@ def test_has_tested_is_always_true(monkeypatch):
     assert agent._has_tested() is True
 
 
-def test_requires_interrupt_is_always_false(monkeypatch):
+async def test_requires_interrupt_is_always_false(monkeypatch):
     agent = _make_agent(monkeypatch)
-    assert agent._get_mode() == "exploiting"
+
+    captured = {}
+
+    async def fake_run_graph_loop(*args, **kwargs):
+        captured["requires_interrupt"] = args[6]
+        return
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(reporting_mod.common, "run_graph_loop", fake_run_graph_loop)
+
+    async for _ in agent.start_agent(
+        start_prompt="go",
+        thread_id="t1",
+        stop_event=None,
+    ):
+        pass
+
+    requires_interrupt = captured["requires_interrupt"]
+    # reporting_tools.WRITER_TOOL_NAMES is empty, so the real closure
+    # ignores its argument entirely and always returns False - assert
+    # that against more than one input, so a future accidental "return
+    # True" (or a conditional that happens to agree on an empty set)
+    # can't slip past an assertion that only ever tried the empty case.
+    assert requires_interrupt(set()) is False
+    assert requires_interrupt({"report_outcome"}) is False
+    assert requires_interrupt({"anything_at_all"}) is False
 
 
 def test_on_reported_sets_finish_summary_with_cvss_score(monkeypatch):
