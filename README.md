@@ -27,7 +27,7 @@ Once the containers are up, open the dashboard at `http://localhost:8080`. The d
 
 If you have an NVIDIA GPU available, uncomment the GPU reservation block for the `ollama` service in `docker-compose.yml` before starting the stack to enable hardware acceleration.
 
-Database credentials and the Ollama connection are configured via `backend/.env`; sensible defaults are provided for a local, single-host setup.
+Database credentials and the Ollama connection are configured via a root `.env` file (gitignored). Copy `.env.example` to `.env` and adjust it before running `docker compose up`.
 
 ### Development
 
