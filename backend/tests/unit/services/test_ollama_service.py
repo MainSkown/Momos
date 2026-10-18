@@ -23,6 +23,7 @@ def reset_ollama_service_state():
     OllamaService._current_download = None
     OllamaService._queued_models = []
     OllamaService._worker_task = None
+    OllamaService._download_lock = asyncio.Lock()
     yield
     if OllamaService._worker_task is not None and not OllamaService._worker_task.done():
         OllamaService._worker_task.cancel()
@@ -53,17 +54,18 @@ def _empty_models_list():
 async def test_concurrent_download_calls_for_same_model_both_queue_it(
     fake_ollama_manager, monkeypatch
 ):
-    """Real check-then-act race: the 'already queued' check and the append
-    to _queued_models are separated by an `await cls.get_models_list()`.
-    Two concurrent calls for the same model can both pass the check before
-    either appends, so the model ends up queued twice instead of once -
-    this test proves that actually happens, it doesn't just assert a
-    mock's return value."""
+    """The 'already queued' check and the append to _queued_models are
+    separated by an `await cls.get_models_list()`, which used to let two
+    concurrent calls for the same model both pass the check before either
+    appended, queueing the model twice. Now guarded by `_download_lock`:
+    the first call to actually reach the lock runs the whole
+    check-then-act atomically, so the second call sees the already-queued
+    model and raises instead of queueing a duplicate."""
     fake_ollama_manager.list_models = AsyncMock(return_value=_empty_models_list())
-    # Isolate the race to download_model's own check-then-act window: the
+    # Isolate this to download_model's own check-then-act window: the
     # background worker would otherwise dequeue and remove() these entries
     # from _queued_models the moment it gets scheduled, hiding the very
-    # duplicate-queue state this test exists to prove.
+    # queue state this test exists to prove.
     monkeypatch.setattr(OllamaService, "_ensure_worker_running", classmethod(lambda cls: None))
 
     release = asyncio.Event()
@@ -83,9 +85,13 @@ async def test_concurrent_download_calls_for_same_model_both_queue_it(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     release.set()
-    await asyncio.gather(task_a, task_b)
+    results = await asyncio.gather(task_a, task_b, return_exceptions=True)
 
-    assert OllamaService._queued_models.count("llama3:8b") == 2
+    successes = [r for r in results if r is None]
+    failures = [r for r in results if isinstance(r, ValueError)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert OllamaService._queued_models.count("llama3:8b") == 1
 
 
 @pytest.mark.asyncio

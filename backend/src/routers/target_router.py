@@ -3,6 +3,12 @@ from typing import List
 from fastapi import APIRouter, HTTPException, status
 from src.services import TargetService
 from src.schemas import ResponseTarget, TargetBase, Target
+from src.utils.exceptions import (
+    InvalidProjectIdException,
+    InvalidTargetDataException,
+    ProjectDoesNotExistException,
+    TargetDoesNotExistException,
+)
 
 router = APIRouter()
 
@@ -25,7 +31,30 @@ def get_all_targets_in_project(project_id: str):
 @router.post("/project/{project_id}/target", response_model=ResponseTarget, operation_id="PostTarget")
 def create_target(project_id: str, data: TargetBase):
     try:
-        return TargetService.add_target(data.name, project_id)
+        return TargetService.add_target(
+            data.name,
+            project_id,
+            ipv4=data.ipv4,
+            ipv6=data.ipv6,
+            description=data.description,
+            ports=data.ports,
+            task_duration=data.task_duration,
+        )
+    except InvalidProjectIdException as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except InvalidTargetDataException as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -49,6 +78,16 @@ def update_target(target_id: str, data: TargetBase):
     try:
         TargetService.update_target(target)
         return
+    except TargetDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except InvalidTargetDataException as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
     except Exception as e:
         print(e)
         raise HTTPException(

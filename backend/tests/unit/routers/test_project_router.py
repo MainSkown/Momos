@@ -1,9 +1,13 @@
 """project_router.py - see docs/testing-crawler-reports/routers.md's
-project_router.py section for the exact gaps these tests confirm:
-GET/PUT settings fall through to a generic 500 for an unknown project
-instead of a 404, and PUT's pre-check call to get_project_settings sits
-outside any try/except, so a failure there is a bare FastAPI 500 with no
-JSON detail at all."""
+project_router.py section for the gaps these tests exercise: GET/PUT
+settings now map an unknown project to 404 via
+ProjectService.get_project_settings raising ProjectDoesNotExistException,
+instead of falling through to the generic 500. PUT's pre-check call to
+get_project_settings is now wrapped in its own try/except for that typed
+exception - but only for that typed exception: a genuinely different
+failure there (anything not ProjectDoesNotExistException) still isn't
+caught by anything in the handler, so it remains a bare, detail-less
+FastAPI 500 (see test_update_settings_precheck_failure_is_bare_500)."""
 
 import importlib
 import uuid
@@ -110,17 +114,21 @@ def test_get_project_settings_happy_path(api_client, monkeypatch):
     assert response.status_code == 200
 
 
-def test_get_project_settings_unknown_project_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): get_project_settings's FK violation for
-    an unknown project surfaces as a generic Exception, which the router's
-    catch-all maps to 500, not a 404."""
+def test_get_project_settings_unknown_project_returns_404(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): ProjectService.get_project_settings
+    now raises ProjectDoesNotExistException for an unknown project, which
+    the router maps to 404 instead of the generic 500."""
     monkeypatch.setattr(
         project_router.ProjectService,
         "get_project_settings",
-        MagicMock(side_effect=RuntimeError("FK violation: unknown project")),
+        MagicMock(
+            side_effect=project_router.ProjectDoesNotExistException(
+                f"Project does not exist: {PROJECT_ID}", PROJECT_ID
+            )
+        ),
     )
     response = api_client.get(f"/api/project/{PROJECT_ID}/settings")
-    assert response.status_code == 500
+    assert response.status_code == 404
 
 
 def test_update_settings_url_body_id_mismatch_returns_400(api_client):
@@ -287,16 +295,39 @@ def test_update_settings_happy_path(api_client, monkeypatch):
     assert response.status_code == 200
 
 
-def test_update_settings_precheck_failure_is_bare_500(monkeypatch):
-    """Confirmed gap (routers.md): the pre-check call to
-    get_project_settings sits OUTSIDE the try/except that wraps the rest
-    of the handler, so a failure there is an unhandled exception that
-    Starlette's own default error handler turns into a bare 500 with no
-    JSON "detail" - never the router's own HTTPException(detail=...)."""
+def test_update_settings_unknown_project_returns_404(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): the pre-check call to
+    get_project_settings now has its own try/except for
+    ProjectDoesNotExistException specifically, so an unknown project_id
+    maps to 404 instead of falling through to a bare 500."""
     monkeypatch.setattr(
         project_router.ProjectService,
         "get_project_settings",
-        MagicMock(side_effect=RuntimeError("unknown project")),
+        MagicMock(
+            side_effect=project_router.ProjectDoesNotExistException(
+                f"Project does not exist: {PROJECT_ID}", PROJECT_ID
+            )
+        ),
+    )
+    response = api_client.put(
+        f"/api/project/{PROJECT_ID}/settings",
+        json=settings_body(pipeline_mode="multi_agent"),
+    )
+    assert response.status_code == 404
+
+
+def test_update_settings_precheck_failure_is_bare_500(monkeypatch):
+    """Pin (routers.md): the pre-check's new try/except only catches
+    ProjectDoesNotExistException (see test_update_settings_unknown_project_
+    returns_404) - it is not a broad catch-all. A genuinely different
+    failure there (anything else the service might raise) is still an
+    unhandled exception that Starlette's own default error handler turns
+    into a bare 500 with no JSON "detail" - never the router's own
+    HTTPException(detail=...)."""
+    monkeypatch.setattr(
+        project_router.ProjectService,
+        "get_project_settings",
+        MagicMock(side_effect=RuntimeError("db connection lost")),
     )
     client = TestClient(app, raise_server_exceptions=False)
     response = client.put(

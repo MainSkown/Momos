@@ -2,6 +2,7 @@ from typing import List
 
 from src.schemas.project_scheme import Project, ProjectSettings, ProjectSettingsBody
 from src.core.database_manager import db_manager
+from src.utils.exceptions import ProjectDoesNotExistException
 
 class ProjectService:
     @staticmethod
@@ -25,6 +26,17 @@ class ProjectService:
     
     @staticmethod
     def get_project_settings(project_id: str) -> ProjectSettings:
+        # get_project_settings(create_new=True) inserts a settings row on
+        # first access - for an unknown project_id that insert fails on the
+        # settings table's FK to Project, surfacing as an opaque
+        # IntegrityError. Checking existence up front, the same way
+        # AgentService._get_owned_target does for project_id, gives callers
+        # the typed exception instead.
+        if db_manager.get_project(project_id) is None:
+            raise ProjectDoesNotExistException(
+                f"Project does not exist: {project_id}", project_id
+            )
+
         settings = db_manager.get_project_settings(project_id)
         return settings
     

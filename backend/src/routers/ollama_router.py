@@ -7,6 +7,10 @@ from src.schemas import (
     OllamaModelsList,
     OllamaQueueDetails,
 )
+from src.utils.exceptions import (
+    ModelAlreadyDownloadedException,
+    ModelAlreadyDownloadingException,
+)
 
 router = APIRouter()
 
@@ -37,6 +41,11 @@ async def post_ollama_model(data: OllamaModelName):
             "status": "pending",
             "message": f"Download initiated for {data.model_name}",
         }
+    except (ModelAlreadyDownloadingException, ModelAlreadyDownloadedException) as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
     except Exception as e:
         print(e)
         raise HTTPException(

@@ -1,9 +1,10 @@
 """target_router.py - see docs/testing-crawler-reports/routers.md's
-target_router.py section for the confirmed gaps these tests pin: POST's
+target_router.py section for the gaps these tests exercise: POST's
 malformed project_id/unknown-project paths and PUT's bad-IPv4/IPv6/
-missing-target paths all fall through to the generic 500 the router
-catches everything with, instead of the 400/404 a typed exception would
-let it return."""
+missing-target paths now map to 400/404 via typed exceptions
+(InvalidProjectIdException, ProjectDoesNotExistException,
+InvalidTargetDataException, TargetDoesNotExistException) instead of
+falling through to the router's generic Exception -> 500 handler."""
 
 import importlib
 import uuid
@@ -73,6 +74,8 @@ def test_get_all_targets_unknown_project_returns_empty_list(api_client, monkeypa
 
 
 def test_create_target_happy_path(api_client, monkeypatch):
+    """Fixed: the router used to call add_target("t1", PROJECT_ID) and drop
+    every other field of the request body - it now forwards all of them."""
     mock_add = MagicMock(return_value=target_response())
     monkeypatch.setattr(target_router.TargetService, "add_target", mock_add)
     response = api_client.post(
@@ -80,37 +83,54 @@ def test_create_target_happy_path(api_client, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["id"] == TARGET_ID
-    mock_add.assert_called_once_with("t1", PROJECT_ID)
+    mock_add.assert_called_once_with(
+        "t1",
+        PROJECT_ID,
+        ipv4="10.0.0.5",
+        ipv6=None,
+        description="a target",
+        ports=[80, 443],
+        task_duration=60,
+    )
 
 
-def test_create_target_unknown_project_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): an FK violation for an unknown
-    project_id surfaces as a generic Exception, mapped to 500 rather than
-    404."""
+def test_create_target_unknown_project_returns_404(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): TargetService.add_target now
+    raises ProjectDoesNotExistException for an unknown project_id, which
+    the router maps to 404 instead of the generic 500."""
+    unknown_project_id = str(uuid.uuid4())
     monkeypatch.setattr(
         target_router.TargetService,
         "add_target",
-        MagicMock(side_effect=RuntimeError("FK violation: unknown project")),
+        MagicMock(
+            side_effect=target_router.ProjectDoesNotExistException(
+                f"Project does not exist: {unknown_project_id}", unknown_project_id
+            )
+        ),
     )
     response = api_client.post(
-        f"/api/project/{uuid.uuid4()}/target", json=target_body()
+        f"/api/project/{unknown_project_id}/target", json=target_body()
     )
-    assert response.status_code == 500
+    assert response.status_code == 404
 
 
-def test_create_target_malformed_project_id_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): uuid.UUID(project_id) raising ValueError
-    for a malformed id is caught by the same catch-all and mapped to 500,
-    not a 400/422."""
+def test_create_target_malformed_project_id_returns_400(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): uuid.UUID(project_id) raising
+    ValueError for a malformed id is now wrapped by TargetService.add_target
+    into InvalidProjectIdException, which the router maps to 400."""
     monkeypatch.setattr(
         target_router.TargetService,
         "add_target",
-        MagicMock(side_effect=ValueError("badly formed hexadecimal UUID string")),
+        MagicMock(
+            side_effect=target_router.InvalidProjectIdException(
+                "Malformed project_id: not-a-uuid", "not-a-uuid"
+            )
+        ),
     )
     response = api_client.post(
         "/api/project/not-a-uuid/target", json=target_body()
     )
-    assert response.status_code == 500
+    assert response.status_code == 400
 
 
 def test_delete_target_unknown_id_returns_204(api_client, monkeypatch):
@@ -140,37 +160,49 @@ def test_update_target_happy_path(api_client, monkeypatch):
     mock_update.assert_called_once()
 
 
-def test_update_target_bad_ipv4_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): a bad-IPv4 ValueError from the service
-    is caught by the router's generic Exception handler and mapped to
-    500, not the 400 the plan says it should be."""
+def test_update_target_bad_ipv4_returns_400(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): a bad IPv4 now raises
+    InvalidTargetDataException, which the router maps to 400 instead of
+    the generic 500."""
     monkeypatch.setattr(
         target_router.TargetService,
         "update_target",
-        MagicMock(side_effect=ValueError("'999.999.999.999' is not a valid IPv4")),
+        MagicMock(
+            side_effect=target_router.InvalidTargetDataException(
+                "'999.999.999.999' is not a valid IPv4"
+            )
+        ),
     )
     response = api_client.put(f"/api/target/{TARGET_ID}", json=target_body())
-    assert response.status_code == 500
+    assert response.status_code == 400
 
 
-def test_update_target_bad_ipv6_is_still_500(api_client, monkeypatch):
+def test_update_target_bad_ipv6_returns_400(api_client, monkeypatch):
     monkeypatch.setattr(
         target_router.TargetService,
         "update_target",
-        MagicMock(side_effect=ValueError("'not-an-ipv6' is not a valid IPv6")),
+        MagicMock(
+            side_effect=target_router.InvalidTargetDataException(
+                "'not-an-ipv6' is not a valid IPv6"
+            )
+        ),
     )
     response = api_client.put(f"/api/target/{TARGET_ID}", json=target_body())
-    assert response.status_code == 500
+    assert response.status_code == 400
 
 
-def test_update_target_missing_target_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): "Target does not exist" ValueError is
-    caught by the same catch-all and mapped to 500, not the 404 the plan
-    says it should be."""
+def test_update_target_missing_target_returns_404(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): "Target does not exist" now
+    raises TargetDoesNotExistException, which the router maps to 404
+    instead of the generic 500."""
     monkeypatch.setattr(
         target_router.TargetService,
         "update_target",
-        MagicMock(side_effect=ValueError(f"Target does not exist: {TARGET_ID}")),
+        MagicMock(
+            side_effect=target_router.TargetDoesNotExistException(
+                f"Target does not exist: {TARGET_ID}", TARGET_ID
+            )
+        ),
     )
     response = api_client.put(f"/api/target/{TARGET_ID}", json=target_body())
-    assert response.status_code == 500
+    assert response.status_code == 404

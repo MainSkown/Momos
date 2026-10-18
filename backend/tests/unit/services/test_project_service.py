@@ -8,6 +8,7 @@ from src.schemas.project_scheme import (
     project_settings_factory,
 )
 from src.services.project_service import ProjectService
+from src.utils.exceptions import ProjectDoesNotExistException
 
 
 @pytest.fixture
@@ -49,6 +50,19 @@ def test_add_project_leaves_project_behind_when_settings_update_fails(service_db
         ProjectService.add_project("alpha", "base-model", "parse-model")
 
     service_db.add_project.assert_called_once()
+
+
+def test_get_project_settings_raises_when_project_missing(service_db):
+    """get_project_settings(create_new=True) would otherwise insert a
+    settings row referencing a nonexistent project and surface the FK
+    violation as a raw IntegrityError - see routers.md's confirmed gap for
+    GET/PUT /project/{id}/settings."""
+    service_db.get_project.return_value = None
+
+    with pytest.raises(ProjectDoesNotExistException):
+        ProjectService.get_project_settings(str(uuid.uuid4()))
+
+    service_db.get_project_settings.assert_not_called()
 
 
 def test_update_project_settings_forwards_every_body_field_unchanged(service_db):

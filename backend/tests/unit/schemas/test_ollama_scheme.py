@@ -26,20 +26,10 @@ def test_parse_parameter_size_reads_billions(raw, expected):
     assert parse_parameter_size(raw) == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="schemas.md bug: a malformed numeric string makes float() raise and breaks model listing",
-)
 def test_parse_parameter_size_does_not_raise_on_malformed_number():
     assert isinstance(parse_parameter_size("1.2.3B"), float)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="schemas.md bug: million-scale sizes match nothing and silently return 0.0",
-)
 def test_parse_parameter_size_converts_million_scale_to_billions():
     assert parse_parameter_size("137M") == pytest.approx(0.137)
 

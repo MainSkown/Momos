@@ -1,8 +1,8 @@
 """ollama_router.py - see docs/testing-crawler-reports/routers.md's
-ollama_router.py section. Confirmed gap: download_model raising ValueError
-for an already-queued/downloading OR an already-downloaded model both
-map to the router's generic 500, not the 409 the plan says they should
-be."""
+ollama_router.py section. Fixed gap: download_model raising
+ModelAlreadyDownloadingException (already-queued/downloading) or
+ModelAlreadyDownloadedException (already-downloaded) now both map to
+409, instead of falling through to the router's generic 500."""
 
 import importlib
 from unittest.mock import AsyncMock, MagicMock
@@ -62,26 +62,36 @@ def test_post_model_happy_path_returns_202(api_client, monkeypatch):
     mock_download.assert_called_once_with(MODEL_NAME)
 
 
-def test_post_model_already_queued_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): should be 409, is actually 500."""
+def test_post_model_already_queued_returns_409(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): already-queued/downloading now
+    raises ModelAlreadyDownloadingException, mapped to 409."""
     monkeypatch.setattr(
         ollama_router.OllamaService,
         "download_model",
-        AsyncMock(side_effect=ValueError(f"{MODEL_NAME} is already queued")),
+        AsyncMock(
+            side_effect=ollama_router.ModelAlreadyDownloadingException(
+                f"{MODEL_NAME} is already queued", MODEL_NAME
+            )
+        ),
     )
     response = api_client.post("/api/ollama/model", json={"model_name": MODEL_NAME})
-    assert response.status_code == 500
+    assert response.status_code == 409
 
 
-def test_post_model_already_downloaded_is_still_500(api_client, monkeypatch):
-    """Confirmed gap (routers.md): should be 409, is actually 500."""
+def test_post_model_already_downloaded_returns_409(api_client, monkeypatch):
+    """Fixed (routers.md confirmed gap): already-downloaded now raises
+    ModelAlreadyDownloadedException, mapped to 409."""
     monkeypatch.setattr(
         ollama_router.OllamaService,
         "download_model",
-        AsyncMock(side_effect=ValueError(f"{MODEL_NAME} is already downloaded")),
+        AsyncMock(
+            side_effect=ollama_router.ModelAlreadyDownloadedException(
+                f"{MODEL_NAME} is already downloaded", MODEL_NAME
+            )
+        ),
     )
     response = api_client.post("/api/ollama/model", json={"model_name": MODEL_NAME})
-    assert response.status_code == 500
+    assert response.status_code == 409
 
 
 def test_delete_model_happy_path(api_client, monkeypatch):
