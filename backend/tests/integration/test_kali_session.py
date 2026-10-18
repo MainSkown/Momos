@@ -97,6 +97,14 @@ async def _clean_sessions(manager):
         await manager.close_all_sessions()
         if manager._session_sweep_task is not None:
             manager._session_sweep_task.cancel()
+            # Clear the reference too (matching KaliManger.stop()'s own
+            # pattern), not just cancel it - pytest-asyncio gives each
+            # test its own event loop, and a left-behind reference to an
+            # already-cancelled task gets `.cancel()`-ed AGAIN by a later
+            # test's reset, on a loop that doesn't own it - which raises
+            # `RuntimeError: Event loop is closed` instead of being the
+            # harmless no-op it looks like.
+            manager._session_sweep_task = None
         manager.session_closed_notifier = None
 
     await _reset()

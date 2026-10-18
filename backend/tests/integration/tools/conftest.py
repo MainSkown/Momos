@@ -12,6 +12,7 @@ never instantiates a fixture a deselected test doesn't request, so the
 fast default suite (`-m 'not live_tools'`, the addopts default) never
 touches Docker because of anything in this file."""
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,10 +252,60 @@ def live_kali_session(_docker_client, docker_network, pentest_tools_image):
         agent_run_id="test-run-tools-tier",
     )
 
-    import asyncio
-
-    asyncio.run(manager.close_all_sessions())
-    if manager._session_sweep_task is not None:
-        manager._session_sweep_task.cancel()
-    manager.container = None  # avoid KaliManger.__del__ stopping it twice
+    # pytest-asyncio gives each async test FUNCTION its own event loop by
+    # default (this project's addopts set no default_loop_scope). Each
+    # test here that opens a session (ftp_connect et al) does so via the
+    # real _ensure_session_sweep_running (kali_manager.py), which starts
+    # _session_sweep_task on THAT test's own loop - a loop pytest-asyncio
+    # already closes once the test function returns. By the time this
+    # session-scoped fixture's teardown runs, on yet another fresh loop
+    # of its own, the sweep task from an earlier test can be bound to a
+    # loop that's already gone - impossible to cancel or await from here
+    # or anywhere else, no matter how it's attempted (tried: awaiting the
+    # captured task directly, and draining every asyncio.all_tasks() on
+    # this loop - neither can reach a task that belongs to a DIFFERENT,
+    # already-closed loop). manager.stop()'s own task.cancel() call raises
+    # `RuntimeError: Event loop is closed` in exactly this situation.
+    #
+    # That orphaned task is harmless on its own (its loop is gone, so it
+    # can never run another iteration regardless), but letting stop()'s
+    # RuntimeError propagate would skip the actual container/network
+    # cleanup below entirely - which is what was really leaking resources,
+    # not the task itself. Stopping the container outright (next line)
+    # tears down everything the task could have touched anyway, so this
+    # swallows exactly that one, already-inert failure mode and nothing
+    # else.
+    try:
+        asyncio.run(manager.stop())
+    except RuntimeError:
+        pass
     _stop_and_remove_container(container)
+
+
+@pytest.fixture(autouse=True)
+async def _clean_live_kali_session_state(live_kali_session):
+    """`live_kali_session`'s manager is session-scoped and shared by every
+    test file under tools/ - any of them opening a guided/terminal session
+    (ftp_connect, run(), ...) can start a real _session_sweep_task via
+    KaliManger's own _ensure_session_sweep_running. pytest-asyncio gives
+    each test its own event loop by default, so a sweep task left
+    pointed-to (even already cancelled) across a test boundary gets
+    cancelled AGAIN by whichever test resets state next, on a loop that
+    doesn't own it - `RuntimeError: Event loop is closed`, not the
+    harmless no-op it looks like. Centralizing this reset here, autoused
+    for every test in this package, is what guarantees it - a per-file
+    copy of this (as test_terminal_session.py had, now removed in favor
+    of this one) only protects that one file's own tests from each
+    other, not from a sweep task a DIFFERENT file's test left behind
+    uncleared."""
+
+    async def _reset():
+        await live_kali_session.manager.close_all_sessions()
+        if live_kali_session.manager._session_sweep_task is not None:
+            live_kali_session.manager._session_sweep_task.cancel()
+            live_kali_session.manager._session_sweep_task = None
+        live_kali_session.manager.session_closed_notifier = None
+
+    await _reset()
+    yield
+    await _reset()
