@@ -42,6 +42,19 @@ markers = [
     "live_tools: real Docker/tool-execution integration tests (slow, needs Docker; see docs/testing-plan.md §1.4a) - excluded by default, run explicitly with -m live_tools",
 ]
 addopts = "-m 'not live_tools' --import-mode=importlib"
+# Every @pytest.mark.timeout(N) in this suite is a per-tool-call budget
+# (nmap_scan should finish in N seconds, not "nmap_scan plus however long
+# the shared session-scoped Docker fixtures took to build/pull this run").
+# pytest-timeout's default (func_only=False) charges fixture setup/
+# teardown against that same N, so on a cold CI runner - no cached layers
+# for tests/integration/tools/conftest.py's pentest_tools_image, which
+# pulls the full metasploitframework/metasploit-framework image and clones
+# exploitdb from scratch - the first test to touch those fixtures blows
+# its own small timeout mid-build, poisoning the session-scoped fixture
+# for every other test in that package (all of them depend on it via the
+# autouse _clean_live_kali_session_state fixture there). This makes every
+# marker's timeout apply to the test body only, as intended.
+timeout_func_only = true
 # TestSession/TestSessionOutcome are application schema names, not pytest
 # test classes - pytest's own name heuristic flags them on every module
 # that imports test_session_scheme, which will only get noisier as more

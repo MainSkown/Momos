@@ -73,7 +73,9 @@ function toggle(group: (typeof TOOL_GROUPS)[number]) {
     // of currently-default-enabled ids, then flip this one, rather than
     // assuming "everything was on" (no longer true now that metasploit
     // defaults to off).
-    const defaults = new Set(TOOL_GROUPS.filter((g) => g.defaultEnabled).map((g) => g.id));
+    const defaults = new Set<(typeof TOOL_GROUPS)[number]["id"]>(
+      TOOL_GROUPS.filter((g) => g.defaultEnabled).map((g) => g.id),
+    );
     if (defaults.has(group.id)) {
       defaults.delete(group.id);
     } else {
