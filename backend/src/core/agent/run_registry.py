@@ -126,9 +126,21 @@ async def acquire_agent_slot(project_id: str, max_concurrent_agents: int) -> Non
 
 
 async def release_agent_slot(project_id: str) -> None:
-    _global_agent_semaphore.release()
+    """Releases exactly one previously-acquired slot. The global semaphore
+    release is guarded behind the SAME check that clamps the per-project
+    count (and the same lock) specifically so a release that finds the
+    per-project count already at 0 - nothing actually held for this
+    project - does not ALSO release the global semaphore: previously the
+    global release ran unconditionally on every call, so one extra
+    (unmatched) release_agent_slot call permanently raised the effective
+    global concurrency ceiling above GLOBAL_MAX_CONCURRENT_AGENTS for the
+    remaining lifetime of the process."""
     async with _project_slot_condition:
-        _project_slot_counts[project_id] = max(0, _project_slot_counts.get(project_id, 0) - 1)
+        current = _project_slot_counts.get(project_id, 0)
+        if current <= 0:
+            return
+        _project_slot_counts[project_id] = current - 1
+        _global_agent_semaphore.release()
         _project_slot_condition.notify_all()
 
 

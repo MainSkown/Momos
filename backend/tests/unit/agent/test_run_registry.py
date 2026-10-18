@@ -105,15 +105,18 @@ class TestAcquireAndReleaseAgentSlot:
             await task
         await run_registry.release_agent_slot("p1")
 
-    async def test_release_agent_slot_called_twice_permanently_raises_the_global_cap(
+    async def test_release_agent_slot_called_twice_does_not_raise_the_global_cap(
         self, monkeypatch
     ):
-        """Confirms agent-core-files.md's finding 5: a double release
-        leaves the global semaphore holding MORE available slots than
-        GLOBAL_MAX_CONCURRENT_AGENTS ever allowed - release_agent_slot
-        clamps _project_slot_counts with max(0, ...) but calls
-        _global_agent_semaphore.release() unconditionally on every call,
-        with no matching guard."""
+        """Fixed version of agent-core-files.md's finding 5: a double
+        release used to leave the global semaphore holding MORE available
+        slots than GLOBAL_MAX_CONCURRENT_AGENTS ever allowed, because
+        release_agent_slot clamped _project_slot_counts with max(0, ...)
+        but called _global_agent_semaphore.release() unconditionally on
+        every call, with no matching guard. Now the global release is
+        guarded behind the same per-project-count check (and lock), so a
+        release that finds nothing actually held for this project is a
+        no-op rather than also releasing the global semaphore."""
         _set_global_cap(monkeypatch, 1)
         await run_registry.acquire_agent_slot("p1", 1)
 
@@ -121,8 +124,7 @@ class TestAcquireAndReleaseAgentSlot:
         await run_registry.release_agent_slot("p1")
 
         assert run_registry._project_slot_counts.get("p1", 0) == 0
-        assert run_registry._global_agent_semaphore._value == 2
-        assert run_registry._global_agent_semaphore._value > 1
+        assert run_registry._global_agent_semaphore._value == 1
 
 
 class TestPersistRunState:

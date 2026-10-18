@@ -1331,7 +1331,24 @@ class Agent:
             self.finish_summary = existing_state.values.get(
                 "finish_summary", self.finish_summary
             )
+            # existing_state.next lists the node(s) LangGraph will run next
+            # from this checkpoint - for one paused by this graph's
+            # interrupt_before=["tools"], that's exactly ("tools",), with
+            # the pending tool call(s) still sitting unexecuted in the last
+            # persisted AIMessage. astream(input=None, ...) below is
+            # LangGraph's documented mechanism for resuming past a static
+            # interrupt_before pause, but taking that unconditionally here
+            # would run an ALREADY-pending gated tool call for real without
+            # ever re-deriving whether it requires approval - that check
+            # otherwise only runs later in the loop body, after a stream
+            # call completes, so it's never consulted for a tool call that
+            # was already pending when this start_agent call began (e.g.
+            # the process crashed/restarted while an approval prompt was
+            # still showing). See the while loop below, which checks this
+            # flag before its first iteration's stream call.
+            resuming_paused_tool_call = existing_state.next == ("tools",)
         else:
+            resuming_paused_tool_call = False
             target_scope: AgentTargetScope = {
                 "name": target.name,
                 "ipv4": target.ipv4,
@@ -1455,93 +1472,112 @@ class Agent:
         ):
             loop_start = time.monotonic()
             
-            event_queue = asyncio.Queue()
+            if resuming_paused_tool_call:
+                # The checkpoint is already paused right before "tools"
+                # with the pending call sitting in
+                # existing_state.values["messages"][-1] - astream(None, ...)
+                # below is LangGraph's documented way to resume past a
+                # static interrupt_before pause, so taking that path
+                # unconditionally would run this ALREADY-pending tool call
+                # for real without ever re-deriving requires_interrupt for
+                # it (that check only runs below, after a stream call
+                # completes, for a pause discovered mid-loop - never for one
+                # that already existed when this start_agent call began,
+                # e.g. a process crash/restart while an approval prompt was
+                # showing). Skip streaming entirely this one iteration and
+                # fall through to the exact same state.next == ("tools",)
+                # handling below, reusing the pre-fetched snapshot instead of
+                # a fresh aget_state call.
+                resuming_paused_tool_call = False
+                state = existing_state
+            else:
+                event_queue = asyncio.Queue()
             
-            async def _stream_worker():
+                async def _stream_worker():
+                    try:
+                        async for event in self.app.astream(
+                            input_data, config=config, stream_mode="updates"
+                        ):
+                            await event_queue.put(event)
+                    except Exception as e:
+                        # Without this, any failure here (bad checkpointer state,
+                        # Ollama unreachable, etc.) would silently look identical
+                        # to the graph reaching END - the run would just "finish"
+                        # instantly with no explanation.
+                        await event_queue.put(e)
+                    finally:
+                        await event_queue.put(None)
+                    
+                stream_task = asyncio.get_running_loop().create_task(_stream_worker())
+
                 try:
-                    async for event in self.app.astream(
-                        input_data, config=config, stream_mode="updates"
-                    ):
-                        await event_queue.put(event)
-                except Exception as e:
-                    # Without this, any failure here (bad checkpointer state,
-                    # Ollama unreachable, etc.) would silently look identical
-                    # to the graph reaching END - the run would just "finish"
-                    # instantly with no explanation.
-                    await event_queue.put(e)
-                finally:
-                    await event_queue.put(None)
+                    while not stop_event.is_set():
+                        # Race waiting for next event vs stop_event being set
+                        get_event_task = asyncio.create_task(event_queue.get())
+                        stop_wait_task = asyncio.create_task(stop_event.wait())
                     
-            stream_task = asyncio.get_running_loop().create_task(_stream_worker())
-
-            try:
-                while not stop_event.is_set():
-                    # Race waiting for next event vs stop_event being set
-                    get_event_task = asyncio.create_task(event_queue.get())
-                    stop_wait_task = asyncio.create_task(stop_event.wait())
+                        done, pending = await asyncio.wait(
+                            [get_event_task, stop_wait_task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )    
                     
-                    done, pending = await asyncio.wait(
-                        [get_event_task, stop_wait_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )    
-                    
-                    for task in pending:
-                        task.cancel()
+                        for task in pending:
+                            task.cancel()
                         
-                    if stop_wait_task in done:
-                        # User requested pause/stop mid-generation - abort 
-                        stream_task.cancel()
-                        return
+                        if stop_wait_task in done:
+                            # User requested pause/stop mid-generation - abort 
+                            stream_task.cancel()
+                            return
                     
-                    event = get_event_task.result()
-                    if event is None:
-                        break
+                        event = get_event_task.result()
+                        if event is None:
+                            break
 
-                    if isinstance(event, BaseException):
-                        raise event
+                        if isinstance(event, BaseException):
+                            raise event
 
-                    # stream_mode="updates" yields {node_name: {"messages": [...]}} -
-                    # the update is keyed by the node that produced it, not "messages"
-                    # directly.
-                    for node_update in event.values():
-                        if not isinstance(node_update, dict):
-                            continue
-                        for message in node_update.get("messages", []):
-                            yield message
-                            if (
-                                isinstance(message, ToolMessage)
-                                and message.name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME
-                                and message.artifact
-                            ):
-                                await self._apply_granted_ports(config, message.artifact)
-                            # Real per-turn token counts from Ollama itself
-                            # (see AgentContextUsageEvent's own comment) -
-                            # only ever present on the AIMessage _call_model
-                            # just produced, never on a ToolMessage.
-                            if isinstance(message, AIMessage) and message.usage_metadata:
-                                input_tokens = message.usage_metadata.get("input_tokens")
-                                if input_tokens is not None:
-                                    yield AgentContextUsageEvent(
-                                        kind="context_usage",
-                                        used_tokens=input_tokens,
-                                        context_window=self.context_window,
-                                    )
+                        # stream_mode="updates" yields {node_name: {"messages": [...]}} -
+                        # the update is keyed by the node that produced it, not "messages"
+                        # directly.
+                        for node_update in event.values():
+                            if not isinstance(node_update, dict):
+                                continue
+                            for message in node_update.get("messages", []):
+                                yield message
+                                if (
+                                    isinstance(message, ToolMessage)
+                                    and message.name == agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME
+                                    and message.artifact
+                                ):
+                                    await self._apply_granted_ports(config, message.artifact)
+                                # Real per-turn token counts from Ollama itself
+                                # (see AgentContextUsageEvent's own comment) -
+                                # only ever present on the AIMessage _call_model
+                                # just produced, never on a ToolMessage.
+                                if isinstance(message, AIMessage) and message.usage_metadata:
+                                    input_tokens = message.usage_metadata.get("input_tokens")
+                                    if input_tokens is not None:
+                                        yield AgentContextUsageEvent(
+                                            kind="context_usage",
+                                            used_tokens=input_tokens,
+                                            context_window=self.context_window,
+                                        )
 
-                    if self.finish_summary is not None:
-                        # finish_task just ran as part of this step - stop
-                        # immediately rather than letting the unconditional
-                        # tools -> agent edge run one more (wasted) LLM turn.
+                        if self.finish_summary is not None:
+                            # finish_task just ran as part of this step - stop
+                            # immediately rather than letting the unconditional
+                            # tools -> agent edge run one more (wasted) LLM turn.
+                            stream_task.cancel()
+                            return
+                finally:
+                    if not stream_task.done():
                         stream_task.cancel()
-                        return
-            finally:
-                if not stream_task.done():
-                    stream_task.cancel()
             
-            if stop_event.is_set():
-                break                
+                if stop_event.is_set():
+                    break                
             
-            input_data = None
-            state = await self.app.aget_state(config)
+                input_data = None
+                state = await self.app.aget_state(config)
 
             if state.next == ("tools",):
                 consecutive_no_tool_calls = 0

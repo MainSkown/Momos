@@ -144,18 +144,25 @@ def _build_agent(monkeypatch, llm, session_manager, fake_db_manager, checkpointe
 
 
 class TestApprovalBypassOnResume:
-    """agent-core-files.md's top finding: agent.py's comment claims a run
-    paused while awaiting approval re-surfaces that approval on resume,
-    but resuming always feeds input_data=None straight into
-    self.app.astream() at the top of the loop. Against langgraph 1.2.12
-    (see backend/pyproject.toml), a static interrupt_before=["tools"]
-    checkpoint resumes by streaming with input=None - documented langgraph
-    behavior, not a guess - so this directly re-enters and runs "tools"
-    for the pending gated call, without ever going through the
-    requires_interrupt check that (only) guards a tool call discovered
-    mid-loop within the SAME start_agent() call."""
+    """agent-core-files.md's top finding, now fixed: agent.py's comment
+    claims a run paused while awaiting approval re-surfaces that approval
+    on resume, but resuming used to always feed input_data=None straight
+    into self.app.astream() at the top of the loop. Against langgraph
+    1.2.12 (see backend/pyproject.toml), a static interrupt_before=
+    ["tools"] checkpoint resumes by streaming with input=None - documented
+    langgraph behavior, not a guess - so this directly re-entered and ran
+    "tools" for the pending gated call, without ever going through the
+    requires_interrupt check that used to (only) guard a tool call
+    discovered mid-loop within the SAME start_agent() call.
 
-    async def test_resuming_a_run_paused_before_a_gated_tool_runs_it_unapproved(
+    Fix: start_agent now checks existing_state.next == ("tools",) when
+    resuming a checkpoint with values - if so, it re-derives
+    requires_interrupt against the pending tool call (the exact same
+    computation the loop body already does for a pause discovered
+    mid-loop) and, when it's required, yields the SAME interrupt action a
+    fresh pause would yield instead of streaming straight through."""
+
+    async def test_resuming_a_run_paused_before_a_gated_tool_requires_re_approval(
         self, monkeypatch, fake_db_manager
     ):
         checkpointer = InMemorySaver()
@@ -203,10 +210,21 @@ class TestApprovalBypassOnResume:
             duration_seconds=300,
         )
         resumed_event = await agen2.__anext__()
+
+        # The fix: resuming re-surfaces the SAME interrupt action a fresh
+        # pause would yield - the tool must NOT have run yet.
+        assert resumed_event["kind"] == "interrupt"
+        assert resumed_event["tool_calls"][0]["name"] == "run"
+        assert session_manager.run_in_current_session_calls == []
+
+        # Approving now (the re-surfaced prompt) does let the pending call
+        # proceed - this isn't a dead end, just a re-gated one.
+        resumed_event["accept"](True)
+        ran_tool_message = await agen2.__anext__()
         await agen2.aclose()
 
-        assert isinstance(resumed_event, ToolMessage)
-        assert resumed_event.name == "run"
+        assert isinstance(ran_tool_message, ToolMessage)
+        assert ran_tool_message.name == "run"
         assert session_manager.run_in_current_session_calls == [("whoami", 8)]
 
 
