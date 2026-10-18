@@ -66,7 +66,7 @@ describe("getRecommendedAgentModels / getRecommendedParsingModels", () => {
   });
 });
 
-describe("refreshDownloadableModels vs refreshInstalledModels on API error (confirmed asymmetry)", () => {
+describe("refreshDownloadableModels vs refreshInstalledModels on API error (fixed: consistent)", () => {
   it("refreshDownloadableModels preserves the previous list on an API error", async () => {
     const previous = [makeModel({ name: "kept" })];
     aiModelsManager.downloadable_models.value = previous;
@@ -79,14 +79,15 @@ describe("refreshDownloadableModels vs refreshInstalledModels on API error (conf
     expect(aiModelsManager.downloadable_models.value).toEqual(previous);
   });
 
-  it("refreshInstalledModels wipes the previous list to [] on an API error", async () => {
-    aiModelsManager.installed_models.value = [makeModel({ name: "was-installed" })];
+  it("refreshInstalledModels preserves the previous list on an API error", async () => {
+    const previous = [makeModel({ name: "was-installed" })];
+    aiModelsManager.installed_models.value = previous;
     vi.mocked(getModelsList).mockResolvedValue({
       error: { detail: [] },
     } as never);
 
     await aiModelsManager.refreshInstalledModels();
 
-    expect(aiModelsManager.installed_models.value).toEqual([]);
+    expect(aiModelsManager.installed_models.value).toEqual(previous);
   });
 });

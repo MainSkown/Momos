@@ -87,7 +87,20 @@ class AIModelsManager {
   }
 
   public async refreshInstalledModels(): Promise<void> {
-    this.installed_models.value = await this.getInstalledModels();
+    const result = await getModelsList();
+    if (result.error) {
+      console.error(result.error);
+      return;
+    }
+
+    if (result.data === undefined) {
+      console.error(
+        'Function getModelsList returned empty without server error',
+      );
+      return;
+    }
+
+    this.installed_models.value = result.data.models;
   }
 
   public getRecommendedAgentModels(): OllamaModelData[] {
@@ -115,21 +128,6 @@ class AIModelsManager {
     return this.installed_models.value.find((m) => m.name === modelName) !== undefined;
   }
 
-  private async getInstalledModels(): Promise<OllamaModelData[]> {
-    const result = await getModelsList();
-
-    if (result.error) {
-      console.error(result.error);
-      return [];
-    }
-
-    if (result.data === undefined) {
-      console.error('Function getModelsList returned empty without server error');
-      return [];
-    }
-
-    return result.data.models;
-  }
 }
 
 export const aiModelsManager = AIModelsManager.getInstance();

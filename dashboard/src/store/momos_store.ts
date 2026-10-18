@@ -268,9 +268,25 @@ export const useMomosStore = defineStore("momos", {
         throw Error("Could not delete project: " + projectID);
       }
 
+      const removedTargetIds = this.targets
+        .filter((target) => target.project_id === projectID)
+        .map((target) => target.id);
+      const removedSessionIds = (this.sessions[projectID] ?? []).map(
+        (session) => session.id,
+      );
+
       this.projects = this.projects.filter((project) => project.id !== projectID);
       this.targets = this.targets.filter((target) => target.project_id !== projectID);
       delete this.cmd_outputs[projectID];
+      delete this.sessions[projectID];
+      delete this.running_targets[projectID];
+
+      for (const targetId of removedTargetIds) {
+        delete this.attack_vectors[targetId];
+      }
+      for (const sessionId of removedSessionIds) {
+        delete this.session_detail[sessionId];
+      }
 
       if (this.openedProject === projectID) {
         this.openedProject = this.projects.at(0)?.id || "";
@@ -323,6 +339,13 @@ export const useMomosStore = defineStore("momos", {
       }
 
       this.targets = this.targets.filter((t) => t.id !== targetID);
+      delete this.attack_vectors[targetID];
+
+      for (const projectID of Object.keys(this.running_targets)) {
+        if (this.running_targets[projectID] === targetID) {
+          this.running_targets[projectID] = null;
+        }
+      }
     },
 
     async updateTarget(target: tTarget) {
@@ -336,6 +359,11 @@ export const useMomosStore = defineStore("momos", {
       }
 
       const index = this.targets.findIndex((t) => t.id === target.id);
+      if (index === -1) {
+        console.warn("updateTarget: target not found in store, skipping: " + target.id);
+        return;
+      }
+
       this.targets[index] = target;
     },
 
@@ -461,7 +489,12 @@ export const useMomosStore = defineStore("momos", {
       const queue = [result.data.current, ...result.data.queue];
 
       queue.forEach((name) => {
-        if (name !== null) this._downloadModelHook(name);
+        if (name === null) return;
+        // Already tracked (e.g. a previous loadQueue call) - skip re-adding
+        // the entry and re-registering its websocket hook.
+        if (this.download_queue.some((q) => q.model_name === name)) return;
+
+        this._downloadModelHook(name);
       });
     },
 

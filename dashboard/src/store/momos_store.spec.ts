@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("updateTarget", () => {
-  it("writes to targets[-1] instead of updating anything when the id is unknown (confirmed bug)", async () => {
+  it("does not modify targets when the id is unknown (fixed)", async () => {
     vi.mocked(updateTarget).mockResolvedValue({ response: { status: 200 } } as never);
     const store = useMomosStore();
     const existing = makeTarget({ id: "known" });
@@ -66,14 +66,14 @@ describe("updateTarget", () => {
 
     expect(store.targets).toHaveLength(1);
     expect(store.targets[0]).toEqual(existing);
-    expect((store.targets as unknown as Record<string, ResponseTarget>)["-1"]).toEqual(
-      unknown,
-    );
+    expect(
+      (store.targets as unknown as Record<string, ResponseTarget>)["-1"],
+    ).toBeUndefined();
   });
 });
 
 describe("loadQueue", () => {
-  it("called twice duplicates both the queue entry and its websocket hook (confirmed bug)", async () => {
+  it("called twice does not duplicate the queue entry or its websocket hook (fixed)", async () => {
     vi.mocked(getOllamaDownloadQueueDetails).mockResolvedValue({
       data: { current: null, queue: ["llama3"] },
     } as never);
@@ -84,13 +84,13 @@ describe("loadQueue", () => {
 
     expect(
       store.download_queue.filter((q) => q.model_name === "llama3"),
-    ).toHaveLength(2);
-    expect(useWebSocketClient().add_hook).toHaveBeenCalledTimes(2);
+    ).toHaveLength(1);
+    expect(useWebSocketClient().add_hook).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("deleteProject", () => {
-  it("leaves stale sessions/running_targets/attack_vectors/session_detail entries behind (confirmed bug)", async () => {
+  it("cleans up sessions/running_targets/attack_vectors/session_detail entries (fixed)", async () => {
     vi.mocked(deleteProject).mockResolvedValue({ response: { status: 204 } } as never);
     const store = useMomosStore();
     const pid = "proj-1";
@@ -108,15 +108,15 @@ describe("deleteProject", () => {
 
     expect(store.projects).toEqual([]);
     expect(store.targets).toEqual([]);
-    expect(store.sessions[pid]).toHaveLength(1);
-    expect(store.running_targets[pid]).toBe(tid);
-    expect(store.attack_vectors[tid]).toHaveLength(1);
-    expect(store.session_detail[sid]).toBeDefined();
+    expect(store.sessions[pid]).toBeUndefined();
+    expect(store.running_targets[pid]).toBeUndefined();
+    expect(store.attack_vectors[tid]).toBeUndefined();
+    expect(store.session_detail[sid]).toBeUndefined();
   });
 });
 
 describe("deleteTarget", () => {
-  it("leaves stale running_targets/attack_vectors entries behind (confirmed bug)", async () => {
+  it("cleans up running_targets/attack_vectors entries referencing the target (fixed)", async () => {
     vi.mocked(deleteTarget).mockResolvedValue({ response: { status: 204 } } as never);
     const store = useMomosStore();
     const pid = "proj-1";
@@ -129,7 +129,7 @@ describe("deleteTarget", () => {
     await store.deleteTarget(tid);
 
     expect(store.targets).toEqual([]);
-    expect(store.running_targets[pid]).toBe(tid);
-    expect(store.attack_vectors[tid]).toHaveLength(1);
+    expect(store.running_targets[pid]).toBeNull();
+    expect(store.attack_vectors[tid]).toBeUndefined();
   });
 });

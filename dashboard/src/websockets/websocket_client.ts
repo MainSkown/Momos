@@ -11,6 +11,8 @@ class WebSocketClient {
   };
 
   readonly baseUrl: string = "/ws/client";
+  readonly reconnectDelayMs: number = 1000;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     this.hooks = {};
@@ -69,13 +71,36 @@ class WebSocketClient {
 
         if (handlers) {
           handlers.forEach(async (callback) => {
-            await callback(message);
+            try {
+              await callback(message);
+            } catch (error) {
+              console.error("Websocket hook callback threw an error: ", error);
+            }
           });
         }
       } catch (error) {
         console.error("Failed to parse incoming message: ", error);
       }
     };
+
+    const handleDisconnect = () => {
+      if (this.active_socket === socket) {
+        this.active_socket = undefined;
+      }
+      this.scheduleReconnect();
+    };
+
+    socket.addEventListener("close", handleDisconnect);
+    socket.addEventListener("error", handleDisconnect);
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer !== undefined) return;
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connect().catch((error) => console.error(error));
+    }, this.reconnectDelayMs);
   }
 
   private async connect(): Promise<WebSocket> {

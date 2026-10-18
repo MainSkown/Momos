@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { isAddressValid } from "@/types";
 
 describe("isAddressValid", () => {
-  it("accepts out-of-range IPv4 octets because they fall through to domainPattern (confirmed bug)", () => {
-    expect(isAddressValid("256.0.0.1")).toBe(true);
-    expect(isAddressValid("999.999.999.999")).toBe(true);
+  it("rejects out-of-range IPv4 octets instead of falling through to domainPattern (fixed)", () => {
+    expect(isAddressValid("256.0.0.1")).toBe(false);
+    expect(isAddressValid("999.999.999.999")).toBe(false);
   });
 
   it("accepts genuinely valid addresses", () => {

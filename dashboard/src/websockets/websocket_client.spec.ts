@@ -49,27 +49,44 @@ afterEach(() => {
 });
 
 describe("websocket_client reconnect behavior", () => {
-  it("does not replace active_socket or reconnect when the socket later closes (confirmed gap: no onclose/onerror handler)", async () => {
-    const { client, socket } = await freshOpenClient();
+  it("drops active_socket and reconnects with a new socket after the socket closes (fixed)", async () => {
+    vi.useFakeTimers();
 
-    expect(client.active_socket).toBe(socket);
+    try {
+      const { client, socket } = await freshOpenClient();
 
-    socket.readyState = MockWebSocket.CLOSED;
-    socket.dispatch("close");
+      expect(client.active_socket).toBe(socket);
 
-    expect(MockWebSocket.instances).toHaveLength(1);
-    expect(client.active_socket).toBe(socket);
-    expect(client.active_socket?.readyState).toBe(MockWebSocket.CLOSED);
+      socket.readyState = MockWebSocket.CLOSED;
+      socket.dispatch("close");
+
+      // The stale socket is dropped immediately...
+      expect(client.active_socket).toBeUndefined();
+
+      // ...and a reconnect attempt is scheduled rather than happening inline.
+      expect(MockWebSocket.instances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(MockWebSocket.instances).toHaveLength(2);
+      const newSocket = MockWebSocket.instances[1]!;
+      newSocket.dispatch("open");
+
+      expect(client.active_socket).toBe(newSocket);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe("websocket_client hook dispatch error handling", () => {
-  it("a hook that throws during the async dispatch loop escapes as an unhandled rejection rather than being caught/logged (confirmed bug)", async () => {
+  it("catches and logs a hook that throws during the async dispatch loop instead of letting it escape as an unhandled rejection (fixed)", async () => {
     const { client, socket } = await freshOpenClient();
 
     const rejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => rejections.push(reason);
     process.on("unhandledRejection", onUnhandledRejection);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
       client.add_hook("AgentRunTimer", async () => {
@@ -81,10 +98,14 @@ describe("websocket_client hook dispatch error handling", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(rejections).toHaveLength(1);
-      expect((rejections[0] as Error).message).toBe("hook boom");
+      expect(rejections).toHaveLength(0);
+      const loggedHookError = errorSpy.mock.calls.find((args) =>
+        args.some((arg) => arg instanceof Error && arg.message === "hook boom"),
+      );
+      expect(loggedHookError).toBeDefined();
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
+      errorSpy.mockRestore();
     }
   });
 });
