@@ -3,14 +3,20 @@
 See docs/testing-plan.md's "Agent / orchestration layer" bullet under
 §1.4 and docs/testing-crawler-reports/agent-core-files.md's run_registry.py
 section. Named bug under test here: release_agent_slot clamps the
-per-project count at 0 but releases the GLOBAL semaphore unconditionally,
-so calling it more times than a slot was acquired permanently raises the
-global concurrency cap above GLOBAL_MAX_CONCURRENT_AGENTS - see
-test_release_agent_slot_called_twice_permanently_raises_the_global_cap.
+per-project count at 0 but used to release the GLOBAL semaphore
+unconditionally, so calling it more times than a slot was acquired
+permanently raised the global concurrency cap above
+GLOBAL_MAX_CONCURRENT_AGENTS - see
+test_release_agent_slot_called_twice_does_not_raise_the_global_cap.
+
+The global cap is now read live from UserSettings (DB-backed, editable
+from Settings) on every acquire via _current_global_cap, instead of a
+fixed asyncio.Semaphore sized once at import time - see
+TestGlobalCapIsLive below for the behavior this unlocks.
 
 Module-level mutable globals (pending_interrupts, live_runs_for_target,
-_project_slot_counts, _global_agent_semaphore, ...) have no reset
-function (see agent-core-files.md's own testability-blockers section) -
+_project_slot_counts, _global_slot_count, ...) have no reset function
+(see agent-core-files.md's own testability-blockers section) -
 _reset_run_registry_globals clears/rebuilds them before every test here.
 """
 
@@ -34,16 +40,17 @@ def _reset_run_registry_globals():
     run_registry.finish_intents.clear()
     run_registry.current_session_for_target.clear()
     run_registry._project_slot_counts.clear()
-    run_registry._global_agent_semaphore = asyncio.Semaphore(
-        run_registry.settings.GLOBAL_MAX_CONCURRENT_AGENTS
-    )
+    run_registry._global_slot_count = 0
     run_registry._project_slot_condition = asyncio.Condition()
     yield
 
 
 def _set_global_cap(monkeypatch, value: int):
-    monkeypatch.setattr(run_registry.settings, "GLOBAL_MAX_CONCURRENT_AGENTS", value)
-    monkeypatch.setattr(run_registry, "_global_agent_semaphore", asyncio.Semaphore(value))
+    """Replaces _current_global_cap with a fake that returns a fixed
+    value - the global cap is now DB-backed (UserSettings), not
+    settings.GLOBAL_MAX_CONCURRENT_AGENTS, so tests no longer touch
+    settings or a real semaphore at all."""
+    monkeypatch.setattr(run_registry, "_current_global_cap", AsyncMock(return_value=value))
 
 
 class TestAcquireAndReleaseAgentSlot:
@@ -75,21 +82,34 @@ class TestAcquireAndReleaseAgentSlot:
         await run_registry.release_agent_slot("p2")
         await run_registry.release_agent_slot("p3")
 
-    async def test_cancelling_while_waiting_on_the_global_semaphore_rolls_back_the_project_slot(
+    async def test_cancelling_a_waiter_blocked_on_the_global_cap_leaves_both_counters_unchanged(
         self, monkeypatch
     ):
+        """Under the old design, a waiter blocked specifically on the
+        global semaphore had already incremented the per-project count
+        before that second, separate await - so a cancellation there had
+        to roll the per-project count back by hand. The new design checks
+        and increments both counters together, inside one locked block,
+        with no await in between - so a cancellation while blocked in the
+        wait loop happens strictly BEFORE either counter is touched, and
+        neither needs to be "rolled back" because neither was ever
+        mutated. This proves that equivalent guarantee: project p2's count
+        AND the global count are both exactly what they were before the
+        cancelled acquire started."""
         _set_global_cap(monkeypatch, 1)
         await run_registry.acquire_agent_slot("p1", 5)
+        assert run_registry._global_slot_count == 1
 
         task = asyncio.create_task(run_registry.acquire_agent_slot("p2", 5))
         await asyncio.sleep(0.05)
-        assert run_registry._project_slot_counts["p2"] == 1
+        assert run_registry._project_slot_counts.get("p2", 0) == 0
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
         assert run_registry._project_slot_counts.get("p2", 0) == 0
+        assert run_registry._global_slot_count == 1
         await run_registry.release_agent_slot("p1")
 
     async def test_max_concurrent_agents_zero_clamps_to_one_slot_not_zero(self, monkeypatch):
@@ -112,11 +132,11 @@ class TestAcquireAndReleaseAgentSlot:
         release used to leave the global semaphore holding MORE available
         slots than GLOBAL_MAX_CONCURRENT_AGENTS ever allowed, because
         release_agent_slot clamped _project_slot_counts with max(0, ...)
-        but called _global_agent_semaphore.release() unconditionally on
-        every call, with no matching guard. Now the global release is
-        guarded behind the same per-project-count check (and lock), so a
-        release that finds nothing actually held for this project is a
-        no-op rather than also releasing the global semaphore."""
+        but decremented the global count unconditionally on every call,
+        with no matching guard. Now the global decrement is guarded
+        behind the same per-project-count check (and lock), so a release
+        that finds nothing actually held for this project is a no-op
+        rather than also decrementing the global count below zero."""
         _set_global_cap(monkeypatch, 1)
         await run_registry.acquire_agent_slot("p1", 1)
 
@@ -124,7 +144,79 @@ class TestAcquireAndReleaseAgentSlot:
         await run_registry.release_agent_slot("p1")
 
         assert run_registry._project_slot_counts.get("p1", 0) == 0
-        assert run_registry._global_agent_semaphore._value == 1
+        assert run_registry._global_slot_count == 0
+
+
+class TestGlobalCapIsLive:
+    """The whole reason acquire_agent_slot now polls _current_global_cap
+    instead of blocking on a semaphore sized once at import time: a cap
+    raised in Settings while a caller is already waiting takes effect
+    without anyone releasing a slot or restarting the backend."""
+
+    async def test_raising_the_cap_while_a_caller_is_blocked_unblocks_it_without_any_release(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(run_registry, "_GLOBAL_CAP_POLL_INTERVAL", 0.05)
+        cap = AsyncMock(return_value=1)
+        monkeypatch.setattr(run_registry, "_current_global_cap", cap)
+
+        await run_registry.acquire_agent_slot("p1", 5)
+
+        task = asyncio.create_task(run_registry.acquire_agent_slot("p2", 5))
+        await asyncio.sleep(0.1)
+        assert not task.done()
+
+        cap.return_value = 2
+        await asyncio.wait_for(task, timeout=1)
+
+        assert run_registry._global_slot_count == 2
+        await run_registry.release_agent_slot("p1")
+        await run_registry.release_agent_slot("p2")
+
+    async def test_lowering_the_cap_below_held_slots_does_not_evict_an_already_held_slot(
+        self, monkeypatch
+    ):
+        cap = AsyncMock(return_value=2)
+        monkeypatch.setattr(run_registry, "_current_global_cap", cap)
+
+        await run_registry.acquire_agent_slot("p1", 5)
+        await run_registry.acquire_agent_slot("p2", 5)
+        assert run_registry._global_slot_count == 2
+
+        cap.return_value = 1
+        await asyncio.sleep(0.05)
+
+        assert run_registry._global_slot_count == 2
+        assert run_registry._project_slot_counts["p1"] == 1
+        assert run_registry._project_slot_counts["p2"] == 1
+
+        task = asyncio.create_task(run_registry.acquire_agent_slot("p3", 5))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await run_registry.release_agent_slot("p1")
+        await run_registry.release_agent_slot("p2")
+
+    async def test_a_non_positive_cap_floors_to_one_slot_instead_of_blocking_forever_or_unbounded(
+        self, monkeypatch
+    ):
+        _set_global_cap(monkeypatch, 0)
+
+        await run_registry.acquire_agent_slot("p1", 5)
+        assert run_registry._global_slot_count == 1
+
+        task = asyncio.create_task(run_registry.acquire_agent_slot("p2", 5))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert run_registry._global_slot_count == 1
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await run_registry.release_agent_slot("p1")
 
 
 class TestPersistRunState:

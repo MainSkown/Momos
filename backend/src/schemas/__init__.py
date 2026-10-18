@@ -14,6 +14,12 @@ from .test_session_scheme import (
 )
 from .kali_scheme import *
 from .ollama_scheme import *
+from .user_settings_scheme import (
+    UserSettings,
+    UserSettingsBase,
+    ACCENT_COLOR_PRESETS,
+    user_settings_factory,
+)
 
 __all__ = [
     "Project", "ProjectResponse", "ProjectBase",
@@ -24,4 +30,5 @@ __all__ = [
     "AttackVector", "AttackVectorBase", "ResponseAttackVector", "AttackVectorStatus",
     "TestSession", "TestSessionBase", "TestSessionResponse", "TestSessionDetailResponse", "TestSessionOutcome",
     "DEFAULT_LOG_PAGE_SIZE",
+    "UserSettings", "UserSettingsBase", "ACCENT_COLOR_PRESETS", "user_settings_factory",
 ]

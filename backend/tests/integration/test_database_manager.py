@@ -15,7 +15,9 @@ from src.schemas.agent_run_scheme import AgentRun, AgentRunState
 from src.schemas.attack_vector_scheme import AttackVector
 from src.schemas.project_scheme import Project, project_settings_factory
 from src.schemas.target_scheme import Target
+from src.schemas.user_settings_scheme import UserSettings
 from src.schemas.vulnerability_scheme import Vulnerability
+from src.core.config import settings
 
 VALID_CVSS4_VECTOR = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
 
@@ -209,3 +211,30 @@ def test_datetime_columns_are_timezone_aware(pg_container, table_name, column_na
         ).scalar_one()
 
     assert data_type == "timestamp with time zone"
+
+
+def test_get_user_settings_creates_singleton_row_on_empty_table(pg_container):
+    user_settings = pg_container.get_user_settings()
+
+    assert user_settings.global_max_concurrent_agents == settings.GLOBAL_MAX_CONCURRENT_AGENTS
+
+
+def test_get_user_settings_never_creates_a_second_row(pg_container):
+    first = pg_container.get_user_settings()
+    second = pg_container.get_user_settings()
+    third = pg_container.get_user_settings()
+
+    assert first.id == second.id == third.id
+    assert _count(pg_container, UserSettings) == 1
+
+
+def test_update_user_settings_persists_and_is_read_back(pg_container):
+    user_settings = pg_container.get_user_settings()
+    user_settings.accent_color = "blue"
+    user_settings.global_max_concurrent_agents = 4
+
+    pg_container.update_user_settings(user_settings)
+    refreshed = pg_container.get_user_settings()
+
+    assert refreshed.accent_color == "blue"
+    assert refreshed.global_max_concurrent_agents == 4

@@ -31,7 +31,15 @@ from src.core.agent import agent_tools
 from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogType
 from src.schemas.agent_run_scheme import AgentRun, AgentRunResponse, AgentRunState
 from src.schemas.attack_vector_scheme import AttackVector, ResponseAttackVector
-from src.websocket import ws_registry, WsTypes, AgentMessage, AgentRunTimer, AttackVectorUpdate
+from src.schemas.vulnerability_scheme import Vulnerability, ResponseVulnerability
+from src.websocket import (
+    ws_registry,
+    WsTypes,
+    AgentMessage,
+    AgentRunTimer,
+    AttackVectorUpdate,
+    VulnerabilityFound,
+)
 
 # agent_run_id -> pending interrupt's accept callback. See this module's
 # own docstring for why agent_run_id, not target_id.
@@ -87,9 +95,14 @@ def current_session_id_for_target(target_id: str) -> Optional[str]:
     start_sub_run/persist_and_broadcast below do internally."""
     return current_session_for_target.get(target_id)
 
-# Process-wide cap on how many agent LLM instances may run at once, across
-# every project - see config.py's GLOBAL_MAX_CONCURRENT_AGENTS.
-_global_agent_semaphore = asyncio.Semaphore(settings.GLOBAL_MAX_CONCURRENT_AGENTS)
+# Process-wide count of how many agent LLM instances are running right
+# now, across every project - guarded by the SAME lock/condition as
+# _project_slot_counts (see acquire_agent_slot's own docstring for why).
+# NOT a plain asyncio.Semaphore constructed once at import time - that
+# would freeze the cap at whatever GLOBAL_MAX_CONCURRENT_AGENTS was when
+# the process started, instead of tracking UserSettings.
+# global_max_concurrent_agents live as it's edited from Settings.
+_global_slot_count = 0
 
 # project_id -> how many slots that project currently holds. NOT a plain
 # asyncio.Semaphore per project - see acquire_agent_slot's own docstring
@@ -98,49 +111,73 @@ _global_agent_semaphore = asyncio.Semaphore(settings.GLOBAL_MAX_CONCURRENT_AGENT
 _project_slot_counts: Dict[str, int] = {}
 _project_slot_condition = asyncio.Condition()
 
+_GLOBAL_CAP_POLL_INTERVAL = 0.5  # seconds - worst-case delay before a
+# waiting acquire notices the global cap was just raised in Settings.
+
+
+async def _current_global_cap() -> int:
+    """Live-reads the current global concurrency ceiling from UserSettings
+    (DB-backed, editable from Settings - see config.py's
+    GLOBAL_MAX_CONCURRENT_AGENTS for the .env value this now only SEEDS).
+    A separate, mockable function (not inlined into acquire_agent_slot)
+    so tests can replace it with a fake cap source instead of needing a
+    real database."""
+    loop = asyncio.get_running_loop()
+    user_settings = await loop.run_in_executor(None, db_manager.get_user_settings)
+    return user_settings.global_max_concurrent_agents
+
 
 async def acquire_agent_slot(project_id: str, max_concurrent_agents: int) -> None:
     """Blocks until a slot is free for this project - both this project's
     own configured allowance AND the global hardware ceiling - then holds
     both. Release with release_agent_slot exactly once per successful
-    acquire. effective_slots = min(max_concurrent_agents, the global cap)
-    - see GLOBAL_MAX_CONCURRENT_AGENTS's own comment in config.py for why
-    the global figure always wins when the two disagree.
+    acquire.
 
-    All-or-nothing: if the global acquire below is cancelled (or raises)
-    after the per-project slot was already counted, that count is rolled
-    back before re-raising - otherwise a cancelled caller would leak a
-    per-project slot forever."""
-    effective_slots = max(1, min(max_concurrent_agents, settings.GLOBAL_MAX_CONCURRENT_AGENTS))
+    Both counters are checked and incremented inside the SAME locked
+    block, with no intervening await between the check and the mutation -
+    unlike the old design (per-project count incremented first, then a
+    separate await on a global semaphore), there is no window where a
+    cancellation could leave one counter incremented without the other.
+    A cancellation while blocked in the wait loop below is caught before
+    the predicate ever re-passes, so it propagates out having mutated
+    neither counter."""
+    effective_project_slots = max(1, max_concurrent_agents)
+    global _global_slot_count
     async with _project_slot_condition:
-        while _project_slot_counts.get(project_id, 0) >= effective_slots:
-            await _project_slot_condition.wait()
+        while True:
+            global_cap = await _current_global_cap()
+            if (
+                _project_slot_counts.get(project_id, 0) < effective_project_slots
+                and _global_slot_count < max(1, global_cap)
+            ):
+                break
+            try:
+                await asyncio.wait_for(
+                    _project_slot_condition.wait(), timeout=_GLOBAL_CAP_POLL_INTERVAL
+                )
+            except asyncio.TimeoutError:
+                pass  # loop back around and re-check - the global cap may have changed
         _project_slot_counts[project_id] = _project_slot_counts.get(project_id, 0) + 1
-    try:
-        await _global_agent_semaphore.acquire()
-    except BaseException:
-        async with _project_slot_condition:
-            _project_slot_counts[project_id] = max(0, _project_slot_counts.get(project_id, 0) - 1)
-            _project_slot_condition.notify_all()
-        raise
+        _global_slot_count += 1
 
 
 async def release_agent_slot(project_id: str) -> None:
-    """Releases exactly one previously-acquired slot. The global semaphore
-    release is guarded behind the SAME check that clamps the per-project
+    """Releases exactly one previously-acquired slot. The global count
+    decrement is guarded behind the SAME check that clamps the per-project
     count (and the same lock) specifically so a release that finds the
     per-project count already at 0 - nothing actually held for this
-    project - does not ALSO release the global semaphore: previously the
-    global release ran unconditionally on every call, so one extra
-    (unmatched) release_agent_slot call permanently raised the effective
-    global concurrency ceiling above GLOBAL_MAX_CONCURRENT_AGENTS for the
-    remaining lifetime of the process."""
+    project - does not ALSO decrement the global count: previously the
+    global semaphore release ran unconditionally on every call, so one
+    extra (unmatched) release_agent_slot call permanently raised the
+    effective global concurrency ceiling above GLOBAL_MAX_CONCURRENT_AGENTS
+    for the remaining lifetime of the process."""
+    global _global_slot_count
     async with _project_slot_condition:
         current = _project_slot_counts.get(project_id, 0)
         if current <= 0:
             return
         _project_slot_counts[project_id] = current - 1
-        _global_agent_semaphore.release()
+        _global_slot_count = max(0, _global_slot_count - 1)
         _project_slot_condition.notify_all()
 
 
@@ -444,5 +481,24 @@ async def broadcast_attack_vector(vector: AttackVector) -> None:
             project_id=str(vector.project_id),
             target_id=str(vector.target_id),
             vector=ResponseAttackVector.model_validate(vector),
+        )
+    )
+
+
+async def broadcast_vulnerability_found(vulnerability: Vulnerability) -> None:
+    """Pushes one newly-recorded Vulnerability over the websocket - called
+    by agent_tools.py's report_vulnerability right after its own
+    _save_vulnerability/db_manager.add_vulnerability call, the same way
+    broadcast_attack_vector already does for AttackVector. Nothing
+    previously broadcast a Vulnerability at all, so this is a pure
+    addition - the only live-push hook the vulnerability-notification
+    feature (user-options-settings.md) has for "a finding was just
+    recorded"."""
+    await ws_registry.send_message(
+        VulnerabilityFound(
+            type=WsTypes.VulnerabilityFound,
+            project_id=str(vulnerability.related_to_project),
+            target_id=str(vulnerability.found_in),
+            vulnerability=ResponseVulnerability.model_validate(vulnerability),
         )
     )

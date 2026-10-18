@@ -2015,14 +2015,20 @@ def create_pentest_tools(
             project_id, " ".join(flags), GOBUSTER_SCAN_TIMEOUT_SECONDS
         )
         mark_tested()
-        if not ok:
-            return output, None
-        on_raw_output(output)
 
+        # gobuster can legitimately exit non-zero after a fully valid scan
+        # (e.g. it tripped its own error threshold against a flaky target) -
+        # that's gobuster's own verdict on the run, not an
+        # _execute_one_shot/docker-exec failure, so it only still fails
+        # this call when it left nothing parseable behind.
         matches = list(_GOBUSTER_LINE.finditer(output))
         if not matches:
+            if not ok:
+                return output, None
+            on_raw_output(output)
             return output, output
 
+        on_raw_output(output)
         findings = "; ".join(f"{m.group(1)} (Status: {m.group(2)})" for m in matches)
         on_enumeration({str(port): {"service": scheme, "version": "", "notes": findings}})
         return f"Found {len(matches)} path(s).\n\n{output}", output
@@ -3045,6 +3051,16 @@ def create_vulnerability_tool(
         )
 
         saved = await _save_vulnerability(vulnerability)
+
+        # Local import, not module-top - run_registry.py already does
+        # `from src.core.agent import agent_tools` at ITS top (for
+        # render_tool_call_content's agent_tools.X tool-name constants), so
+        # importing run_registry at this module's own top-level risks a
+        # circular import depending on which module happens to get
+        # imported first.
+        from src.core.agent import run_registry
+
+        await run_registry.broadcast_vulnerability_found(saved)
 
         # Proof-of-testing is a per-CLAIM requirement, not a per-mode-switch
         # one - see Agent._clear_tested's docstring. A fresh run() is

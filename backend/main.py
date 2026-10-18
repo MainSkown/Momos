@@ -15,6 +15,7 @@ from src.routers import (
     agent_router,
     vulnerability_router,
     session_router,
+    user_settings_router,
 )
 from src.schemas import export_json_schema, OllamaModelsList
 
@@ -79,5 +80,6 @@ app.include_router(ollama_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(vulnerability_router, prefix="/api")
 app.include_router(session_router, prefix="/api")
+app.include_router(user_settings_router, prefix="/api")
 # --- WebSockets ---
 app.include_router(websocket_router, prefix="/ws")

@@ -7,6 +7,7 @@ from src.schemas import (
     AgentRunResponse,
     KaliCreationStage,
     ResponseAttackVector,
+    ResponseVulnerability,
     TestSessionResponse,
 )
 
@@ -35,6 +36,7 @@ class WsTypes(str, Enum):
     AgentContextUsage = "AgentContextUsage"
     AttackVectorUpdate = "AttackVectorUpdate"
     TestSessionUpdate = "TestSessionUpdate"
+    VulnerabilityFound = "VulnerabilityFound"
 
 class WebSocketMessage(BaseModel):
     type: Literal[WsTypes.WebSocketMessage]
@@ -203,6 +205,21 @@ class AttackVectorUpdate(OutboundMessage):
     target_id: str
     type: Literal[WsTypes.AttackVectorUpdate]
     vector: ResponseAttackVector
+
+class VulnerabilityFound(OutboundMessage):
+    """Pushed whenever a Vulnerability is recorded (see
+    run_registry.broadcast_vulnerability_found, called from
+    agent_tools.py's report_vulnerability right after
+    db_manager.add_vulnerability succeeds) - unlike AttackVectorUpdate/
+    TestSessionUpdate, nothing previously broadcast when a new
+    Vulnerability was found; the Vulnerabilities tab only ever polled
+    .../vulnerabilities on demand. This is the one live-push hook the
+    browser-notification feature (user-options-settings.md) has to react
+    to a finding as it happens, instead of waiting for the next poll."""
+    project_id: str
+    target_id: str
+    type: Literal[WsTypes.VulnerabilityFound]
+    vulnerability: ResponseVulnerability
 
 class TestSessionUpdate(OutboundMessage):
     """Pushed whenever a TestSession is created or its outcome/ended_at/

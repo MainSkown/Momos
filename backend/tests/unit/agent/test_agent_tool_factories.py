@@ -307,6 +307,32 @@ class TestCreatePentestTools:
             for call in kali_exec.exec_run.call_args_list
         )
 
+    async def test_gobuster_scan_reports_its_findings_even_when_gobuster_itself_exits_nonzero(
+        self, kali_exec, patched_db_manager
+    ):
+        """Real gobuster can exit non-zero (e.g. it tripped its own error
+        threshold against a flaky target) after already producing a fully
+        valid, parseable scan - CI caught this: a live run found every
+        seeded path but still came back with `artifact=None` because that
+        exit code was mistaken for an _execute_one_shot/docker-exec
+        failure. gobuster's own verdict on a completed scan isn't that
+        (same reasoning as ssh_run_command's `; true`, see its comment)."""
+        patched_db_manager.get_target.return_value = _make_target()
+        gobuster_output = "\r\x1b[2K/admin (Status: 301) [Size: 169]\n"
+        kali_exec.exec_run.side_effect = [
+            SimpleNamespace(exit_code=0, output=b""),  # wordlist existence check
+            SimpleNamespace(exit_code=1, output=gobuster_output.encode()),
+        ]
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[GOBUSTER_SCAN_TOOL_NAME], wordlist="/tmp/wordlist.txt"
+        )
+
+        assert result.artifact is not None
+        assert "/admin" in result.artifact
+        cb["mark_tested"].assert_called_once()
+
 
 class TestCreateGuidedSessionTools:
     def _build(self, **callbacks):
@@ -574,8 +600,8 @@ class TestCreateVulnerabilityTool:
         )
         defaults.update(overrides)
         tool = create_vulnerability_tool(
-            "proj1",
-            "target1",
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
             defaults["get_mode"],
             defaults["has_tested"],
             defaults["clear_tested"],

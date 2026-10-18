@@ -5,6 +5,7 @@ from .ollama_service import OllamaService
 from .agent_service import AgentService
 from .vulnerability_service import VulnerabilityService
 from .test_session_service import TestSessionService
+from .user_settings_service import UserSettingsService
 
 __all__ = [
     "ProjectService",
@@ -14,4 +15,5 @@ __all__ = [
     "AgentService",
     "VulnerabilityService",
     "TestSessionService",
+    "UserSettingsService",
 ]

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy import delete, text, inspect, func, or_
 from . import settings
-from typing import List, Optional, Tuple, TypeVar, Type
+from typing import List, Optional, Tuple, TypeVar, Type, TYPE_CHECKING
 
 # SQLModels Imports #
 from src.schemas.project_scheme import (
@@ -21,6 +21,18 @@ from src.schemas.test_session_scheme import (
     TestSessionOutcome,
     DEFAULT_LOG_PAGE_SIZE,
 )
+
+if TYPE_CHECKING:
+    # Deferred to a function-local import at each actual call site below
+    # (get_user_settings/update_user_settings) - user_settings_scheme.py
+    # itself imports src.core.config.settings at module level, so an eager
+    # import HERE would import src.core (this package) while it is still
+    # mid-import (we're inside database_manager.py, which src.core's own
+    # __init__ imports), landing back on this same, still-partially-loaded
+    # user_settings_scheme module and raising ImportError. See
+    # project_scheme.py's own comment on pipeline_mode for the same class
+    # of cycle avoided the same way.
+    from src.schemas.user_settings_scheme import UserSettings
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -367,6 +379,26 @@ class DatabaseManager:
             session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
             session.exec(delete(Project).where(Project.id == parsed_uuid))
             session.commit()
+
+    # --- Managing User Settings ---
+    def get_user_settings(self, create_new: bool = True) -> "UserSettings | None":
+        from src.schemas.user_settings_scheme import UserSettings, user_settings_factory
+
+        with Session(self.engine) as session:
+            user_settings = session.exec(select(UserSettings)).first()
+            if user_settings is None and create_new:
+                user_settings = user_settings_factory()
+                session.add(user_settings)
+                session.commit()
+                session.refresh(user_settings)
+            return user_settings
+
+    def update_user_settings(self, user_settings: "UserSettings") -> "UserSettings":
+        with Session(self.engine) as session:
+            merged = session.merge(user_settings)
+            session.commit()
+            session.refresh(merged)
+            return merged
 
     # --- Managing Targets ---
     def get_all_targets_in_project(self, project_id: str | uuid.UUID) -> List[Target]:
