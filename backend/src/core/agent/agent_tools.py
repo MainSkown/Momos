@@ -64,8 +64,11 @@ DEFAULT_SESSION_COMMAND = "/bin/bash"
 # Debian package-name policy: lowercase letters, digits, '+', '-', '.', must
 # start with an alphanumeric. Enforced strictly here (not just relying on
 # apt's own error) because this string is interpolated straight into a root
-# shell command - anything looser would open command injection.
-PACKAGE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+# shell command - anything looser would open command injection. \Z (not a
+# bare trailing $) deliberately - re.match's $ also matches right before a
+# single trailing "\n", which would otherwise let a value like "hydra\n"
+# through and start a second shell line once concatenated into the command.
+PACKAGE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]*\Z")
 
 # Package installs can be slow (large tools, dependency resolution) - longer
 # than the default one-shot command timeout.
@@ -341,29 +344,47 @@ _NMAP_PN_INJECTED_NOTE = (
 )
 
 
+def _inject_pn_into_one_statement(statement: str) -> tuple[str, bool]:
+    """Applies _maybe_inject_nmap_pn's rewrite to a single ";"-delimited
+    statement - only the segment before a pipe, if any, since anything
+    piped into another command is left untouched. Returns (statement,
+    False) unchanged for anything that doesn't parse, doesn't invoke nmap,
+    or already has -Pn."""
+    segments = statement.split("|", 1)
+    try:
+        tokens = shlex.split(segments[0])
+    except ValueError:
+        return statement, False
+
+    index = _find_binary_token(tokens)
+    if index is None or os.path.basename(tokens[index]) != "nmap":
+        return statement, False
+    if "-Pn" in tokens:
+        return statement, False
+
+    new_tokens = tokens[: index + 1] + ["-Pn"] + tokens[index + 1 :]
+    rewritten_first_segment = shlex.join(new_tokens)
+    return "|".join([rewritten_first_segment] + segments[1:]), True
+
+
 def _maybe_inject_nmap_pn(command: str) -> tuple[str, bool]:
     """If `command` invokes nmap without an explicit -Pn, inserts one right
     after the nmap token (past any sudo/env/timeout prefix - see
     _find_binary_token) and returns (rewritten command, True). Returns the
     original command unchanged (and False) for anything that doesn't parse,
-    doesn't invoke nmap, or already has -Pn. Only rewrites the segment
-    before a pipe, if any - anything piped into another command is left
-    untouched."""
-    segments = command.split("|", 1)
-    try:
-        tokens = shlex.split(segments[0])
-    except ValueError:
-        return command, False
-
-    index = _find_binary_token(tokens)
-    if index is None or os.path.basename(tokens[index]) != "nmap":
-        return command, False
-    if "-Pn" in tokens:
-        return command, False
-
-    new_tokens = tokens[: index + 1] + ["-Pn"] + tokens[index + 1 :]
-    rewritten_first_segment = shlex.join(new_tokens)
-    return "|".join([rewritten_first_segment] + segments[1:]), True
+    doesn't invoke nmap, or already has -Pn. `command` is first split on
+    ";" so every semicolon-chained statement is considered on its own
+    (e.g. "nmap x; nmap y" gets -Pn injected into both) - within each
+    statement, only the segment before a pipe, if any, is rewritten, since
+    anything piped into another command is left untouched."""
+    statements = command.split(";")
+    rewritten_statements = []
+    changed_any = False
+    for statement in statements:
+        rewritten, changed = _inject_pn_into_one_statement(statement)
+        rewritten_statements.append(rewritten)
+        changed_any = changed_any or changed
+    return ";".join(rewritten_statements), changed_any
 
 
 def _clean_man_output(text: str) -> str:
@@ -1308,23 +1329,31 @@ async def _get_target_host(target_id: str) -> Tuple[Optional[str], Optional[str]
 # before being interpolated into a shell command string - these still run
 # via `bash -c` inside the container (KaliManger.execute/_exec_in_container),
 # the same reasoning as PACKAGE_NAME_PATTERN's for install_kali_package, not
-# a formality.
-_SAFE_PORT_SPEC_PATTERN = re.compile(r"^[\d,-]+$")
-_SAFE_PATH_PATTERN = re.compile(r"^[\w./-]+$")
-_SAFE_EXTENSIONS_PATTERN = re.compile(r"^[\w,]*$")
-_SAFE_EDB_ID_PATTERN = re.compile(r"^\d+$")
+# a formality. \Z, not $, for the same reason as PACKAGE_NAME_PATTERN - $
+# alone would still accept a value ending in exactly one trailing "\n".
+_SAFE_PORT_SPEC_PATTERN = re.compile(r"^[\d,-]+\Z")
+_SAFE_PATH_PATTERN = re.compile(r"^[\w./-]+\Z")
+_SAFE_EXTENSIONS_PATTERN = re.compile(r"^[\w,]*\Z")
+_SAFE_EDB_ID_PATTERN = re.compile(r"^\d+\Z")
 # No "/" (or ".."-via-"/") at all, unlike _SAFE_PATH_PATTERN above - this is
 # a bare filename component write_local_file appends to its own generated
 # directory, never a caller-supplied path, so it must not be able to escape
 # that directory.
-_SAFE_FILENAME_PATTERN = re.compile(r"^[\w.-]+$")
+_SAFE_FILENAME_PATTERN = re.compile(r"^[\w.-]+\Z")
 
 
 def _expand_port_spec(spec: str) -> set:
     """Expands an already-_SAFE_PORT_SPEC_PATTERN-validated port spec like
     "21,25,53" or "1-100" into the concrete set of port numbers it names -
     used to validate a requested scan against the target's own authorized
-    ports before ever invoking nmap (see nmap_scan)."""
+    ports before ever invoking nmap (see nmap_scan). Raises ValueError with
+    a clear message for a malformed range - a dangling hyphen ("1-"/"-",
+    which _SAFE_PORT_SPEC_PATTERN's charset alone doesn't catch) or a
+    reversed one ("5-1"): the latter must be rejected rather than silently
+    treated as "no ports" (range(5, 2) is simply empty), since a caller
+    that can't tell "empty because malformed" apart from "empty because
+    genuinely no ports requested" could wrongly treat the request as
+    authorized-and-satisfied."""
     ports = set()
     for part in spec.split(","):
         part = part.strip()
@@ -1332,7 +1361,14 @@ def _expand_port_spec(spec: str) -> set:
             continue
         if "-" in part:
             lo, hi = part.split("-", 1)
-            ports.update(range(int(lo), int(hi) + 1))
+            if not lo or not hi:
+                raise ValueError(f"port range must be low-high, e.g. 1-100 (got {part!r})")
+            lo, hi = int(lo), int(hi)
+            if lo > hi:
+                raise ValueError(
+                    f"port range start must not exceed its end (got {part!r})"
+                )
+            ports.update(range(lo, hi + 1))
         else:
             ports.add(int(part))
     return ports
@@ -1516,6 +1552,12 @@ _NMAP_TIMING_FLAGS = {
 _NMAP_PORT_LINE = re.compile(r"^(\d+)/(tcp|udp)\s+(\S+)\s+(\S+)(?:\s+(.*))?$", re.MULTILINE)
 
 
+def _nmap_port_sort_key(port_key: str) -> int:
+    """Sort key for a "port/protocol" key (e.g. "53/udp") by its numeric
+    port, not lexically (so "9/tcp" sorts before "10/tcp")."""
+    return int(port_key.split("/", 1)[0])
+
+
 def _parse_nmap_output(raw_output: str) -> Dict[str, dict]:
     """Deterministic, LLM-free extraction of nmap's own port table -
     including, when -sC was used, the indented '|'-prefixed NSE script
@@ -1523,18 +1565,26 @@ def _parse_nmap_output(raw_output: str) -> Dict[str, dict]:
     script findings reach the enumeration table too, not just the bare
     version string. Only ever reads what nmap itself printed - see
     PARSER_SYSTEM_PROMPT's history for why this bypasses the LLM parser
-    entirely rather than trusting it with the same output."""
+    entirely rather than trusting it with the same output.
+
+    Keyed by "port/protocol" (e.g. "53/udp"), not bare port number - nmap
+    can report the same port number open under both tcp and udp, and a
+    bare-port key would silently collide the two into one entry."""
     entries: Dict[str, dict] = {}
     current_port: Optional[str] = None
     for line in raw_output.splitlines():
         match = _NMAP_PORT_LINE.match(line)
         if match:
-            port, _proto, state, service, version = match.groups()
+            port, proto, state, service, version = match.groups()
             if not state.startswith("open"):
                 current_port = None
                 continue
-            current_port = port
-            entries[port] = {"service": service, "version": (version or "").strip(), "notes": ""}
+            current_port = f"{port}/{proto}"
+            entries[current_port] = {
+                "service": service,
+                "version": (version or "").strip(),
+                "notes": "",
+            }
             continue
         if current_port is not None and line.startswith("|"):
             entries[current_port]["notes"] = (
@@ -1542,8 +1592,12 @@ def _parse_nmap_output(raw_output: str) -> Dict[str, dict]:
                 if entries[current_port]["notes"]
                 else line.strip()
             )
-        elif not line.strip():
-            current_port = None
+            continue
+        # Any other line - blank, or non-blank but neither a port line nor
+        # a "|"-prefixed continuation of the current port's notes (e.g. a
+        # "Service Info: ..." line) - means we've moved past that port's
+        # own output, so a later "|" line must not attach to it.
+        current_port = None
     return entries
 
 
@@ -1555,11 +1609,11 @@ def _summarize_nmap_entries(entries: Dict[str, dict]) -> str:
     blob (the previous behavior - the only tool result that wasn't actually
     condensed, unlike everything else in this module)."""
     sections = []
-    for port in sorted(entries, key=int):
-        info = entries[port]
+    for port_key in sorted(entries, key=_nmap_port_sort_key):
+        info = entries[port_key]
         service = info.get("service", "")
         version = info.get("version", "")
-        header = f"{port}/tcp {service}" + (f" {version}" if version else "")
+        header = f"{port_key} {service}" + (f" {version}" if version else "")
 
         notes = (info.get("notes") or "").strip()
         if not notes:
@@ -1585,8 +1639,16 @@ _HYDRA_SUCCESS_LINE = re.compile(
 )
 
 # Matches gobuster dir mode's own output line, e.g.
-# "/admin (Status: 301) [Size: 315]".
-_GOBUSTER_LINE = re.compile(r"^(\S+)\s+\(Status:\s+(\d+)\)(?:\s+\[Size:\s+(\d+)\])?", re.MULTILINE)
+# "/admin (Status: 301) [Size: 315]" - tolerating an optional leading
+# "\r\x1b[2K"-style terminal erase-line prefix, which real gobuster emits
+# before every result line even under -q with no tty allocated for the
+# exec ("\r" isn't "\S", so a bare "^(\S+)" anchor can never match a real
+# line). The prefix is optional (not required) so this still matches
+# output from a gobuster invocation/version that doesn't emit it.
+_GOBUSTER_LINE = re.compile(
+    r"^\r?(?:\x1b\[\d*K)?(\S+)\s+\(Status:\s+(\d+)\)(?:\s+\[Size:\s+(\d+)\])?",
+    re.MULTILINE,
+)
 DEFAULT_GOBUSTER_WORDLIST = "/usr/share/wordlists/dirb/common.txt"
 
 SEARCHSPLOIT_EXPLOITDB_PREFIX = "/usr/share/exploitdb/"
@@ -1717,7 +1779,10 @@ def create_pentest_tools(
                     None,
                 )
             if target.ports:
-                requested = _expand_port_spec(ports)
+                try:
+                    requested = _expand_port_spec(ports)
+                except ValueError as e:
+                    return f"Invalid `ports` - {e}.", None
                 out_of_scope = sorted(requested - set(target.ports))
                 if out_of_scope:
                     return (
@@ -1748,7 +1813,7 @@ def create_pentest_tools(
         entries = _parse_nmap_output(output)
         if entries:
             on_enumeration(entries)
-            ports_found = ", ".join(sorted(entries, key=int))
+            ports_found = ", ".join(sorted(entries, key=_nmap_port_sort_key))
             summary = _summarize_nmap_entries(entries)
             return f"Found {len(entries)} open port(s): {ports_found}.\n\n{summary}", output
         return output, output
@@ -2726,7 +2791,8 @@ def create_guided_session_tools(
         if not ok:
             return output, None
         on_raw_output(output)
-        return await _maybe_condense(project_id, f"ssh {command}", output, on_enumeration)
+        condensed = await _maybe_condense(project_id, f"ssh {command}", output, on_enumeration)
+        return condensed, output
 
     @tool(TELNET_PROBE_TOOL_NAME, response_format="content_and_artifact")
     async def telnet_probe(port: int) -> str:

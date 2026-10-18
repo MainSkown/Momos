@@ -103,21 +103,6 @@ async def test_gobuster_scan_real_run_finds_seeded_paths_and_not_the_unseeded_on
 
 
 @pytest.mark.timeout(90)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "agent-tools.md confirmed bug (flagged as a RIO risk, not yet "
-        "proven): every real gobuster dir-mode result line is prefixed "
-        "with '\\r\\x1b[2K' (a terminal erase-line sequence, emitted even "
-        "under -q and with no tty allocated for the exec) - _GOBUSTER_LINE's "
-        "'^(\\S+)' anchor can never match the position right after that "
-        "prefix, so finditer always returns zero matches against real "
-        "output. on_enumeration never fires and gobuster_scan silently "
-        "falls back to returning the raw, unparsed dump instead of its "
-        "documented 'Found N path(s)' result."
-    ),
-)
 async def test_gobuster_scan_structured_result_reports_all_seeded_paths(
     pentest_tools, gobuster_wordlist
 ):

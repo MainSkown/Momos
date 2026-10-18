@@ -147,34 +147,24 @@ class TestSshCheckLogin:
 @pytest.mark.live_tools
 @pytest.mark.timeout(60)
 class TestSshRun:
-    # Real bug found by this tier, not a flaky/misbehaving test: ssh_run is
-    # decorated @tool(..., response_format="content_and_artifact") (a
-    # 2-tuple (content, artifact) is required), but its final line is
-    # `return await _maybe_condense(...)` - _maybe_condense (and
-    # _parse_output underneath it) always returns a bare `str`, never a
-    # tuple, unlike every sibling tool in this file (new_session/
-    # switch_session/run all explicitly wrap it: `return f"...{condensed}",
-    # raw_output`). LangChain's own BaseTool.arun validates this before
-    # the ToolMessage is even built, so this is not specific to anything
-    # in this test harness - every real invocation of ssh_run through the
-    # standard tool-call path (`.ainvoke`/`.invoke` with a tool_call dict -
-    # exactly how the production agent graph calls every tool) raises:
+    # Real bug this tier found (now fixed): ssh_run was decorated @tool(...,
+    # response_format="content_and_artifact") (a 2-tuple (content, artifact)
+    # is required), but its final line was `return await _maybe_condense(...)`
+    # - _maybe_condense (and _parse_output underneath it) always returns a
+    # bare `str`, never a tuple, unlike every sibling tool in this file
+    # (new_session/switch_session/run all explicitly wrap it: `return
+    # f"...{condensed}", raw_output`). LangChain's own BaseTool.arun
+    # validated this before the ToolMessage was even built, so every real
+    # invocation of ssh_run through the standard tool-call path
+    # (`.ainvoke`/`.invoke` with a tool_call dict - exactly how the
+    # production agent graph calls every tool) used to raise:
     #   ValueError: Since response_format='content_and_artifact' a
     #   two-tuple of the message content and raw tool output is expected.
     #   Instead, generated response is of type: <class 'str'>.
-    # No unit test anywhere exercises ssh_run (confirmed:
-    # tests/unit/agent/test_agent_tool_factories.py never references it),
-    # so nothing caught this until a real, unmocked tool-call invocation
-    # here did. xfail(strict=True) so this flips to a hard failure (not a
-    # silent pass) the moment ssh_run's return statement is fixed to
-    # `return f"...{condensed}", output` like its siblings.
-    @pytest.mark.xfail(
-        reason="agent_tools.py ssh_run returns a bare str from "
-        "_maybe_condense instead of a (content, artifact) tuple - crashes "
-        "with ValueError on every real tool-call invocation. See this "
-        "test class's own comment for the full trace.",
-        strict=True,
-    )
+    # Fixed by capturing _maybe_condense's result and returning
+    # `(condensed, output)` like every sibling tool - verified against this
+    # real sshd (these two tests used to be xfail(strict=True) and XPASSed
+    # the moment the fix landed, confirming it for real).
     async def test_whoami_returns_the_real_remote_username(self, ssh_tools):
         result = await _invoke(
             ssh_tools[SSH_RUN_TOOL_NAME],
@@ -184,12 +174,6 @@ class TestSshRun:
         )
         assert SSH_USERNAME in result.content
 
-    @pytest.mark.xfail(
-        reason="Same real bug as test_whoami_returns_the_real_remote_username "
-        "above - ssh_run crashes with ValueError before any assertion here "
-        "can even run.",
-        strict=True,
-    )
     async def test_id_output_is_the_real_remote_command_output(self, ssh_tools):
         result = await _invoke(
             ssh_tools[SSH_RUN_TOOL_NAME],

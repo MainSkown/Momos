@@ -67,11 +67,14 @@ async def test_nmap_scan_reports_the_open_port_and_excludes_the_closed_one(pente
     result = await _invoke(tools[NMAP_SCAN_TOOL_NAME], ports="80,81")
 
     # Structured result: only the real open port, with an http-ish service.
-    assert "Found 1 open port(s): 80" in result.content
+    # Keyed "80/tcp", not bare "80" - _parse_nmap_output keys by
+    # port/protocol so a tcp/udp pair on the same port number never
+    # collides into one entry.
+    assert "Found 1 open port(s): 80/tcp" in result.content
     assert calls["on_enumeration"], "nmap_scan never reported findings to the enumeration table"
     entries = calls["on_enumeration"][0]
-    assert set(entries) == {"80"}
-    assert entries["80"]["service"] == "http"
+    assert set(entries) == {"80/tcp"}
+    assert entries["80/tcp"]["service"] == "http"
     assert calls["mark_tested"] == [True]
 
     # Raw artifact: nmap's own real port table, port 81 explicitly closed.

@@ -14,6 +14,7 @@ import pytest
 from src.core.agent.agent_tools import (
     PACKAGE_NAME_PATTERN,
     RAW_OUTPUT_MAX_CHARS,
+    _GOBUSTER_LINE,
     _RAW_OUTPUT_HEAD_CHARS,
     _RAW_OUTPUT_TAIL_CHARS,
     _SAFE_EDB_ID_PATTERN,
@@ -140,48 +141,46 @@ class TestSafeJoinArgs:
 
 
 class TestTrailingNewlineValidatorBypass:
-    def test_package_name_pattern_accepts_a_trailing_newline(self):
-        assert PACKAGE_NAME_PATTERN.match("hydra\n") is not None
+    def test_package_name_pattern_rejects_a_trailing_newline(self):
+        assert PACKAGE_NAME_PATTERN.match("hydra\n") is None
 
     def test_package_name_pattern_rejects_the_same_value_without_newline_variants(self):
         # Sanity anchor: the pattern isn't simply broken outright - it
-        # correctly rejects these. Only the trailing-\n case leaks through.
+        # correctly rejects these, same as the trailing-\n case now does.
         assert PACKAGE_NAME_PATTERN.match("hydra;id") is None
         assert PACKAGE_NAME_PATTERN.match("-y hydra") is None
         assert PACKAGE_NAME_PATTERN.match("../x") is None
         assert PACKAGE_NAME_PATTERN.match("Hydra") is None
         assert PACKAGE_NAME_PATTERN.match("hydra") is not None
 
-    def test_safe_port_spec_pattern_accepts_a_trailing_newline(self):
-        assert _SAFE_PORT_SPEC_PATTERN.match("21\n") is not None
+    def test_safe_port_spec_pattern_rejects_a_trailing_newline(self):
+        assert _SAFE_PORT_SPEC_PATTERN.match("21\n") is None
 
-    def test_safe_path_pattern_accepts_a_trailing_newline(self):
-        assert _SAFE_PATH_PATTERN.match("/tmp/momos-files/x\n") is not None
+    def test_safe_path_pattern_rejects_a_trailing_newline(self):
+        assert _SAFE_PATH_PATTERN.match("/tmp/momos-files/x\n") is None
 
-    def test_safe_extensions_pattern_accepts_a_trailing_newline(self):
-        assert _SAFE_EXTENSIONS_PATTERN.match("php,txt\n") is not None
+    def test_safe_extensions_pattern_rejects_a_trailing_newline(self):
+        assert _SAFE_EXTENSIONS_PATTERN.match("php,txt\n") is None
 
-    def test_safe_edb_id_pattern_accepts_a_trailing_newline(self):
-        assert _SAFE_EDB_ID_PATTERN.match("49757\n") is not None
+    def test_safe_edb_id_pattern_rejects_a_trailing_newline(self):
+        assert _SAFE_EDB_ID_PATTERN.match("49757\n") is None
 
-    def test_safe_filename_pattern_accepts_a_trailing_newline(self):
-        assert _SAFE_FILENAME_PATTERN.match("report.txt\n") is not None
+    def test_safe_filename_pattern_rejects_a_trailing_newline(self):
+        assert _SAFE_FILENAME_PATTERN.match("report.txt\n") is None
 
-    def test_package_name_pattern_trailing_newline_breaks_into_a_second_shell_line(
+    def test_package_name_pattern_no_longer_lets_a_trailing_newline_break_into_a_second_shell_line(
         self,
     ):
-        # Concrete consequence of finding 1: Python's $ matches right
-        # before a newline that is the LAST character of the string, so
-        # only a value ending exactly in "\n" (nothing after it) passes -
-        # "hydra\nrm -rf /" does NOT match, only "hydra\n" does. That
-        # single trailing \n is still enough to start a new shell line as
-        # soon as anything is concatenated after the validated value in
-        # the eventual command string (the real call sites that do this
-        # concatenation live in the tool-factory functions, out of this
-        # file's scope - this isolates the regex-level mechanism against a
-        # real shell).
+        # Finding 1, now fixed: Python's $ (without re.MULTILINE) matches
+        # right before a newline that is the LAST character of the string,
+        # so a value ending in exactly one trailing "\n" used to pass even
+        # though the pattern is meant to anchor to the true end of the
+        # string. Switching the trailing $ to \Z (which has no such
+        # trailing-newline exception) closes that - proven here against a
+        # real shell: the value is now rejected outright, so it never even
+        # reaches the point of being concatenated into a command string.
         package = "hydra\n"
-        assert PACKAGE_NAME_PATTERN.match(package) is not None
+        assert PACKAGE_NAME_PATTERN.match(package) is None
         assert PACKAGE_NAME_PATTERN.match("hydra\nrm -rf /") is None
 
         output = _run_in_shell(f"echo installing {package}echo INJECTED")
@@ -203,22 +202,28 @@ class TestExpandPortSpec:
     def test_single_port(self):
         assert _expand_port_spec("80") == {80}
 
-    def test_reversed_range_silently_returns_empty_set_instead_of_raising(self):
-        # Finding 3: a reversed range like "5-1" or "100-1" is accepted by
-        # _SAFE_PORT_SPEC_PATTERN, then range(5, 2) is empty - the
-        # authorized-ports scope check this feeds sees "no ports requested"
-        # rather than an error, instead of rejecting the malformed spec.
-        assert _expand_port_spec("5-1") == set()
-        assert _expand_port_spec("100-1") == set()
+    def test_reversed_range_raises_a_clear_value_error_instead_of_returning_empty(self):
+        # Finding 3, now fixed: a reversed range like "5-1" or "100-1" is
+        # accepted by _SAFE_PORT_SPEC_PATTERN, so without this check
+        # range(5, 2) would silently be empty - the authorized-ports scope
+        # check this feeds would then see "no ports requested" rather than
+        # an error. Raising instead is the safer behavior: a caller can't
+        # confuse "empty because malformed" with "empty because genuinely
+        # no ports requested".
+        with pytest.raises(ValueError, match="start must not exceed its end"):
+            _expand_port_spec("5-1")
+        with pytest.raises(ValueError, match="start must not exceed its end"):
+            _expand_port_spec("100-1")
 
-    def test_dangling_hyphen_raises_uncaught_value_error(self):
-        # Finding 3: "1-" passes _SAFE_PORT_SPEC_PATTERN (only digits/,/-
-        # are checked), then int("") blows up uncaught.
-        with pytest.raises(ValueError):
+    def test_dangling_hyphen_raises_a_clear_value_error(self):
+        # Finding 3, now fixed: "1-" passes _SAFE_PORT_SPEC_PATTERN (only
+        # digits/,/- are checked), so without this check int("") would
+        # blow up with an unclear, uncaught error.
+        with pytest.raises(ValueError, match="port range must be low-high"):
             _expand_port_spec("1-")
 
-    def test_bare_hyphen_raises_uncaught_value_error(self):
-        with pytest.raises(ValueError):
+    def test_bare_hyphen_raises_a_clear_value_error(self):
+        with pytest.raises(ValueError, match="port range must be low-high"):
             _expand_port_spec("-")
 
 
@@ -230,14 +235,14 @@ class TestExpandPortSpec:
 class TestParseNmapOutput:
     def test_open_port_with_service_and_version(self):
         result = _parse_nmap_output("21/tcp open  ftp     vsftpd 2.3.4")
-        assert result == {"21": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
+        assert result == {"21/tcp": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
 
     def test_filtered_port_produces_no_entry(self):
         assert _parse_nmap_output("22/tcp filtered ssh") == {}
 
     def test_open_port_without_version(self):
         result = _parse_nmap_output("80/tcp open http")
-        assert result == {"80": {"service": "http", "version": "", "notes": ""}}
+        assert result == {"80/tcp": {"service": "http", "version": "", "notes": ""}}
 
     def test_open_port_without_service_token_is_not_captured(self):
         # The regex requires both a state and a service token; a bare
@@ -251,51 +256,65 @@ class TestParseNmapOutput:
             "|_  Anonymous FTP login allowed"
         )
         result = _parse_nmap_output(raw)
-        assert result["21"]["notes"] == "| ftp-anon:\n|_  Anonymous FTP login allowed"
+        assert result["21/tcp"]["notes"] == "| ftp-anon:\n|_  Anonymous FTP login allowed"
 
     def test_blank_line_resets_current_port_so_a_later_pipe_line_is_dropped(self):
         raw = "21/tcp open ftp vsftpd 2.3.4\n\n| orphaned note"
         result = _parse_nmap_output(raw)
-        assert result["21"]["notes"] == ""
+        assert result["21/tcp"]["notes"] == ""
 
-    def test_non_blank_non_port_line_does_not_reset_current_port(self):
-        # Gap noted in agent-tools.md: a line like "Service Info: ..." is
-        # neither blank nor a port line, so current_port survives it and a
-        # later "|" line attaches to the WRONG port's notes.
+    def test_non_blank_non_port_line_resets_current_port_so_a_later_pipe_line_is_dropped(self):
+        # Finding 4, now fixed: a line like "Service Info: ..." is neither
+        # blank nor a port line nor a "|"-prefixed note continuation, so it
+        # must reset current_port the same way a blank line does - without
+        # that, the later "|" line would attach to the WRONG port's notes.
         raw = "21/tcp open ftp vsftpd 2.3.4\nService Info: OS: Unix\n| stray note"
         result = _parse_nmap_output(raw)
-        assert result["21"]["notes"] == "| stray note"
+        assert result["21/tcp"]["notes"] == ""
 
     def test_empty_input_returns_empty_dict(self):
         assert _parse_nmap_output("") == {}
 
-    def test_udp_port_is_keyed_without_its_protocol_suffix(self):
-        # Finding 6: _proto is parsed but discarded, so "53/udp" and a
-        # hypothetical "53/tcp" line would collide under the same "53" key.
+    def test_udp_port_is_keyed_with_its_protocol_suffix(self):
+        # Finding 4, now fixed: keying by "port/protocol" instead of the
+        # bare port number means "53/udp" and a hypothetical "53/tcp" line
+        # no longer collide into one entry.
         result = _parse_nmap_output("53/udp open  domain")
-        assert result == {"53": {"service": "domain", "version": "", "notes": ""}}
+        assert result == {"53/udp": {"service": "domain", "version": "", "notes": ""}}
+
+    def test_tcp_and_udp_on_the_same_port_number_produce_separate_entries(self):
+        raw = "53/tcp open domain\n53/udp open domain"
+        result = _parse_nmap_output(raw)
+        assert result == {
+            "53/tcp": {"service": "domain", "version": "", "notes": ""},
+            "53/udp": {"service": "domain", "version": "", "notes": ""},
+        }
 
 
 class TestSummarizeNmapEntries:
     def test_ports_are_sorted_numerically_not_lexically(self):
         entries = {
-            "10": {"service": "x", "version": "", "notes": ""},
-            "9": {"service": "y", "version": "", "notes": ""},
+            "10/tcp": {"service": "x", "version": "", "notes": ""},
+            "9/tcp": {"service": "y", "version": "", "notes": ""},
         }
         summary = _summarize_nmap_entries(entries)
         assert summary.index("9/tcp") < summary.index("10/tcp")
 
     def test_header_includes_service_and_version(self):
-        entries = {"21": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
+        entries = {"21/tcp": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
         assert _summarize_nmap_entries(entries) == "21/tcp ftp vsftpd 2.3.4"
 
     def test_header_with_no_version_has_no_trailing_space(self):
-        entries = {"80": {"service": "http", "version": "", "notes": ""}}
+        entries = {"80/tcp": {"service": "http", "version": "", "notes": ""}}
         assert _summarize_nmap_entries(entries) == "80/tcp http"
+
+    def test_header_uses_the_entry_s_own_protocol_not_a_hardcoded_tcp(self):
+        entries = {"53/udp": {"service": "domain", "version": "", "notes": ""}}
+        assert _summarize_nmap_entries(entries) == "53/udp domain"
 
     def test_notes_are_indented_two_spaces_under_the_header(self):
         entries = {
-            "21": {
+            "21/tcp": {
                 "service": "ftp",
                 "version": "",
                 "notes": "line one\nline two",
@@ -388,13 +407,22 @@ class TestMaybeInjectNmapPn:
     def test_unbalanced_quotes_are_left_unchanged(self):
         assert _maybe_inject_nmap_pn("a 'b") == ("a 'b", False)
 
-    def test_gap_second_nmap_after_a_semicolon_is_not_rewritten(self):
-        # Finding 2: splitting only on the first "|" (never on ";"/"&&")
-        # means a second, semicolon-chained nmap invocation never gets -Pn.
+    def test_a_second_semicolon_chained_nmap_invocation_also_gets_pn(self):
+        # Finding 2, now fixed: the command is split on ";" first, so each
+        # semicolon-chained statement is considered (and rewritten) on its
+        # own - a second, semicolon-chained nmap invocation now gets -Pn
+        # too, not just the first.
         rewritten, changed = _maybe_inject_nmap_pn("nmap -sV x; nmap -sS y")
         assert changed is True
-        assert rewritten == "nmap -Pn -sV 'x;' nmap -sS y"
-        assert "-Pn" not in rewritten.split("nmap", 2)[-1]
+        assert rewritten == "nmap -Pn -sV x;nmap -Pn -sS y"
+        assert rewritten.count("-Pn") == 2
+
+    def test_pipe_within_one_semicolon_chained_statement_is_still_respected(self):
+        # The pre-existing "only before a pipe" rule still applies
+        # independently within each ";"-separated statement.
+        rewritten, changed = _maybe_inject_nmap_pn("echo x; nmap y | grep open")
+        assert changed is True
+        assert rewritten == "echo x;nmap -Pn y| grep open"
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +563,40 @@ class TestFtpActiveModeFallback:
 
     def test_ordinary_success_output_is_not_flagged(self):
         assert _ftp_active_mode_fallback("226 Transfer complete") is False
+
+
+# ---------------------------------------------------------------------------
+# _GOBUSTER_LINE
+#
+# Finding 5: real gobuster dir-mode output prefixes every result line with
+# "\r\x1b[2K" (a terminal erase-line sequence it emits even under -q with no
+# tty allocated for the exec) - "\r" isn't "\S", so a bare "^(\S+)" anchor
+# can never match the position right after that prefix. Confirmed live
+# against the real tool in tests/integration/tools/test_gobuster.py; this
+# pins the exact real-world line format as a pure regex test, no Docker
+# needed.
+# ---------------------------------------------------------------------------
+
+
+class TestGobusterLine:
+    def test_matches_a_real_line_with_the_erase_line_prefix(self):
+        line = "\r\x1b[2K/admin (Status: 301) [Size: 169] [--> http://x/admin/]\n"
+        match = _GOBUSTER_LINE.search(line)
+        assert match is not None
+        assert match.group(1) == "/admin"
+        assert match.group(2) == "301"
+        assert match.group(3) == "169"
+
+    def test_still_matches_a_line_without_the_prefix(self):
+        # Must not REQUIRE the prefix either - some gobuster versions/
+        # invocations may omit it.
+        match = _GOBUSTER_LINE.search("/admin (Status: 301) [Size: 169]")
+        assert match is not None
+        assert match.group(1) == "/admin"
+
+    def test_matches_without_the_size_group(self):
+        line = "\r\x1b[2K/login (Status: 200)\n"
+        match = _GOBUSTER_LINE.search(line)
+        assert match is not None
+        assert match.group(1) == "/login"
+        assert match.group(3) is None

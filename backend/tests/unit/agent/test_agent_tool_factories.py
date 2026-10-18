@@ -45,6 +45,7 @@ from src.core.agent.agent_tools import (
     NEW_SESSION_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
     RUN_TOOL_NAME,
+    SSH_RUN_TOOL_NAME,
     SWITCH_SESSION_TOOL_NAME,
     WRITE_LOCAL_FILE_TOOL_NAME,
     create_file_tools,
@@ -236,10 +237,12 @@ class TestCreatePentestTools:
 
         result = await _invoke(tools[NMAP_SCAN_TOOL_NAME], ports="21")
 
-        assert "Found 1 open port(s): 21" in result.content
+        assert "Found 1 open port(s): 21/tcp" in result.content
         assert result.artifact == "21/tcp open  ftp     vsftpd 2.3.4\n"
+        # Keyed by "port/protocol", not bare port number (finding 4) - "21"
+        # alone would collide a tcp and udp result on the same port number.
         cb["on_enumeration"].assert_called_once_with(
-            {"21": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
+            {"21/tcp": {"service": "ftp", "version": "vsftpd 2.3.4", "notes": ""}}
         )
         cb["mark_tested"].assert_called_once()
         cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
@@ -371,6 +374,41 @@ class TestCreateGuidedSessionTools:
 
         assert "cannot contain newlines" in result.content
         assert fake_session_manager.sessions == {}
+
+
+class TestSshRun:
+    """Finding 6, now fixed: ssh_run is decorated @tool(...,
+    response_format="content_and_artifact") (a 2-tuple is required), but
+    used to `return await _maybe_condense(...)` directly - _maybe_condense
+    returns a bare str, never a tuple - which crashed every real invocation
+    with a ValueError raised by LangChain's own BaseTool.arun before the
+    ToolMessage was even built (see the fix removing the xfail markers in
+    tests/integration/tools/test_ssh_probe.py). This pins the fixed return
+    shape at the unit level, without any Docker/live sshd needed - unlike
+    ssh_check_login, nothing here exercised ssh_run's return shape at all
+    before this test existed."""
+
+    async def test_returns_a_content_artifact_tuple_not_a_bare_string(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        # No parsing model configured - _parse_output's own "fall back to
+        # raw output" path, so this never needs a real/fake LLM.
+        patched_db_manager.get_project_settings.return_value = None
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"root\n")
+        tools = _tools_by_name(
+            create_guided_session_tools(
+                "proj1", "target1", "run1", MagicMock(), MagicMock(), MagicMock(),
+                MagicMock(), MagicMock(),
+            )
+        )
+
+        result = await _invoke(
+            tools[SSH_RUN_TOOL_NAME], username="u", password="p", command="whoami"
+        )
+
+        assert result.content == "root\n"
+        assert result.artifact == "root\n"
 
 
 class TestCreateTerminalTools:
