@@ -27,6 +27,7 @@ Two fixtures provide the two kinds of fake "Kali" a factory needs:
 """
 
 import asyncio
+import shlex
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -37,6 +38,7 @@ from pydantic import ValidationError
 
 from src.core.agent import agent_tools
 from src.core.agent.agent_tools import (
+    DOWNLOAD_FILE_TOOL_NAME,
     FTP_COMMAND_TOOL_NAME,
     FTP_CONNECT_TOOL_NAME,
     GOBUSTER_SCAN_TOOL_NAME,
@@ -509,6 +511,53 @@ class TestCreateFileTools:
 
         with pytest.raises(ValidationError):
             await _invoke(tools[WRITE_LOCAL_FILE_TOOL_NAME])
+
+        kali_exec.exec_run.assert_not_called()
+
+    async def test_download_file_fetches_url_and_returns_its_path(self, kali_exec):
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"1234")
+        tools = _tools_by_name(create_file_tools("proj1"))
+
+        result = await _invoke(
+            tools[DOWNLOAD_FILE_TOOL_NAME],
+            url="http://10.0.0.5/backup.zip",
+            filename="backup.zip",
+        )
+
+        assert "Downloaded 1234 bytes from http://10.0.0.5/backup.zip to /tmp/momos-files/" in (
+            result.content
+        )
+        assert result.content.rstrip().endswith("-backup.zip")
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "curl" in cmd
+        assert "http://10.0.0.5/backup.zip" in cmd
+        assert "--max-filesize" in cmd
+
+    async def test_download_file_shell_quotes_the_url_so_it_cant_break_out_of_the_command(
+        self, kali_exec
+    ):
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"1")
+        tools = _tools_by_name(create_file_tools("proj1"))
+        url = "http://10.0.0.5/$(touch /tmp/INJECTED)"
+
+        await _invoke(tools[DOWNLOAD_FILE_TOOL_NAME], url=url)
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert shlex.quote(url) in cmd
+
+    async def test_download_file_rejects_a_non_http_url(self, kali_exec):
+        tools = _tools_by_name(create_file_tools("proj1"))
+
+        result = await _invoke(tools[DOWNLOAD_FILE_TOOL_NAME], url="file:///etc/passwd")
+
+        assert "only http:// and https:// URLs are supported" in result.content
+        kali_exec.exec_run.assert_not_called()
+
+    async def test_download_file_missing_required_url_is_rejected(self, kali_exec):
+        tools = _tools_by_name(create_file_tools("proj1"))
+
+        with pytest.raises(ValidationError):
+            await _invoke(tools[DOWNLOAD_FILE_TOOL_NAME])
 
         kali_exec.exec_run.assert_not_called()
 

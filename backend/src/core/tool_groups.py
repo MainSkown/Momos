@@ -20,7 +20,7 @@ from typing import Final, FrozenSet, List, Optional, Set, Tuple
 # actual services, they're local/recon-only. Also not included: run/
 # new_session/the rest of the shell-session tools - gated solely by
 # allow_shell, a fully separate capability this module must not touch; the
-# local file read/write/list tools - unconditional utility tools, not tied
+# local file read/write/list/download tools - unconditional utility tools, not tied
 # to any target-interaction group either.
 
 # Always installed regardless of which groups below are enabled - core
