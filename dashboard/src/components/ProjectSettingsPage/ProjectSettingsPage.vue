@@ -81,6 +81,38 @@
             </div>
           </div>
 
+          <div class="border settings-card column">
+            <span class="text-red settings-card-title">{{ $t("project.scope_dialog_title") }}</span>
+            <div class="separator" />
+
+            <div class="column gap-low settings-card-body">
+              <div class="field-group">
+                <label class="text-bold">{{ $t("project.acknowledgment_status") }}</label>
+                <span
+                  v-if="scopeAcknowledged !== null"
+                  class="scope-status-badge"
+                  :class="scopeAcknowledged ? 'text-active' : 'text-inactive'"
+                >
+                  {{
+                    scopeAcknowledged
+                      ? $t("project.acknowledged")
+                      : $t("project.needs_reacknowledgment")
+                  }}
+                </span>
+                <span v-else class="text-gray scope-status-badge">
+                  {{ $t("project.acknowledgment_status_loading") }}
+                </span>
+                <button
+                  type="button"
+                  class="button border full-width open-scope-dialog-button"
+                  @click="showScopeDialog = true"
+                >
+                  {{ $t("project.scope_dialog_title") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div class="border-red settings-card column">
             <span class="text-red settings-card-title">{{ $t("settings.section_danger_zone") }}</span>
             <div class="separator" />
@@ -420,6 +452,13 @@
     v-model:visible="showToolsDialog"
     v-model:enabled-tools="project_settings.enabled_tools"
   />
+
+  <ScopeAuthorizationDialog
+    v-if="project_settings !== null"
+    v-model:visible="showScopeDialog"
+    :project-id="store.openedProject"
+    @acknowledgment-status-change="scopeAcknowledged = $event"
+  />
 </template>
 
 <script setup lang="ts">
@@ -436,6 +475,7 @@ import Dialog from "@/components/reusable/Dialog.vue";
 import Tooltip from "@/components/reusable/Tooltip.vue";
 import ModelPickerDialog from "./ModelPickerDialog.vue";
 import ToolsPickerDialog from "./ToolsPickerDialog.vue";
+import ScopeAuthorizationDialog from "./ScopeAuthorizationDialog.vue";
 
 const store = useMomosStore();
 const { t } = useI18n();
@@ -451,7 +491,12 @@ const showPentestingModelDialog = ref(false);
 const showReportingModelDialog = ref(false);
 const showToolsDialog = ref(false);
 const showPromptDialog = ref(false);
+const showScopeDialog = ref(false);
 const maxContextWindowInput = ref<string>("");
+// null means "not loaded yet" (renders the loading state), distinct from
+// a resolved false ("needs re-acknowledgment") - see the badge in the
+// template above.
+const scopeAcknowledged = ref<boolean | null>(null);
 
 // Mirrors TargetSettingsDialog.vue's durationInput/handleDurationBlur idea
 // for a nullable numeric field - a plain v-model.number on max_context_window
@@ -683,6 +728,28 @@ async function load_settings(projectID: string) {
   if (result.data) store.setProjectSettings(projectID, result.data);
 }
 
+// A separate fetch from load_settings - the badge is about the project's
+// *scope* authorization, not its ProjectSettings row, and a failure here
+// shouldn't block the rest of the settings page from loading.
+async function loadAcknowledgmentStatus(projectID: string) {
+  if (projectID.length === 0) {
+    scopeAcknowledged.value = null;
+    return;
+  }
+
+  try {
+    const isAcknowledged = await store.getAcknowledgmentStatus(projectID);
+
+    // Same stale-response guard as load_settings - a slower fetch for a
+    // project the user has since navigated away from must not clobber the
+    // now-current project's own status.
+    if (store.openedProject !== projectID) return;
+    scopeAcknowledged.value = isAcknowledged;
+  } catch (error) {
+    console.error("Failed to load acknowledgment status:", error);
+  }
+}
+
 // Autosave only (see the deep watch above) - no manual Save button, so
 // this is never called directly from the template. Status is reported
 // inline via saveStatus/saveStatusText (teleported into the page title
@@ -785,6 +852,7 @@ async function confirmDeleteProject() {
 onMounted(async () => {
   await load_settings(store.openedProject);
   store.loadRunningTarget(store.openedProject);
+  loadAcknowledgmentStatus(store.openedProject);
 
   // user_settings is normally already populated by main.ts's boot-time
   // loadUserSettings call (see applyPersistedAccentColor) - this only
@@ -801,6 +869,7 @@ watch(
   async (projectID) => {
     await load_settings(projectID);
     store.loadRunningTarget(projectID);
+    loadAcknowledgmentStatus(projectID);
   },
 );
 </script>

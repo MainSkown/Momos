@@ -40,6 +40,11 @@ function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings
 function mountPage(
   openedProject = "project-a",
   momosOverrides: { user_settings?: { global_max_concurrent_agents?: number } | null } = {},
+  // Invoked right after the store exists but before mount, so a test can
+  // mock a store action (e.g. getAcknowledgmentStatus) before the
+  // component's onMounted hook ever calls it - mocking it only after
+  // mountPage returns would be too late for that first call.
+  setupStore: (store: ReturnType<typeof useMomosStore>) => void = () => {},
 ) {
   // ProjectSettingsPage teleports its save-status text into this element
   // (see its <Teleport to="#context-header-extra"> at the top of the
@@ -63,6 +68,8 @@ function mountPage(
   // `.catch()` on the result, which would throw against that. Tests that
   // care about failure instead override this per-call.
   vi.mocked(store.loadUserSettings).mockResolvedValue(undefined);
+
+  setupStore(store);
 
   const wrapper = mount(ProjectSettingsPage, {
     global: {
@@ -248,5 +255,51 @@ describe("ProjectSettingsPage global concurrency cap note", () => {
     await flushPromises();
 
     expect(store.loadUserSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProjectSettingsPage scope & authorization status badge", () => {
+  beforeEach(() => {
+    vi.mocked(getProjectSettings).mockResolvedValue({ data: makeSettings() } as never);
+  });
+
+  it("shows the acknowledged status when the project's current scope is acknowledged", async () => {
+    const { wrapper } = mountPage("project-a", {}, (store) => {
+      vi.mocked(store.getAcknowledgmentStatus).mockResolvedValue(true);
+    });
+    await flushPromises();
+
+    const badge = wrapper.find(".scope-status-badge");
+    expect(badge.text()).toBe("project.acknowledged");
+    expect(badge.classes()).toContain("text-active");
+  });
+
+  it("shows the needs-re-acknowledgment status when the project's current scope is not acknowledged", async () => {
+    const { wrapper } = mountPage("project-a", {}, (store) => {
+      vi.mocked(store.getAcknowledgmentStatus).mockResolvedValue(false);
+    });
+    await flushPromises();
+
+    const badge = wrapper.find(".scope-status-badge");
+    expect(badge.text()).toBe("project.needs_reacknowledgment");
+    expect(badge.classes()).toContain("text-inactive");
+  });
+
+  it("opens the scope dialog on click, which loads the project's current scope", async () => {
+    const { wrapper, store } = mountPage("project-a", {}, (store) => {
+      vi.mocked(store.getAcknowledgmentStatus).mockResolvedValue(true);
+      vi.mocked(store.getProjectScope).mockResolvedValue({
+        project_id: "project-a",
+        host_range: "10.0.0.0/24",
+        port_range_start: 1,
+        port_range_end: 1024,
+      });
+    });
+    await flushPromises();
+
+    await wrapper.find(".open-scope-dialog-button").trigger("click");
+    await flushPromises();
+
+    expect(store.getProjectScope).toHaveBeenCalledWith("project-a");
   });
 });
