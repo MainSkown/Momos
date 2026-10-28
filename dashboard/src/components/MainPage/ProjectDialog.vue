@@ -12,6 +12,7 @@
           v-model="projects_name"
         />
       </div>
+      <ScopeRangeInput v-model="scope_range" />
       <div class="separator" />
       <!-- Agent models -->
       <span class="text-bold">{{ $t("models.recommended_agent") }}</span>
@@ -133,6 +134,8 @@ import { toast } from "vue3-toastify";
 import { useI18n } from "vue-i18n";
 import { aiModelsManager } from "../tools";
 import AIBox from "@/components/Settings/AIBox.vue";
+import ScopeRangeInput from "@/components/ProjectSettingsPage/ScopeRangeInput.vue";
+import type { tScopeRange } from "@/types";
 
 const show_add_project = defineModel({ type: Boolean, default: false });
 
@@ -144,6 +147,14 @@ const selected_agent_model_name = ref<string>("");
 const selected_parsing_model_name = ref<string>("");
 const show_installed_agent_models = ref<boolean>(false);
 const show_installed_parsing_models = ref<boolean>(false);
+// Wide-open port range by default so single-host mode (the spec's default)
+// behaves exactly like project creation did before scope existed - only
+// the host range is left empty, forcing the user to actually set it.
+const scope_range = ref<tScopeRange>({
+  host_range: "",
+  port_range_start: 1,
+  port_range_end: 65535,
+});
 
 const canCreateProject = computed(() => {
   return (
@@ -151,7 +162,8 @@ const canCreateProject = computed(() => {
     selected_agent_model_name.value.length > 0 &&
     selected_parsing_model_name.value.length > 0 &&
     isInstalled(selected_agent_model_name.value) &&
-    isInstalled(selected_parsing_model_name.value)
+    isInstalled(selected_parsing_model_name.value) &&
+    scope_range.value.host_range.trim().length > 0
   );
 });
 
@@ -215,11 +227,19 @@ async function add_Project() {
     return;
   }
 
+  if (scope_range.value.host_range.trim().length === 0) {
+    toast.error(t("notify.host_range_required"));
+    return;
+  }
+
   try {
     await store.addProject(
       projects_name.value.trim(),
       selected_agent_model_name.value,
       selected_parsing_model_name.value,
+      scope_range.value.host_range,
+      scope_range.value.port_range_start,
+      scope_range.value.port_range_end,
     );
   } catch (error) {
     console.error(error);
@@ -232,6 +252,7 @@ async function add_Project() {
   selected_parsing_model_name.value = "";
   show_installed_agent_models.value = false;
   show_installed_parsing_models.value = false;
+  scope_range.value = { host_range: "", port_range_start: 1, port_range_end: 65535 };
   show_add_project.value = false;
 }
 
