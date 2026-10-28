@@ -26,6 +26,11 @@ import {
   type TestSessionUpdate as TestSessionUpdateMessage,
   getUserSettings,
   type UserSettings,
+  getProjectScope,
+  updateProjectScope,
+  submitAuthorizationAcknowledgment,
+  getAcknowledgmentStatus,
+  discoverProjectHosts,
 } from "@/api";
 import type { tProject, tTarget } from "@/types";
 import { useWebSocketClient } from "@/websockets/websocket_client";
@@ -251,6 +256,9 @@ export const useMomosStore = defineStore("momos", {
       name: string,
       base_model_name: string,
       parsing_model_name: string,
+      host_range: string,
+      port_range_start: number,
+      port_range_end: number,
     ) {
       // Try adding project
       const result = await postProject({
@@ -258,6 +266,9 @@ export const useMomosStore = defineStore("momos", {
           name: name,
           base_model_name: base_model_name,
           parsing_model_name: parsing_model_name,
+          host_range: host_range,
+          port_range_start: port_range_start,
+          port_range_end: port_range_end,
         },
       });
 
@@ -270,6 +281,76 @@ export const useMomosStore = defineStore("momos", {
       if (this.openedProject === "") {
         this.openedProject = this.projects.at(0)?.id || "";
       }
+    },
+
+    async getProjectScope(projectID: string) {
+      const result = await getProjectScope({ path: { project_id: projectID } });
+
+      if (result.response?.status !== 200 || result.data === undefined) {
+        throw Error("Could not get project scope: " + projectID);
+      }
+
+      return result.data;
+    },
+
+    async updateProjectScope(
+      projectID: string,
+      host_range: string,
+      port_range_start: number,
+      port_range_end: number,
+    ) {
+      const result = await updateProjectScope({
+        path: { project_id: projectID },
+        body: {
+          project_id: projectID,
+          host_range: host_range,
+          port_range_start: port_range_start,
+          port_range_end: port_range_end,
+        },
+      });
+
+      if (result.response?.status !== 200 || result.data === undefined) {
+        throw Error("Could not update project scope: " + projectID);
+      }
+
+      return result.data;
+    },
+
+    async submitAcknowledgment(
+      projectID: string,
+      acknowledged_by: string,
+      description: string,
+    ) {
+      const result = await submitAuthorizationAcknowledgment({
+        path: { project_id: projectID },
+        body: { acknowledged_by: acknowledged_by, description: description },
+      });
+
+      if (result.response?.status !== 200 || result.data === undefined) {
+        throw Error("Could not submit authorization acknowledgment for project: " + projectID);
+      }
+
+      return result.data;
+    },
+
+    async getAcknowledgmentStatus(projectID: string) {
+      const result = await getAcknowledgmentStatus({ path: { project_id: projectID } });
+
+      if (result.response?.status !== 200 || result.data === undefined) {
+        throw Error("Could not get acknowledgment status: " + projectID);
+      }
+
+      return result.data.is_acknowledged;
+    },
+
+    async discoverHosts(projectID: string) {
+      const result = await discoverProjectHosts({ path: { project_id: projectID } });
+
+      if (result.response?.status !== 200 || result.data === undefined) {
+        throw Error("Could not run host discovery for project: " + projectID);
+      }
+
+      return result.data;
     },
 
     async deleteProject(projectID: string) {
@@ -323,12 +404,17 @@ export const useMomosStore = defineStore("momos", {
       ];
     },
 
-    async addTarget2Project(name: string, projectID: string) {
+    async addTarget2Project(
+      name: string,
+      projectID: string,
+      ipv4?: string | null,
+      ipv6?: string | null,
+    ) {
       const result = await postTarget({
         body: {
           name: name,
-          ipv4: null,
-          ipv6: null,
+          ipv4: ipv4 ?? null,
+          ipv6: ipv6 ?? null,
           description: null,
           ports: null,
           task_duration: null

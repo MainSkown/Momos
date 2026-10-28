@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteTestSessionData, DeleteTestSessionErrors, DeleteTestSessionResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetProjectTestSessionsData, GetProjectTestSessionsErrors, GetProjectTestSessionsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetAgentRunTreeData, GetTargetAgentRunTreeErrors, GetTargetAgentRunTreeResponses, GetTargetAttackVectorsData, GetTargetAttackVectorsErrors, GetTargetAttackVectorsResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, GetTargetPendingInterruptsData, GetTargetPendingInterruptsErrors, GetTargetPendingInterruptsResponses, GetTestSessionAttackVectorsData, GetTestSessionAttackVectorsErrors, GetTestSessionAttackVectorsResponses, GetTestSessionData, GetTestSessionErrors, GetTestSessionLogsData, GetTestSessionLogsErrors, GetTestSessionLogsResponses, GetTestSessionResponses, GetTestSessionRunsData, GetTestSessionRunsErrors, GetTestSessionRunsResponses, GetUserSettingsData, GetUserSettingsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateUserSettingsData, UpdateUserSettingsErrors, UpdateUserSettingsResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
+import type { CreateKaliUserData, CreateKaliUserErrors, CreateKaliUserResponses, DeleteModelData, DeleteModelErrors, DeleteModelResponses, DeleteProjectData, DeleteProjectErrors, DeleteProjectResponses, DeleteTargetData, DeleteTargetErrors, DeleteTargetResponses, DeleteTestSessionData, DeleteTestSessionErrors, DeleteTestSessionResponses, DeleteVulnerabilityData, DeleteVulnerabilityErrors, DeleteVulnerabilityResponses, DiscoverProjectHostsData, DiscoverProjectHostsErrors, DiscoverProjectHostsResponses, DownloadOllamaModelData, DownloadOllamaModelErrors, DownloadOllamaModelResponses, FinishAgentData, FinishAgentErrors, FinishAgentResponses, GetAcknowledgmentStatusData, GetAcknowledgmentStatusErrors, GetAcknowledgmentStatusResponses, GetAllProjectsData, GetAllProjectsResponses, GetAllTargetsInProjectData, GetAllTargetsInProjectErrors, GetAllTargetsInProjectResponses, GetAllVulnerabilitiesInProjectData, GetAllVulnerabilitiesInProjectErrors, GetAllVulnerabilitiesInProjectResponses, GetConsoleSessionsData, GetConsoleSessionsErrors, GetConsoleSessionsResponses, GetDownloadableModelsData, GetDownloadableModelsResponses, GetModelsListData, GetModelsListResponses, GetOllamaDownloadQueueDetailsData, GetOllamaDownloadQueueDetailsResponses, GetProjectAgentLogsData, GetProjectAgentLogsErrors, GetProjectAgentLogsResponses, GetProjectKaliClientData, GetProjectKaliClientErrors, GetProjectKaliClientResponses, GetProjectKaliStatusData, GetProjectKaliStatusErrors, GetProjectKaliStatusResponses, GetProjectScopeData, GetProjectScopeErrors, GetProjectScopeResponses, GetProjectSettingsData, GetProjectSettingsErrors, GetProjectSettingsResponses, GetProjectTestSessionsData, GetProjectTestSessionsErrors, GetProjectTestSessionsResponses, GetTargetAgentRunData, GetTargetAgentRunErrors, GetTargetAgentRunResponses, GetTargetAgentRunTreeData, GetTargetAgentRunTreeErrors, GetTargetAgentRunTreeResponses, GetTargetAttackVectorsData, GetTargetAttackVectorsErrors, GetTargetAttackVectorsResponses, GetTargetPendingInterruptData, GetTargetPendingInterruptErrors, GetTargetPendingInterruptResponses, GetTargetPendingInterruptsData, GetTargetPendingInterruptsErrors, GetTargetPendingInterruptsResponses, GetTestSessionAttackVectorsData, GetTestSessionAttackVectorsErrors, GetTestSessionAttackVectorsResponses, GetTestSessionData, GetTestSessionErrors, GetTestSessionLogsData, GetTestSessionLogsErrors, GetTestSessionLogsResponses, GetTestSessionResponses, GetTestSessionRunsData, GetTestSessionRunsErrors, GetTestSessionRunsResponses, GetUserSettingsData, GetUserSettingsResponses, IsProjectAgentRunningData, IsProjectAgentRunningErrors, IsProjectAgentRunningResponses, KaliClientExistsData, KaliClientExistsErrors, KaliClientExistsResponses, PauseAgentData, PauseAgentErrors, PauseAgentResponses, PostProjectData, PostProjectErrors, PostProjectResponses, PostTargetData, PostTargetErrors, PostTargetResponses, StartAgentData, StartAgentErrors, StartAgentResponses, SubmitAuthorizationAcknowledgmentData, SubmitAuthorizationAcknowledgmentErrors, SubmitAuthorizationAcknowledgmentResponses, UpdateProjectScopeData, UpdateProjectScopeErrors, UpdateProjectScopeResponses, UpdateProjectSettingsData, UpdateProjectSettingsErrors, UpdateProjectSettingsResponses, UpdateTargetData, UpdateTargetErrors, UpdateTargetResponses, UpdateUserSettingsData, UpdateUserSettingsErrors, UpdateUserSettingsResponses, UpdateVulnerabilityData, UpdateVulnerabilityErrors, UpdateVulnerabilityResponses, WsTypesData, WsTypesResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -56,6 +56,40 @@ export const updateProjectSettings = <ThrowOnError extends boolean = false>(opti
  * Delete Project
  */
 export const deleteProject = <ThrowOnError extends boolean = false>(options: Options<DeleteProjectData, ThrowOnError>): RequestResult<DeleteProjectResponses, DeleteProjectErrors, ThrowOnError> => (options.client ?? client).delete<DeleteProjectResponses, DeleteProjectErrors, ThrowOnError>({ url: '/api/project/{project_id}', ...options });
+
+/**
+ * Get Project Scope
+ */
+export const getProjectScope = <ThrowOnError extends boolean = false>(options: Options<GetProjectScopeData, ThrowOnError>): RequestResult<GetProjectScopeResponses, GetProjectScopeErrors, ThrowOnError> => (options.client ?? client).get<GetProjectScopeResponses, GetProjectScopeErrors, ThrowOnError>({ url: '/api/project/{project_id}/scope', ...options });
+
+/**
+ * Update Project Scope
+ */
+export const updateProjectScope = <ThrowOnError extends boolean = false>(options: Options<UpdateProjectScopeData, ThrowOnError>): RequestResult<UpdateProjectScopeResponses, UpdateProjectScopeErrors, ThrowOnError> => (options.client ?? client).put<UpdateProjectScopeResponses, UpdateProjectScopeErrors, ThrowOnError>({
+    url: '/api/project/{project_id}/scope',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Submit Authorization Acknowledgment
+ */
+export const submitAuthorizationAcknowledgment = <ThrowOnError extends boolean = false>(options: Options<SubmitAuthorizationAcknowledgmentData, ThrowOnError>): RequestResult<SubmitAuthorizationAcknowledgmentResponses, SubmitAuthorizationAcknowledgmentErrors, ThrowOnError> => (options.client ?? client).post<SubmitAuthorizationAcknowledgmentResponses, SubmitAuthorizationAcknowledgmentErrors, ThrowOnError>({
+    url: '/api/project/{project_id}/acknowledgment',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Acknowledgment Status
+ */
+export const getAcknowledgmentStatus = <ThrowOnError extends boolean = false>(options: Options<GetAcknowledgmentStatusData, ThrowOnError>): RequestResult<GetAcknowledgmentStatusResponses, GetAcknowledgmentStatusErrors, ThrowOnError> => (options.client ?? client).get<GetAcknowledgmentStatusResponses, GetAcknowledgmentStatusErrors, ThrowOnError>({ url: '/api/project/{project_id}/acknowledgment/status', ...options });
 
 /**
  * Get All Targets In Project
@@ -288,6 +322,11 @@ export const updateUserSettings = <ThrowOnError extends boolean = false>(options
         ...options.headers
     }
 });
+
+/**
+ * Discover Hosts
+ */
+export const discoverProjectHosts = <ThrowOnError extends boolean = false>(options: Options<DiscoverProjectHostsData, ThrowOnError>): RequestResult<DiscoverProjectHostsResponses, DiscoverProjectHostsErrors, ThrowOnError> => (options.client ?? client).post<DiscoverProjectHostsResponses, DiscoverProjectHostsErrors, ThrowOnError>({ url: '/api/project/{project_id}/scope/discover', ...options });
 
 /**
  * Ws Types Dummy

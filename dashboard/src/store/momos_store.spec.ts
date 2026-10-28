@@ -17,6 +17,11 @@ vi.mock("@/api", () => ({
   getTestSession: vi.fn(),
   deleteTestSession: vi.fn(),
   getUserSettings: vi.fn(),
+  getProjectScope: vi.fn(),
+  updateProjectScope: vi.fn(),
+  submitAuthorizationAcknowledgment: vi.fn(),
+  getAcknowledgmentStatus: vi.fn(),
+  discoverProjectHosts: vi.fn(),
 }));
 
 vi.mock("@/websockets/websocket_client", () => {
@@ -29,9 +34,17 @@ vi.mock("@/websockets/websocket_client", () => {
 import {
   deleteProject,
   deleteTarget,
+  discoverProjectHosts,
+  getAcknowledgmentStatus,
   getOllamaDownloadQueueDetails,
+  getProjectScope,
   getUserSettings,
+  postProject,
+  postTarget,
+  submitAuthorizationAcknowledgment,
+  updateProjectScope,
   updateTarget,
+  type DiscoveredHost,
   type ResponseTarget,
   type UserSettings,
 } from "@/api";
@@ -191,5 +204,231 @@ describe("deleteTarget", () => {
     expect(store.targets).toEqual([]);
     expect(store.running_targets[pid]).toBeNull();
     expect(store.attack_vectors[tid]).toBeUndefined();
+  });
+});
+
+describe("addProject", () => {
+  it("forwards the scope fields to postProject's body alongside the existing fields", async () => {
+    vi.mocked(postProject).mockResolvedValue({
+      data: { id: "proj-1", name: "new" },
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.addProject("new", "base-model", "parse-model", "10.0.0.0/24", 1, 1024);
+
+    expect(postProject).toHaveBeenCalledWith({
+      body: {
+        name: "new",
+        base_model_name: "base-model",
+        parsing_model_name: "parse-model",
+        host_range: "10.0.0.0/24",
+        port_range_start: 1,
+        port_range_end: 1024,
+      },
+    });
+    expect(store.projects).toEqual([{ id: "proj-1", name: "new" }]);
+  });
+});
+
+describe("addTarget2Project", () => {
+  it("posts a blank target (ipv4/ipv6 both null) when no IP is given, matching the existing new-blank-target flow", async () => {
+    vi.mocked(postTarget).mockResolvedValue({
+      data: makeTarget({ id: "t-1" }),
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.addTarget2Project("new target", "proj-1");
+
+    expect(postTarget).toHaveBeenCalledWith({
+      body: {
+        name: "new target",
+        ipv4: null,
+        ipv6: null,
+        description: null,
+        ports: null,
+        task_duration: null,
+      },
+      path: { project_id: "proj-1" },
+    });
+  });
+
+  it("posts the given ipv4 when discovery supplies one", async () => {
+    vi.mocked(postTarget).mockResolvedValue({
+      data: makeTarget({ id: "t-1" }),
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.addTarget2Project("10.0.0.5", "proj-1", "10.0.0.5");
+
+    expect(postTarget).toHaveBeenCalledWith({
+      body: {
+        name: "10.0.0.5",
+        ipv4: "10.0.0.5",
+        ipv6: null,
+        description: null,
+        ports: null,
+        task_duration: null,
+      },
+      path: { project_id: "proj-1" },
+    });
+  });
+
+  it("posts the given ipv6 when discovery supplies one instead of an ipv4", async () => {
+    vi.mocked(postTarget).mockResolvedValue({
+      data: makeTarget({ id: "t-1" }),
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.addTarget2Project("::1", "proj-1", undefined, "::1");
+
+    expect(postTarget).toHaveBeenCalledWith({
+      body: {
+        name: "::1",
+        ipv4: null,
+        ipv6: "::1",
+        description: null,
+        ports: null,
+        task_duration: null,
+      },
+      path: { project_id: "proj-1" },
+    });
+  });
+});
+
+describe("getProjectScope", () => {
+  it("returns the scope data from the API", async () => {
+    const scope = { project_id: "proj-1", host_range: "10.0.0.0/24", port_range_start: 1, port_range_end: 1024 };
+    vi.mocked(getProjectScope).mockResolvedValue({
+      data: scope,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    const result = await store.getProjectScope("proj-1");
+
+    expect(result).toEqual(scope);
+  });
+
+  it("throws instead of returning undefined on a failed fetch", async () => {
+    vi.mocked(getProjectScope).mockResolvedValue({
+      error: { detail: "not found" },
+      response: { status: 404 },
+    } as never);
+    const store = useMomosStore();
+
+    await expect(store.getProjectScope("proj-1")).rejects.toThrow();
+  });
+});
+
+describe("updateProjectScope", () => {
+  it("returns the updated scope and large_range_warning flag", async () => {
+    const body = {
+      scope: { project_id: "proj-1", host_range: "10.0.0.0/16", port_range_start: 1, port_range_end: 65535 },
+      large_range_warning: true,
+    };
+    vi.mocked(updateProjectScope).mockResolvedValue({
+      data: body,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    const result = await store.updateProjectScope("proj-1", "10.0.0.0/16", 1, 65535);
+
+    expect(updateProjectScope).toHaveBeenCalledWith({
+      path: { project_id: "proj-1" },
+      body: {
+        project_id: "proj-1",
+        host_range: "10.0.0.0/16",
+        port_range_start: 1,
+        port_range_end: 65535,
+      },
+    });
+    expect(result).toEqual(body);
+  });
+
+  it("throws on an invalid range rejected by the backend", async () => {
+    vi.mocked(updateProjectScope).mockResolvedValue({
+      error: { detail: "invalid host range" },
+      response: { status: 400 },
+    } as never);
+    const store = useMomosStore();
+
+    await expect(
+      store.updateProjectScope("proj-1", "not an ip", 1, 1024),
+    ).rejects.toThrow();
+  });
+});
+
+describe("submitAcknowledgment", () => {
+  it("posts the acknowledged_by/description fields and returns the created acknowledgment", async () => {
+    const ack = {
+      id: "ack-1",
+      project_id: "proj-1",
+      acknowledged_by: "alice",
+      description: "pentest engagement",
+      acknowledged_host_range: "10.0.0.0/24",
+      acknowledged_port_range_start: 1,
+      acknowledged_port_range_end: 1024,
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    vi.mocked(submitAuthorizationAcknowledgment).mockResolvedValue({
+      data: ack,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    const result = await store.submitAcknowledgment("proj-1", "alice", "pentest engagement");
+
+    expect(submitAuthorizationAcknowledgment).toHaveBeenCalledWith({
+      path: { project_id: "proj-1" },
+      body: { acknowledged_by: "alice", description: "pentest engagement" },
+    });
+    expect(result).toEqual(ack);
+  });
+});
+
+describe("getAcknowledgmentStatus", () => {
+  it("returns the boolean status from the API", async () => {
+    vi.mocked(getAcknowledgmentStatus).mockResolvedValue({
+      data: { is_acknowledged: true },
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    const result = await store.getAcknowledgmentStatus("proj-1");
+
+    expect(result).toBe(true);
+  });
+});
+
+describe("discoverHosts", () => {
+  it("returns the tagged host list from the API", async () => {
+    const hosts: DiscoveredHost[] = [
+      { host: "10.0.0.5", in_scope: true },
+      { host: "192.168.1.1", in_scope: false },
+    ];
+    vi.mocked(discoverProjectHosts).mockResolvedValue({
+      data: hosts,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    const result = await store.discoverHosts("proj-1");
+
+    expect(result).toEqual(hosts);
+  });
+
+  it("throws instead of returning undefined on a failed sweep", async () => {
+    vi.mocked(discoverProjectHosts).mockResolvedValue({
+      error: { detail: "nmap failed" },
+      response: { status: 500 },
+    } as never);
+    const store = useMomosStore();
+
+    await expect(store.discoverHosts("proj-1")).rejects.toThrow();
   });
 });

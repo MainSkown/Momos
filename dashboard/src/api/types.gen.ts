@@ -5,6 +5,16 @@ export type ClientOptions = {
 };
 
 /**
+ * AcknowledgmentStatusResponse
+ */
+export type AcknowledgmentStatusResponse = {
+    /**
+     * Is Acknowledged
+     */
+    is_acknowledged: boolean;
+};
+
+/**
  * AgentContextUsage
  */
 export type AgentContextUsage = {
@@ -315,6 +325,58 @@ export type AttackVectorUpdate = {
 };
 
 /**
+ * AuthorizationAcknowledgmentRequest
+ */
+export type AuthorizationAcknowledgmentRequest = {
+    /**
+     * Acknowledged By
+     */
+    acknowledged_by: string;
+    /**
+     * Description
+     */
+    description: string;
+};
+
+/**
+ * AuthorizationAcknowledgment
+ */
+export type AuthorizationAcknowledgmentResponse = {
+    /**
+     * Acknowledged By
+     */
+    acknowledged_by: string;
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Acknowledged Host Range
+     */
+    acknowledged_host_range: string;
+    /**
+     * Acknowledged Port Range Start
+     */
+    acknowledged_port_range_start: number;
+    /**
+     * Acknowledged Port Range End
+     */
+    acknowledged_port_range_end: number;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Project Id
+     */
+    project_id: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
  * CloseConsoleSessionMessage
  */
 export type CloseConsoleSessionMessage = {
@@ -430,6 +492,25 @@ export type CreatedKaliUserMessage = {
      * Client Id
      */
     client_id: string;
+};
+
+/**
+ * DiscoveredHost
+ *
+ * One host returned by the `nmap -sn` discovery sweep (see
+ * ScopeDiscoveryService), tagged against the project's current
+ * ProjectScope.host_range. Never persisted - discovery results are a
+ * live, synchronous response the caller acts on immediately.
+ */
+export type DiscoveredHost = {
+    /**
+     * Host
+     */
+    host: string;
+    /**
+     * In Scope
+     */
+    in_scope: boolean;
 };
 
 /**
@@ -656,6 +737,18 @@ export type ProjectRequest = {
      * Parsing Model Name
      */
     parsing_model_name: string;
+    /**
+     * Host Range
+     */
+    host_range: string;
+    /**
+     * Port Range Start
+     */
+    port_range_start: number;
+    /**
+     * Port Range End
+     */
+    port_range_end: number;
 };
 
 /**
@@ -670,6 +763,61 @@ export type ProjectResponse = {
      * Id
      */
     id: string;
+};
+
+/**
+ * ProjectScopeBody
+ */
+export type ProjectScopeBody = {
+    /**
+     * Host Range
+     */
+    host_range: string;
+    /**
+     * Port Range Start
+     */
+    port_range_start: number;
+    /**
+     * Port Range End
+     */
+    port_range_end: number;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
+ * ProjectScope
+ */
+export type ProjectScopeResponse = {
+    /**
+     * Host Range
+     */
+    host_range: string;
+    /**
+     * Port Range Start
+     */
+    port_range_start: number;
+    /**
+     * Port Range End
+     */
+    port_range_end: number;
+    /**
+     * Project Id
+     */
+    project_id: string;
+};
+
+/**
+ * ProjectScopeUpdateResponse
+ */
+export type ProjectScopeUpdateResponse = {
+    scope: ProjectScopeResponse;
+    /**
+     * Large Range Warning
+     */
+    large_range_warning: boolean;
 };
 
 /**
@@ -1647,6 +1795,126 @@ export type DeleteProjectResponses = {
 };
 
 export type DeleteProjectResponse = DeleteProjectResponses[keyof DeleteProjectResponses];
+
+export type GetProjectScopeData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/scope';
+};
+
+export type GetProjectScopeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetProjectScopeError = GetProjectScopeErrors[keyof GetProjectScopeErrors];
+
+export type GetProjectScopeResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProjectScopeResponse;
+};
+
+export type GetProjectScopeResponse = GetProjectScopeResponses[keyof GetProjectScopeResponses];
+
+export type UpdateProjectScopeData = {
+    body: ProjectScopeBody;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/scope';
+};
+
+export type UpdateProjectScopeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateProjectScopeError = UpdateProjectScopeErrors[keyof UpdateProjectScopeErrors];
+
+export type UpdateProjectScopeResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProjectScopeUpdateResponse;
+};
+
+export type UpdateProjectScopeResponse = UpdateProjectScopeResponses[keyof UpdateProjectScopeResponses];
+
+export type SubmitAuthorizationAcknowledgmentData = {
+    body: AuthorizationAcknowledgmentRequest;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/acknowledgment';
+};
+
+export type SubmitAuthorizationAcknowledgmentErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SubmitAuthorizationAcknowledgmentError = SubmitAuthorizationAcknowledgmentErrors[keyof SubmitAuthorizationAcknowledgmentErrors];
+
+export type SubmitAuthorizationAcknowledgmentResponses = {
+    /**
+     * Successful Response
+     */
+    200: AuthorizationAcknowledgmentResponse;
+};
+
+export type SubmitAuthorizationAcknowledgmentResponse = SubmitAuthorizationAcknowledgmentResponses[keyof SubmitAuthorizationAcknowledgmentResponses];
+
+export type GetAcknowledgmentStatusData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/acknowledgment/status';
+};
+
+export type GetAcknowledgmentStatusErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAcknowledgmentStatusError = GetAcknowledgmentStatusErrors[keyof GetAcknowledgmentStatusErrors];
+
+export type GetAcknowledgmentStatusResponses = {
+    /**
+     * Successful Response
+     */
+    200: AcknowledgmentStatusResponse;
+};
+
+export type GetAcknowledgmentStatusResponse = GetAcknowledgmentStatusResponses[keyof GetAcknowledgmentStatusResponses];
 
 export type GetAllTargetsInProjectData = {
     body?: never;
@@ -2708,6 +2976,38 @@ export type UpdateUserSettingsResponses = {
 };
 
 export type UpdateUserSettingsResponse = UpdateUserSettingsResponses[keyof UpdateUserSettingsResponses];
+
+export type DiscoverProjectHostsData = {
+    body?: never;
+    path: {
+        /**
+         * Project Id
+         */
+        project_id: string;
+    };
+    query?: never;
+    url: '/api/project/{project_id}/scope/discover';
+};
+
+export type DiscoverProjectHostsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DiscoverProjectHostsError = DiscoverProjectHostsErrors[keyof DiscoverProjectHostsErrors];
+
+export type DiscoverProjectHostsResponses = {
+    /**
+     * Response Discoverprojecthosts
+     *
+     * Successful Response
+     */
+    200: Array<DiscoveredHost>;
+};
+
+export type DiscoverProjectHostsResponse = DiscoverProjectHostsResponses[keyof DiscoverProjectHostsResponses];
 
 export type WsTypesData = {
     body?: never;
