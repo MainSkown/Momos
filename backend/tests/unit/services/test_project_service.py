@@ -14,14 +14,16 @@ from src.utils.exceptions import ProjectDoesNotExistException
 @pytest.fixture
 def service_db(monkeypatch, fake_db_manager):
     monkeypatch.setattr("src.services.project_service.db_manager", fake_db_manager)
-    fake_db_manager.add_project.side_effect = lambda project: project
+    fake_db_manager.add_project.side_effect = lambda project, scope=None: project
     fake_db_manager.get_project_settings.side_effect = project_settings_factory
     fake_db_manager.update_project_settings.side_effect = lambda settings: settings
     return fake_db_manager
 
 
 def test_add_project_stores_both_model_names_on_the_new_projects_settings(service_db):
-    project = ProjectService.add_project("alpha", "base-model", "parse-model")
+    project = ProjectService.add_project(
+        "alpha", "base-model", "parse-model", "10.0.0.1", 1, 1024
+    )
 
     saved_settings = service_db.update_project_settings.call_args.args[0]
     assert saved_settings.project_id == project.id
@@ -29,8 +31,19 @@ def test_add_project_stores_both_model_names_on_the_new_projects_settings(servic
     assert saved_settings.parsing_model_name == "parse-model"
 
 
+def test_add_project_passes_the_scope_fields_to_db_manager(service_db):
+    ProjectService.add_project("alpha", "base-model", "parse-model", "10.0.0.1", 1, 1024)
+
+    saved_scope = service_db.add_project.call_args.args[1]
+    assert saved_scope.host_range == "10.0.0.1"
+    assert saved_scope.port_range_start == 1
+    assert saved_scope.port_range_end == 1024
+
+
 def test_add_project_reads_settings_for_the_created_project_id(service_db):
-    project = ProjectService.add_project("alpha", "base-model", "parse-model")
+    project = ProjectService.add_project(
+        "alpha", "base-model", "parse-model", "10.0.0.1", 1, 1024
+    )
 
     service_db.get_project_settings.assert_called_once_with(project.id)
 
@@ -40,14 +53,14 @@ def test_add_project_raises_when_settings_row_was_not_created(service_db):
     service_db.get_project_settings.return_value = None
 
     with pytest.raises(AttributeError):
-        ProjectService.add_project("alpha", "base-model", "parse-model")
+        ProjectService.add_project("alpha", "base-model", "parse-model", "10.0.0.1", 1, 1024)
 
 
 def test_add_project_leaves_project_behind_when_settings_update_fails(service_db):
     service_db.update_project_settings.side_effect = RuntimeError("db down")
 
     with pytest.raises(RuntimeError):
-        ProjectService.add_project("alpha", "base-model", "parse-model")
+        ProjectService.add_project("alpha", "base-model", "parse-model", "10.0.0.1", 1, 1024)
 
     service_db.add_project.assert_called_once()
 

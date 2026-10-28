@@ -1,22 +1,41 @@
 from typing import List
 
-from src.schemas.project_scheme import Project, ProjectSettings, ProjectSettingsBody
+from src.schemas.project_scheme import (
+    Project,
+    ProjectScope,
+    ProjectSettings,
+    ProjectSettingsBody,
+)
 from src.core.database_manager import db_manager
 from src.utils.exceptions import ProjectDoesNotExistException
 
 class ProjectService:
     @staticmethod
-    def add_project(name: str, base_model_name: str, parsing_model_name: str) -> Project:
-        # Creating project
+    def add_project(
+        name: str,
+        base_model_name: str,
+        parsing_model_name: str,
+        host_range: str,
+        port_range_start: int,
+        port_range_end: int,
+    ) -> Project:
+        # Creating project and its mandatory scope together, atomically -
+        # see database_manager.add_project's own comment on why a Project
+        # row must never exist without a ProjectScope row.
         project = Project(name=name)
-        project = db_manager.add_project(project)
-        
+        scope = ProjectScope(
+            host_range=host_range,
+            port_range_start=port_range_start,
+            port_range_end=port_range_end,
+        )
+        project = db_manager.add_project(project, scope)
+
         # Creating project settings
         settings = db_manager.get_project_settings(project.id)
         settings.base_model_name = base_model_name
         settings.parsing_model_name = parsing_model_name
         db_manager.update_project_settings(settings)
-        
+
         return project
     
     @staticmethod

@@ -1,4 +1,5 @@
 from .project_scheme import *
+from .scope_parsing import parse_host_range, host_count
 from .target_scheme import Target, TargetBase, ResponseTarget, AgentTargetScope
 from .vulnerability_scheme import Vulnerability, VulnerabilityBase, ResponseVulnerability, SEVERITY_LEVELS, severity_label
 from .agent_log_scheme import AgentLog, AgentLogBase, AgentLogResponse, AgentLogType
@@ -23,6 +24,11 @@ from .user_settings_scheme import (
 
 __all__ = [
     "Project", "ProjectResponse", "ProjectBase",
+    "ProjectScope", "ProjectScopeBase", "ProjectScopeBody", "ProjectScopeResponse",
+    "AuthorizationAcknowledgment", "AuthorizationAcknowledgmentBase",
+    "AuthorizationAcknowledgmentRequest", "AuthorizationAcknowledgmentResponse",
+    "DiscoveredHost",
+    "parse_host_range", "host_count",
     "Target", "ResponseTarget", "TargetBase",
     "Vulnerability", "VulnerabilityBase", "ResponseVulnerability", "SEVERITY_LEVELS", "severity_label",
     "AgentLog", "AgentLogBase", "AgentLogResponse", "AgentLogType",

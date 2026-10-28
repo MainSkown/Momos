@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime, timezone
 from typing import List, TYPE_CHECKING, Optional
-from sqlmodel import SQLModel, Field, Relationship, Column
+from sqlmodel import SQLModel, Field, Relationship, Column, DateTime
 from sqlalchemy import ARRAY, String
 
 if TYPE_CHECKING:
@@ -18,6 +19,12 @@ class Project(ProjectBase, table=True):
     settings: Optional["ProjectSettings"] = Relationship(
         back_populates="project", sa_relationship_kwargs={"uselist": False}
     )
+    scope: Optional["ProjectScope"] = Relationship(
+        back_populates="project", sa_relationship_kwargs={"uselist": False}
+    )
+    acknowledgments: List["AuthorizationAcknowledgment"] = Relationship(
+        back_populates="project"
+    )
 
 
 class ProjectResponse(ProjectBase):
@@ -29,6 +36,15 @@ class ProjectResponse(ProjectBase):
 class ProjectRequest(ProjectBase):
     base_model_name: str
     parsing_model_name: str
+    # Mandatory at creation (see docs/features/project-scope-and-authorization.md) -
+    # a Project row must never exist without a ProjectScope row, so these
+    # ride along in the same request instead of a separate "create project,
+    # then set scope" step. Validated (ipaddress parsing, range sanity) at
+    # the service/router boundary, not here - same convention as every
+    # other free-text field in this file.
+    host_range: str
+    port_range_start: int
+    port_range_end: int
 
 
 class ProjectSettingsBase(SQLModel):
@@ -111,6 +127,102 @@ class ProjectSettings(ProjectSettingsBase, table=True):
     project_id: uuid.UUID = Field(primary_key=True, foreign_key="project.id")
 
     project: Project = Relationship(back_populates="settings")
+
+
+class ProjectScopeBase(SQLModel):
+    # Free-text: a single IPv4/IPv6 address, a CIDR block, or a
+    # comma-separated mix of either - see scope_parsing.parse_host_range,
+    # the one validation code path for this field (no mode selector).
+    host_range: str
+    port_range_start: int
+    port_range_end: int
+
+
+class ProjectScopeBody(ProjectScopeBase):
+    project_id: uuid.UUID
+
+
+class ProjectScope(ProjectScopeBase, table=True):
+    # 1:1 with Project, same shape as ProjectSettings above - project_id is
+    # both the FK and the PK, so a project can have at most one scope.
+    project_id: uuid.UUID = Field(primary_key=True, foreign_key="project.id")
+
+    project: Project = Relationship(back_populates="scope")
+
+
+class ProjectScopeResponse(ProjectScopeBase):
+    project_id: uuid.UUID
+
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {"title": "ProjectScope"},
+    }
+
+
+class DiscoveredHost(SQLModel):
+    """One host returned by the `nmap -sn` discovery sweep (see
+    ScopeDiscoveryService), tagged against the project's current
+    ProjectScope.host_range. Never persisted - discovery results are a
+    live, synchronous response the caller acts on immediately."""
+
+    host: str
+    in_scope: bool
+
+    model_config = {"json_schema_extra": {"title": "DiscoveredHost"}}
+
+
+class AuthorizationAcknowledgmentBase(SQLModel):
+    # Self-reported free text, not a verified identity - there's no
+    # account system in this app (see the feature spec's "Decisions").
+    acknowledged_by: str
+    description: str
+    # A snapshot of ProjectScope's range at the moment this acknowledgment
+    # was submitted, not a live reference to it - ProjectScope can keep
+    # changing afterward without altering what was actually acknowledged.
+    acknowledged_host_range: str
+    acknowledged_port_range_start: int
+    acknowledged_port_range_end: int
+
+
+class AuthorizationAcknowledgmentRequest(SQLModel):
+    # Only what the client actually supplies - acknowledged_host_range/
+    # port_range_start/end are snapshotted server-side from the project's
+    # CURRENT ProjectScope at submission time (see
+    # ProjectScopeService.submit_acknowledgment), never taken from the
+    # request body. Accepting them here would let a client acknowledge a
+    # range that doesn't match what's actually being authorized.
+    acknowledged_by: str
+    description: str
+
+
+class AuthorizationAcknowledgment(AuthorizationAcknowledgmentBase, table=True):
+    # Append-only: id is a real surrogate PK (unlike ProjectScope's 1:1
+    # project_id) because a project accumulates many of these over time -
+    # the latest row (by created_at) is the authoritative one, nothing
+    # ever updates an existing row (see database_manager.py's
+    # get_latest_acknowledgment/add_authorization_acknowledgment).
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    project_id: uuid.UUID = Field(foreign_key="project.id")
+    # timezone=True - see AgentRunBase.recorded_at's own comment on why a
+    # naive column here would silently drop the UTC marker and break
+    # "most recent" ordering comparisons against aware datetimes elsewhere.
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True)),
+    )
+
+    project: Project = Relationship(back_populates="acknowledgments")
+
+
+class AuthorizationAcknowledgmentResponse(AuthorizationAcknowledgmentBase):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    created_at: datetime
+
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {"title": "AuthorizationAcknowledgment"},
+    }
 
 
 base_starting_prompt = """

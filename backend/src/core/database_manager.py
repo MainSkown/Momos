@@ -7,7 +7,9 @@ from typing import List, Optional, Tuple, TypeVar, Type, TYPE_CHECKING
 
 # SQLModels Imports #
 from src.schemas.project_scheme import (
+    AuthorizationAcknowledgment,
     Project,
+    ProjectScope,
     ProjectSettings,
     project_settings_factory,
 )
@@ -293,8 +295,27 @@ class DatabaseManager:
     def get_all_projects(self):
         return self.get_all(Project)
 
-    def add_project(self, project: Project):
-        return self.add_to_database(project)
+    def add_project(
+        self, project: Project, scope: Optional[ProjectScope] = None
+    ) -> Project:
+        """Plain add_to_database when scope is omitted (existing callers,
+        e.g. the integration suite's own Project(name=...) smoke tests,
+        keep working unchanged). ProjectService.add_project - the real
+        project-creation path - always passes a scope, so Project and
+        ProjectScope commit together in one transaction: the feature's
+        "a Project row must never exist without a ProjectScope row"
+        invariant only holds if the two inserts can't be torn apart by a
+        failure in between."""
+        if scope is None:
+            return self.add_to_database(project)
+
+        scope.project_id = project.id
+        with Session(self.engine) as session:
+            session.add(project)
+            session.add(scope)
+            session.commit()
+            session.refresh(project)
+            return project
 
     def _parse_uuid(self, value: str | uuid.UUID) -> uuid.UUID:
         if isinstance(value, uuid.UUID):
@@ -334,6 +355,42 @@ class DatabaseManager:
             session.commit()
             session.refresh(merged_settings)
             return merged_settings
+
+    # -- Managing Project Scope ---
+    def get_project_scope(self, project_id: str | uuid.UUID) -> ProjectScope | None:
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            return session.get(ProjectScope, parsed_uuid)
+
+    def update_project_scope(self, project_scope: ProjectScope) -> ProjectScope:
+        with Session(self.engine) as session:
+            merged_scope = session.merge(project_scope)
+            session.commit()
+            session.refresh(merged_scope)
+            return merged_scope
+
+    # -- Managing Authorization Acknowledgments ---
+    def add_authorization_acknowledgment(
+        self, acknowledgment: AuthorizationAcknowledgment
+    ) -> AuthorizationAcknowledgment:
+        # Insert-only - see AuthorizationAcknowledgment's own docstring.
+        # Never merge/update an existing row.
+        return self.add_to_database(acknowledgment)
+
+    def get_latest_acknowledgment(
+        self, project_id: str | uuid.UUID
+    ) -> AuthorizationAcknowledgment | None:
+        parsed_uuid = self._parse_uuid(project_id)
+
+        with Session(self.engine) as session:
+            statement = (
+                select(AuthorizationAcknowledgment)
+                .where(AuthorizationAcknowledgment.project_id == parsed_uuid)
+                .order_by(AuthorizationAcknowledgment.created_at.desc())
+                .limit(1)
+            )
+            return session.exec(statement).first()
 
     def clear_model_references(self, model_name: str) -> None:
         """Nulls out every one of the six model-name fields (base_model_name/
@@ -377,6 +434,12 @@ class DatabaseManager:
             session.exec(delete(TestSession).where(TestSession.project_id == parsed_uuid))
             session.exec(delete(Target).where(Target.project_id == parsed_uuid))
             session.exec(delete(ProjectSettings).where(ProjectSettings.project_id == parsed_uuid))
+            session.exec(
+                delete(AuthorizationAcknowledgment).where(
+                    AuthorizationAcknowledgment.project_id == parsed_uuid
+                )
+            )
+            session.exec(delete(ProjectScope).where(ProjectScope.project_id == parsed_uuid))
             session.exec(delete(Project).where(Project.id == parsed_uuid))
             session.commit()
 
