@@ -1,18 +1,46 @@
 from typing import List
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from src.services import ProjectService, OllamaService, AgentService
+from src.services.project_scope_service import ProjectScopeService
 from src.schemas import (
     ProjectResponse,
     ProjectRequest,
     ProjectSettings,
     ProjectSettingsBody,
+    ProjectScopeBody,
+    ProjectScopeResponse,
+    AuthorizationAcknowledgmentRequest,
+    AuthorizationAcknowledgmentResponse,
 )
-from src.core import tool_groups
+from src.core import tool_groups, db_manager
 from src.core.pipeline_modes import PIPELINE_MODE_IDS
+from src.schemas.scope_parsing import parse_host_range, host_count
 from src.utils.exceptions import ProjectDoesNotExistException
 
 router = APIRouter()
+
+
+class ProjectScopeUpdateResponse(BaseModel):
+    scope: ProjectScopeResponse
+    large_range_warning: bool
+
+
+class AcknowledgmentStatusResponse(BaseModel):
+    is_acknowledged: bool
+
+
+def _require_project_exists(project_id: str) -> None:
+    # ProjectScope/acknowledgment endpoints have no existence check of
+    # their own the way ProjectService.get_project_settings does for
+    # settings - this mirrors that same db_manager.get_project(...) is
+    # None check so an unknown project_id maps to 404 here too, instead of
+    # a 500 from a downstream merge/FK failure.
+    if db_manager.get_project(project_id) is None:
+        raise ProjectDoesNotExistException(
+            f"Project does not exist: {project_id}", project_id
+        )
 
 
 @router.get(
@@ -21,7 +49,7 @@ router = APIRouter()
 def all_projects():
     try:
         return ProjectService.get_projects()
-    except Exception as e:        
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not return all projects",
@@ -31,7 +59,30 @@ def all_projects():
 @router.post("/project", response_model=ProjectResponse, operation_id="PostProject")
 def create_project(data: ProjectRequest):
     try:
-        return ProjectService.add_project(data.name, data.base_model_name, data.parsing_model_name)
+        parse_host_range(data.host_range)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if not (1 <= data.port_range_start <= 65535 and 1 <= data.port_range_end <= 65535):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="port_range_start and port_range_end must each be between 1 and 65535",
+        )
+    if data.port_range_start > data.port_range_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="port_range_start must not be greater than port_range_end",
+        )
+
+    try:
+        return ProjectService.add_project(
+            data.name,
+            data.base_model_name,
+            data.parsing_model_name,
+            data.host_range,
+            data.port_range_start,
+            data.port_range_end,
+        )
     except Exception as e:
         print(f"Exception happened when creating new project", e)
         raise HTTPException(
@@ -167,4 +218,133 @@ def delete_project(project_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not delete project",
+        )
+
+
+@router.get(
+    "/project/{project_id}/scope",
+    response_model=ProjectScopeResponse,
+    operation_id="GetProjectScope",
+)
+def get_project_scope(project_id: str):
+    try:
+        _require_project_exists(project_id)
+
+        scope = db_manager.get_project_scope(project_id)
+        if scope is None:
+            # ProjectScope is mandatory at creation time (see
+            # ProjectService.add_project) - a Project row existing without
+            # one means that invariant was broken somewhere, a genuine
+            # server-side bug rather than a normal "not found" for a
+            # client to see as a 404.
+            raise RuntimeError(f"Project {project_id} exists but has no ProjectScope")
+
+        return scope
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(f"Exception happened when getting project {project_id} scope: ", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not get project scope",
+        )
+
+
+@router.put(
+    "/project/{project_id}/scope",
+    response_model=ProjectScopeUpdateResponse,
+    operation_id="UpdateProjectScope",
+)
+def update_project_scope(project_id: str, data: ProjectScopeBody):
+    if str(data.project_id) != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"URL project_id ({project_id}) does not match body project_id ({data.project_id})",
+        )
+
+    try:
+        _require_project_exists(project_id)
+
+        scope = ProjectScopeService.update_scope(
+            project_id, data.host_range, data.port_range_start, data.port_range_end
+        )
+        large_range_warning = host_count(data.host_range) > 254
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        print(f"Exception happened when updating project {project_id} scope: ", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not update project scope",
+        )
+
+    return ProjectScopeUpdateResponse(
+        scope=ProjectScopeResponse.model_validate(scope),
+        large_range_warning=large_range_warning,
+    )
+
+
+@router.post(
+    "/project/{project_id}/acknowledgment",
+    response_model=AuthorizationAcknowledgmentResponse,
+    operation_id="SubmitAuthorizationAcknowledgment",
+)
+def submit_authorization_acknowledgment(
+    project_id: str, data: AuthorizationAcknowledgmentRequest
+):
+    try:
+        _require_project_exists(project_id)
+
+        return ProjectScopeService.submit_acknowledgment(
+            project_id, data.acknowledged_by, data.description
+        )
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(
+            f"Exception happened when submitting acknowledgment for project {project_id}: ",
+            str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not submit authorization acknowledgment",
+        )
+
+
+@router.get(
+    "/project/{project_id}/acknowledgment/status",
+    response_model=AcknowledgmentStatusResponse,
+    operation_id="GetAcknowledgmentStatus",
+)
+def get_acknowledgment_status(project_id: str):
+    try:
+        _require_project_exists(project_id)
+
+        return AcknowledgmentStatusResponse(
+            is_acknowledged=ProjectScopeService.is_acknowledged(project_id)
+        )
+    except ProjectDoesNotExistException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except Exception as e:
+        print(
+            f"Exception happened when getting acknowledgment status for project {project_id}: ",
+            str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not get acknowledgment status",
         )

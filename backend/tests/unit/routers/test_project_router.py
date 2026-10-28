@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 
 from main import app
-from src.schemas import ProjectSettings
+from src.schemas import ProjectSettings, ProjectScope, AuthorizationAcknowledgment
 
 # `src.routers.project_router` as a module ATTRIBUTE lookup (`from
 # src.routers import project_router`) resolves to the router INSTANCE
@@ -79,16 +79,58 @@ def test_all_projects_error_returns_500(api_client, monkeypatch):
     assert response.status_code == 500
 
 
+def project_request_body(**overrides):
+    body = {
+        "name": "new",
+        "base_model_name": "m1",
+        "parsing_model_name": "m2",
+        "host_range": "10.0.0.1",
+        "port_range_start": 1,
+        "port_range_end": 1024,
+    }
+    body.update(overrides)
+    return body
+
+
 def test_create_project_happy_path(api_client, monkeypatch):
     mock_add = MagicMock(return_value={"id": PROJECT_ID, "name": "new"})
     monkeypatch.setattr(project_router.ProjectService, "add_project", mock_add)
-    response = api_client.post(
-        "/api/project",
-        json={"name": "new", "base_model_name": "m1", "parsing_model_name": "m2"},
-    )
+    response = api_client.post("/api/project", json=project_request_body())
     assert response.status_code == 200
     assert response.json() == {"id": PROJECT_ID, "name": "new"}
-    mock_add.assert_called_once_with("new", "m1", "m2")
+    mock_add.assert_called_once_with("new", "m1", "m2", "10.0.0.1", 1, 1024)
+
+
+def test_create_project_invalid_host_range_returns_400(api_client, monkeypatch):
+    mock_add = MagicMock()
+    monkeypatch.setattr(project_router.ProjectService, "add_project", mock_add)
+    response = api_client.post(
+        "/api/project", json=project_request_body(host_range="not an ip")
+    )
+    assert response.status_code == 400
+    mock_add.assert_not_called()
+
+
+def test_create_project_port_range_start_after_end_returns_400(api_client, monkeypatch):
+    mock_add = MagicMock()
+    monkeypatch.setattr(project_router.ProjectService, "add_project", mock_add)
+    response = api_client.post(
+        "/api/project",
+        json=project_request_body(port_range_start=100, port_range_end=50),
+    )
+    assert response.status_code == 400
+    mock_add.assert_not_called()
+
+
+def test_create_project_port_out_of_bounds_returns_400(api_client, monkeypatch):
+    mock_add = MagicMock()
+    monkeypatch.setattr(project_router.ProjectService, "add_project", mock_add)
+    response = api_client.post(
+        "/api/project",
+        json=project_request_body(port_range_start=0, port_range_end=1024),
+    )
+    assert response.status_code == 400
+    mock_add.assert_not_called()
 
 
 def test_create_project_error_returns_500(api_client, monkeypatch):
@@ -97,10 +139,7 @@ def test_create_project_error_returns_500(api_client, monkeypatch):
         "add_project",
         MagicMock(side_effect=RuntimeError("boom")),
     )
-    response = api_client.post(
-        "/api/project",
-        json={"name": "new", "base_model_name": "m1", "parsing_model_name": "m2"},
-    )
+    response = api_client.post("/api/project", json=project_request_body())
     assert response.status_code == 500
 
 
@@ -356,3 +395,197 @@ def test_delete_project_error_returns_500(api_client, monkeypatch):
     )
     response = api_client.delete(f"/api/project/{PROJECT_ID}")
     assert response.status_code == 500
+
+
+def scope_response(**overrides):
+    """Direct construction (table=True skips strict Pydantic validation)
+    - same convention as settings_response above."""
+    body = {
+        "project_id": uuid.UUID(PROJECT_ID),
+        "host_range": "10.0.0.1",
+        "port_range_start": 1,
+        "port_range_end": 1024,
+    }
+    body.update(overrides)
+    return ProjectScope(**body)
+
+
+def test_get_project_scope_happy_path(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    monkeypatch.setattr(
+        project_router.db_manager,
+        "get_project_scope",
+        MagicMock(return_value=scope_response()),
+    )
+    response = api_client.get(f"/api/project/{PROJECT_ID}/scope")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["host_range"] == "10.0.0.1"
+    assert body["port_range_start"] == 1
+    assert body["port_range_end"] == 1024
+
+
+def test_get_project_scope_unknown_project_returns_404(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=None)
+    )
+    response = api_client.get(f"/api/project/{PROJECT_ID}/scope")
+    assert response.status_code == 404
+
+
+def scope_update_body(**overrides):
+    body = {
+        "project_id": PROJECT_ID,
+        "host_range": "10.0.0.1",
+        "port_range_start": 1,
+        "port_range_end": 1024,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_update_project_scope_happy_path_small_range(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    mock_update = MagicMock(return_value=scope_response())
+    monkeypatch.setattr(project_router.ProjectScopeService, "update_scope", mock_update)
+
+    response = api_client.put(
+        f"/api/project/{PROJECT_ID}/scope", json=scope_update_body()
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["large_range_warning"] is False
+    assert body["scope"]["host_range"] == "10.0.0.1"
+    mock_update.assert_called_once_with(PROJECT_ID, "10.0.0.1", 1, 1024)
+
+
+def test_update_project_scope_large_range_sets_warning_true(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    monkeypatch.setattr(
+        project_router.ProjectScopeService,
+        "update_scope",
+        MagicMock(return_value=scope_response(host_range="10.0.0.0/23")),
+    )
+
+    response = api_client.put(
+        f"/api/project/{PROJECT_ID}/scope",
+        json=scope_update_body(host_range="10.0.0.0/23"),
+    )
+    assert response.status_code == 200
+    assert response.json()["large_range_warning"] is True
+
+
+def test_update_project_scope_invalid_range_returns_400(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    monkeypatch.setattr(
+        project_router.ProjectScopeService,
+        "update_scope",
+        MagicMock(side_effect=ValueError("Invalid host or CIDR block in host range: 'garbage'")),
+    )
+
+    response = api_client.put(
+        f"/api/project/{PROJECT_ID}/scope",
+        json=scope_update_body(host_range="garbage"),
+    )
+    assert response.status_code == 400
+
+
+def test_update_project_scope_unknown_project_returns_404(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=None)
+    )
+    response = api_client.put(
+        f"/api/project/{PROJECT_ID}/scope", json=scope_update_body()
+    )
+    assert response.status_code == 404
+
+
+def ack_response(**overrides):
+    body = {
+        "id": uuid.uuid4(),
+        "project_id": uuid.UUID(PROJECT_ID),
+        "acknowledged_by": "alice",
+        "description": "Authorized pentest engagement",
+        "acknowledged_host_range": "10.0.0.1",
+        "acknowledged_port_range_start": 1,
+        "acknowledged_port_range_end": 1024,
+    }
+    body.update(overrides)
+    return AuthorizationAcknowledgment(**body)
+
+
+def test_submit_acknowledgment_happy_path(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    mock_submit = MagicMock(return_value=ack_response())
+    monkeypatch.setattr(
+        project_router.ProjectScopeService, "submit_acknowledgment", mock_submit
+    )
+
+    response = api_client.post(
+        f"/api/project/{PROJECT_ID}/acknowledgment",
+        json={"acknowledged_by": "alice", "description": "Authorized pentest engagement"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["acknowledged_by"] == "alice"
+    assert body["description"] == "Authorized pentest engagement"
+    mock_submit.assert_called_once_with(
+        PROJECT_ID, "alice", "Authorized pentest engagement"
+    )
+
+
+def test_submit_acknowledgment_unknown_project_returns_404(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=None)
+    )
+    response = api_client.post(
+        f"/api/project/{PROJECT_ID}/acknowledgment",
+        json={"acknowledged_by": "alice", "description": "Authorized pentest engagement"},
+    )
+    assert response.status_code == 404
+
+
+def test_get_acknowledgment_status_true(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    monkeypatch.setattr(
+        project_router.ProjectScopeService,
+        "is_acknowledged",
+        MagicMock(return_value=True),
+    )
+    response = api_client.get(f"/api/project/{PROJECT_ID}/acknowledgment/status")
+    assert response.status_code == 200
+    assert response.json() == {"is_acknowledged": True}
+
+
+def test_get_acknowledgment_status_false(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=object())
+    )
+    monkeypatch.setattr(
+        project_router.ProjectScopeService,
+        "is_acknowledged",
+        MagicMock(return_value=False),
+    )
+    response = api_client.get(f"/api/project/{PROJECT_ID}/acknowledgment/status")
+    assert response.status_code == 200
+    assert response.json() == {"is_acknowledged": False}
+
+
+def test_get_acknowledgment_status_unknown_project_returns_404(api_client, monkeypatch):
+    monkeypatch.setattr(
+        project_router.db_manager, "get_project", MagicMock(return_value=None)
+    )
+    response = api_client.get(f"/api/project/{PROJECT_ID}/acknowledgment/status")
+    assert response.status_code == 404

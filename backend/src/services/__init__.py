@@ -6,6 +6,7 @@ from .agent_service import AgentService
 from .vulnerability_service import VulnerabilityService
 from .test_session_service import TestSessionService
 from .user_settings_service import UserSettingsService
+from .scope_discovery_service import ScopeDiscoveryService
 
 __all__ = [
     "ProjectService",
@@ -16,4 +17,5 @@ __all__ = [
     "VulnerabilityService",
     "TestSessionService",
     "UserSettingsService",
+    "ScopeDiscoveryService",
 ]
