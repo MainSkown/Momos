@@ -2,6 +2,8 @@ from typing import List
 import uuid
 import ipaddress
 
+from src.schemas.project_scheme import ProjectScope
+from src.schemas.scope_parsing import is_network_in_any, parse_host_range
 from src.schemas.target_scheme import Target, TargetBase
 from src.core.database_manager import db_manager
 from src.utils.exceptions import (
@@ -14,7 +16,7 @@ from src.utils.exceptions import (
 
 class TargetService:
     @staticmethod
-    def _validate_target_fields(target: Target):
+    def _validate_target_fields(target: Target, scope: ProjectScope | None):
         # Check if ports are in range 1 to 65535 - None falls through the
         # same ValueError rather than crashing the `all(...)` generator
         # with a TypeError.
@@ -35,6 +37,47 @@ class TargetService:
             except:
                 raise InvalidTargetDataException("Given IPv6 is not IPv6")
 
+        TargetService._validate_target_within_scope(target, scope)
+
+    @staticmethod
+    def _validate_target_within_scope(target: Target, scope: ProjectScope | None):
+        # A manually-created Target is scope-checked the same as a
+        # discovery-proposed one - otherwise the scope boundary is
+        # trivially bypassable by just typing in an out-of-scope host
+        # (see docs/features/project-scope-and-authorization.md's
+        # "Decisions"). Every project is mandatorily created with a
+        # ProjectScope (B1), so a missing scope here is a data-integrity
+        # bug, not a reason to silently let the target through.
+        if scope is None:
+            raise InvalidTargetDataException(
+                "Project has no configured scope; cannot validate target against it"
+            )
+
+        allowed_networks = parse_host_range(scope.host_range)
+
+        if target.ipv4 is not None:
+            candidate = ipaddress.ip_network(target.ipv4)
+            if not is_network_in_any(candidate, allowed_networks):
+                raise InvalidTargetDataException(
+                    f"IPv4 {target.ipv4} is outside the project's authorized "
+                    f"host range ({scope.host_range})"
+                )
+
+        if target.ipv6 is not None:
+            candidate = ipaddress.ip_network(target.ipv6)
+            if not is_network_in_any(candidate, allowed_networks):
+                raise InvalidTargetDataException(
+                    f"IPv6 {target.ipv6} is outside the project's authorized "
+                    f"host range ({scope.host_range})"
+                )
+
+        for port in target.ports:
+            if not (scope.port_range_start <= port <= scope.port_range_end):
+                raise InvalidTargetDataException(
+                    f"Port {port} is outside the project's authorized port "
+                    f"range ({scope.port_range_start}-{scope.port_range_end})"
+                )
+
     @staticmethod
     def add_target(
         name: str,
@@ -53,6 +96,8 @@ class TargetService:
         if db_manager.get_project(parsed_project_id) is None:
             raise ProjectDoesNotExistException(f"Project does not exist: {project_id}", project_id)
 
+        scope = db_manager.get_project_scope(parsed_project_id)
+
         target = Target(
             name=name,
             project_id=parsed_project_id,
@@ -65,7 +110,7 @@ class TargetService:
             ports=ports if ports is not None else [],
             task_duration=task_duration,
         )
-        TargetService._validate_target_fields(target)
+        TargetService._validate_target_fields(target, scope)
         target = db_manager.add_target(target)
         return target
 
@@ -79,7 +124,8 @@ class TargetService:
 
     @staticmethod
     def update_target(target: Target):
-        TargetService._validate_target_fields(target)
+        scope = db_manager.get_project_scope(target.project_id)
+        TargetService._validate_target_fields(target, scope)
 
         # Check if object exists in database
         if(db_manager.get_target(target.id) is None):

@@ -21,6 +21,10 @@ class ModelNotSelectedException(Exception):
     def __init__(self, message):
         super().__init__(message)
 
+class ScopeNotAcknowledgedException(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
 class ModelNotInstalledException(Exception):
     def __init__(self, message, model_name: str):
         super().__init__(message)

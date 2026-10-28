@@ -8,6 +8,7 @@ from src.core.agent import run_registry
 from src.core.agent.roles import common as roles_common
 from src.core.agent.roles.agents.orchestrator_agent import OrchestratorAgent
 from src.core.kali_integration import kali_registry
+from src.services.project_scope_service import ProjectScopeService
 from src.schemas.target_scheme import Target
 from src.schemas.project_scheme import (
     ProjectSettings,
@@ -23,6 +24,7 @@ from src.utils.exceptions import (
     AgentAlreadyRunningException,
     ModelNotSelectedException,
     ModelNotInstalledException,
+    ScopeNotAcknowledgedException,
 )
 from src.websocket import (
     ws_registry,
@@ -353,6 +355,13 @@ class AgentService:
             raise ModelNotSelectedException(
                 f"Project {project_id} has no AI model selected - choose a "
                 "model in project settings before starting a scan."
+            )
+
+        if not ProjectScopeService.is_acknowledged(project_id):
+            raise ScopeNotAcknowledgedException(
+                f"Project {project_id}'s scope needs to be acknowledged "
+                "before a run can start - acknowledge the current host/"
+                "port range in project settings."
             )
 
         multi_agent = project_settings.pipeline_mode == "multi_agent"

@@ -1,6 +1,6 @@
 """agent_router.py - see docs/testing-crawler-reports/routers.md's
 agent_router.py section. This router is named as a reference pattern
-(all six typed exceptions mapped correctly) - these tests confirm that
+(all seven typed exceptions mapped correctly) - these tests confirm that
 holds for every endpoint that declares the mapping, not just start_agent."""
 
 import importlib
@@ -13,6 +13,7 @@ from src.utils.exceptions import (
     ModelNotInstalledException,
     ModelNotSelectedException,
     ProjectDoesNotExistException,
+    ScopeNotAcknowledgedException,
     TargetDoesNotExistException,
 )
 
@@ -104,6 +105,19 @@ def test_start_agent_model_not_installed_maps_to_400(api_client, monkeypatch):
     response = api_client.post(START_URL)
     assert response.status_code == 400
     assert response.json()["detail"] == "model gone"
+
+
+def test_start_agent_scope_not_acknowledged_maps_to_400(api_client, monkeypatch):
+    monkeypatch.setattr(
+        agent_router.AgentService,
+        "start_agent",
+        AsyncMock(
+            side_effect=ScopeNotAcknowledgedException("scope not acknowledged")
+        ),
+    )
+    response = api_client.post(START_URL)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "scope not acknowledged"
 
 
 def test_start_agent_already_running_maps_to_409(api_client, monkeypatch):
