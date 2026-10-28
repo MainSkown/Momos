@@ -16,6 +16,17 @@ export type tAddresses = {
 
 export type tTarget = ResponseTarget
 
+// Shared by ScopeRangeInput.vue and both of its planned parents
+// (ProjectDialog.vue's creation form, ScopeAuthorizationDialog.vue's edit
+// form - see docs/plans/milestone-1-project-scope-and-authorization.md's
+// D1) - a standalone shape rather than a generated API type since the
+// backend's ProjectScope schema (B1) doesn't exist yet.
+export type tScopeRange = {
+  host_range: string;
+  port_range_start: number;
+  port_range_end: number;
+};
+
 export type tVulnerability = ResponseVulnerability
 
 // Ordered informational -> critical, matching backend SEVERITY_SCORES in
