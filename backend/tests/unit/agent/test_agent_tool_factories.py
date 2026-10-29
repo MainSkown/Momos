@@ -40,14 +40,19 @@ from pydantic import ValidationError
 from src.core.agent import agent_tools
 from src.core.agent.agent_tools import (
     DNS_RECON_TOOL_NAME,
+    CRACK_HASHES_TOOL_NAME,
+    COMMIX_RUN_TOOL_NAME,
     DOWNLOAD_FILE_TOOL_NAME,
     FTP_COMMAND_TOOL_NAME,
     FTP_CONNECT_TOOL_NAME,
     GOBUSTER_SCAN_TOOL_NAME,
     HYDRA_BRUTEFORCE_TOOL_NAME,
+    IMPACKET_EXEC_TOOL_NAME,
+    IMPACKET_KERBEROAST_TOOL_NAME,
     KALI_COMMAND_TOOL_NAME,
     MYSQL_CONNECT_TOOL_NAME,
     MYSQL_QUERY_TOOL_NAME,
+    NETEXEC_RUN_TOOL_NAME,
     NEW_SESSION_TOOL_NAME,
     NIKTO_SCAN_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
@@ -65,6 +70,7 @@ from src.core.agent.agent_tools import (
     TESTSSL_SCAN_TOOL_NAME,
     WHATWEB_SCAN_TOOL_NAME,
     WPSCAN_ENUM_TOOL_NAME,
+    LOCAL_FILES_DIR,
     WRITE_LOCAL_FILE_TOOL_NAME,
     create_file_tools,
     create_guided_session_tools,
@@ -790,6 +796,446 @@ class TestCreatePentestTools:
         result = await _invoke(tools[PACKET_CAPTURE_TOOL_NAME], duration_seconds=121)
 
         assert "must be at most" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_netexec_run_builds_the_expected_command_with_password(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        nxc_output = "SMB  10.0.0.5  445  HOST  [+] domain\\user:pass\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=nxc_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[NETEXEC_RUN_TOOL_NAME],
+            protocol="smb",
+            username="user",
+            password="pass",
+        )
+
+        assert result.content == nxc_output
+        assert result.artifact == nxc_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(nxc_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 180 nxc smb 10.0.0.5 -u user -p pass",
+        ]
+
+    async def test_netexec_run_uses_hash_flag_and_includes_command_when_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(
+            tools[NETEXEC_RUN_TOOL_NAME],
+            protocol="winrm",
+            username="user",
+            ntlm_hash="aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c",
+            command="whoami",
+        )
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "nxc winrm 10.0.0.5 -u user" in cmd
+        assert "-H aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c" in cmd
+        assert "-x whoami" in cmd
+
+    async def test_netexec_run_rejects_both_password_and_hash_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[NETEXEC_RUN_TOOL_NAME],
+            protocol="smb",
+            username="user",
+            password="pass",
+            ntlm_hash="8846f7eaee8fb117ad06bdd830b7586c",
+        )
+
+        assert "exactly one of" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_netexec_run_rejects_neither_password_nor_hash_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[NETEXEC_RUN_TOOL_NAME], protocol="smb", username="user"
+        )
+
+        assert "exactly one of" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_netexec_run_rejects_an_unknown_protocol_outright(self, kali_exec):
+        tools, _ = self._build()
+
+        with pytest.raises(ValidationError):
+            await _invoke(
+                tools[NETEXEC_RUN_TOOL_NAME],
+                protocol="rdp",
+                username="user",
+                password="pass",
+            )
+
+        kali_exec.exec_run.assert_not_called()
+
+    async def test_impacket_kerberoast_builds_the_expected_command(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        spn_output = "$krb5tgs$23$*user$DOMAIN$...\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=spn_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[IMPACKET_KERBEROAST_TOOL_NAME],
+            username="svc_user",
+            password="svc_pass",
+            domain="example.com",
+        )
+
+        assert result.content == spn_output
+        assert result.artifact == spn_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(spn_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        # GetUserSPNs' positional target is "domain[/username[:password]]" -
+        # it has no "@host" syntax at all (unlike wmiexec/psexec/
+        # secretsdump); the actual target host must go through its own
+        # -dc-ip flag, confirmed against a real impacket-GetUserSPNs -h
+        # and a real connection attempt (an "@host"-appended target silently
+        # falls back to resolving the domain name via DNS instead of
+        # reaching the given host at all).
+        assert "impacket-GetUserSPNs -request -dc-ip 10.0.0.5 example.com/svc_user:svc_pass" in cmd
+
+    async def test_impacket_kerberoast_has_no_free_target_argument(self):
+        """Per the plan's own correction: this tool is scoped to this
+        run's own target host like everything else in this file - there
+        is no `target` parameter at all to accept a caller-supplied host."""
+        tools, _ = TestCreatePentestTools()._build()
+        sig = inspect.signature(tools[IMPACKET_KERBEROAST_TOOL_NAME].coroutine)
+        assert "target" not in sig.parameters
+
+    async def test_impacket_kerberoast_rejects_an_invalid_domain_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[IMPACKET_KERBEROAST_TOOL_NAME],
+            username="svc_user",
+            password="svc_pass",
+            domain="example.com; id",
+        )
+
+        assert "Invalid `domain`" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_impacket_exec_wmiexec_builds_the_expected_command_with_password(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        exec_output = "[*] Executing command\nadministrator\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=exec_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[IMPACKET_EXEC_TOOL_NAME],
+            username="admin",
+            password_or_hash="s3cret",
+            command="whoami",
+            method="wmiexec",
+        )
+
+        assert result.content == exec_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(exec_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "impacket-wmiexec admin:s3cret@10.0.0.5 whoami" in cmd
+
+    async def test_impacket_exec_detects_an_ntlm_hash_and_uses_the_hashes_flag(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(
+            tools[IMPACKET_EXEC_TOOL_NAME],
+            username="admin",
+            password_or_hash="8846f7eaee8fb117ad06bdd830b7586c",
+            command="whoami",
+            method="psexec",
+        )
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "-hashes aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c" in cmd
+        assert cmd.endswith("admin@10.0.0.5 whoami")
+        assert "impacket-psexec" in cmd
+
+    async def test_impacket_exec_secretsdump_rejects_a_given_command(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[IMPACKET_EXEC_TOOL_NAME],
+            username="admin",
+            password_or_hash="s3cret",
+            command="whoami",
+            method="secretsdump",
+        )
+
+        assert "has no remote command" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_impacket_exec_secretsdump_builds_the_expected_command(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        dump_output = "Administrator:500:aad3b435b51404eeaad3b435b51404ee:...\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=dump_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[IMPACKET_EXEC_TOOL_NAME],
+            username="admin",
+            password_or_hash="s3cret",
+            command=None,
+            method="secretsdump",
+        )
+
+        assert result.content == dump_output
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert cmd.endswith("impacket-secretsdump admin:s3cret@10.0.0.5")
+
+    async def test_impacket_exec_has_no_free_target_argument(self):
+        tools, _ = TestCreatePentestTools()._build()
+        sig = inspect.signature(tools[IMPACKET_EXEC_TOOL_NAME].coroutine)
+        assert "target" not in sig.parameters
+
+    async def test_impacket_exec_rejects_an_unknown_method_outright(self, kali_exec):
+        tools, _ = self._build()
+
+        with pytest.raises(ValidationError):
+            await _invoke(
+                tools[IMPACKET_EXEC_TOOL_NAME],
+                username="admin",
+                password_or_hash="s3cret",
+                command="whoami",
+                method="smbexec",
+            )
+
+        kali_exec.exec_run.assert_not_called()
+
+    async def test_crack_hashes_builds_the_expected_command(
+        self, kali_exec, patched_db_manager
+    ):
+        hashcat_output = "5f4dcc3b5aa765d61d8327deb882cf99:password\n"
+        kali_exec.exec_run.side_effect = [
+            SimpleNamespace(exit_code=0, output=b""),  # wordlist existence check
+            SimpleNamespace(exit_code=0, output=hashcat_output.encode()),
+        ]
+        tools, cb = self._build()
+        hash_file = f"{LOCAL_FILES_DIR}/abc123-hashes.txt"
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME],
+            hash_file=hash_file,
+            hash_mode="0",
+            wordlist="/usr/share/wordlists/rockyou.txt",
+        )
+
+        assert result.content == hashcat_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(hashcat_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 300 hashcat -m 0 -a 0 "
+            f"{hash_file} /usr/share/wordlists/rockyou.txt",
+        ]
+
+    async def test_crack_hashes_rejects_a_hash_file_outside_local_files_dir(
+        self, kali_exec, patched_db_manager
+    ):
+        """The one property that keeps this tool from reading arbitrary
+        sandbox files: `hash_file` must resolve under LOCAL_FILES_DIR.
+        Verified by breaking it: temporarily removing the containment
+        check makes this test go red, since "/etc/passwd" would otherwise
+        be accepted outright (CLAUDE.md 2.1)."""
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME], hash_file="/etc/passwd", hash_mode="0"
+        )
+
+        assert "must be" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_crack_hashes_rejects_a_traversal_attempt_out_of_local_files_dir(
+        self, kali_exec, patched_db_manager
+    ):
+        """A path that starts with LOCAL_FILES_DIR as a raw string but
+        normalizes outside it via ".." must still be rejected - a naive
+        startswith() check on the unnormalized string would wrongly accept
+        this."""
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME],
+            hash_file=f"{LOCAL_FILES_DIR}/../../etc/passwd",
+            hash_mode="0",
+        )
+
+        assert "must be" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_crack_hashes_rejects_a_non_digit_hash_mode(
+        self, kali_exec, patched_db_manager
+    ):
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME],
+            hash_file=f"{LOCAL_FILES_DIR}/abc-hashes.txt",
+            hash_mode="1000; id",
+        )
+
+        assert "Invalid `hash_mode`" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_crack_hashes_rejects_a_runtime_above_the_cap(
+        self, kali_exec, patched_db_manager
+    ):
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME],
+            hash_file=f"{LOCAL_FILES_DIR}/abc-hashes.txt",
+            hash_mode="0",
+            max_runtime_seconds=601,
+        )
+
+        assert "must be at most" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_crack_hashes_rejects_a_nonexistent_wordlist_without_running_hashcat(
+        self, kali_exec, patched_db_manager
+    ):
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=1, output=b"")
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[CRACK_HASHES_TOOL_NAME],
+            hash_file=f"{LOCAL_FILES_DIR}/abc-hashes.txt",
+            hash_mode="0",
+            wordlist="/tmp/does-not-exist.txt",
+        )
+
+        assert "does not exist" in result.content
+        cb["mark_tested"].assert_not_called()
+        assert all(
+            "hashcat" not in call.kwargs["cmd"][-1]
+            for call in kali_exec.exec_run.call_args_list
+        )
+
+    async def test_commix_run_builds_the_expected_command(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        commix_output = "[!] No parameter(s) found for testing.\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=commix_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[COMMIX_RUN_TOOL_NAME], url="/vuln.php", port=80)
+
+        assert result.content == commix_output
+        assert result.artifact == commix_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(commix_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 300 commix --batch -u http://10.0.0.5:80/vuln.php",
+        ]
+
+    async def test_commix_run_includes_data_and_param_flags_when_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(
+            tools[COMMIX_RUN_TOOL_NAME],
+            url="/vuln.php",
+            port=80,
+            data="cmd=ls",
+            param="cmd",
+        )
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "-d cmd=ls" in cmd
+        assert "-p cmd" in cmd
+
+    async def test_commix_run_never_sends_a_caller_supplied_host_only_this_targets_own_host(
+        self, kali_exec, patched_db_manager
+    ):
+        """Mirrors test_sqlmap_run_never_sends_a_caller_supplied_host_...
+        above - verified by temporarily making the URL construction naive/
+        free-form; that change makes this test go red since the naive URL
+        would still embed "evil.example.com" (CLAUDE.md 2.1)."""
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[COMMIX_RUN_TOOL_NAME], url="http://evil.example.com/vuln.php")
+
+        command = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "evil.example.com" not in command
+        assert "http://10.0.0.5:80/vuln.php" in command
+
+    async def test_commix_run_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[COMMIX_RUN_TOOL_NAME], url="/x", port=443)
+
+        assert "outside this target's authorized scope" in result.content
         kali_exec.exec_run.assert_not_called()
         cb["mark_tested"].assert_not_called()
 
