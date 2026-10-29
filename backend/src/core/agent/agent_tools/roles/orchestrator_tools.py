@@ -1,12 +1,13 @@
 """Orchestrator role's own NEW tool implementations - run_scouting,
-dispatch_pentest_batch, request_report - the only three tools this role
-has (see the tool matrix in the implementation plan). No target-touching
-tool at all: the orchestrator never acts on the target directly, only
-through the scouting/pentesting/reporting sub-agents each of these spawns
-and awaits via run_registry's own concurrency/run-lifecycle primitives
-(core/agent/run_registry.py) - never polled, each tool call blocks until
-its sub-agent(s) are completely done and returns their real result as the
-tool's own return value for the orchestrator's next turn.
+dispatch_pentest_batch, request_report, request_tool_access - the only
+four tools this role has (see the tool matrix in the implementation
+plan). No target-touching tool at all: the orchestrator never acts on the
+target directly, only through the scouting/pentesting/reporting
+sub-agents each of these spawns and awaits via run_registry's own
+concurrency/run-lifecycle primitives (core/agent/run_registry.py) - never
+polled, each tool call blocks until its sub-agent(s) are completely done
+and returns their real result as the tool's own return value for the
+orchestrator's next turn.
 
 Each sub-agent's own interrupt requests (e.g. request_port_access) surface
 through the exact same run_registry.pending_interrupts/
@@ -16,9 +17,9 @@ keyed by that sub-run's own agent_run_id, which is already a real AgentRun.id
 approval plumbing needs no role-specific case to resolve one."""
 
 import asyncio
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 from langchain_core.tools import tool
-from src.core import db_manager
+from src.core import db_manager, tool_groups
 from src.core.agent import agent_checkpointer, run_registry
 from src.core.agent.roles import common
 from src.schemas.agent_run_scheme import AgentRunState
@@ -33,6 +34,7 @@ from src.websocket import ws_registry, WsTypes, AgentInterruptRequest, AgentCont
 RUN_SCOUTING_TOOL_NAME = "run_scouting"
 DISPATCH_PENTEST_BATCH_TOOL_NAME = "dispatch_pentest_batch"
 REQUEST_REPORT_TOOL_NAME = "request_report"
+REQUEST_TOOL_ACCESS_TOOL_NAME = "request_tool_access"
 
 # dispatch_pentest_batch (and, less critically, run_scouting) write new
 # AttackVector rows and move existing ones to "testing" - request_report
@@ -42,15 +44,37 @@ REQUEST_REPORT_TOOL_NAME = "request_report"
 # vector that's simultaneously still being tested) - see
 # roles/common.py's make_guarded_tools_node docstring for why the whole
 # turn is rejected outright rather than trying to out-time it.
-WRITER_TOOL_NAMES = {RUN_SCOUTING_TOOL_NAME, DISPATCH_PENTEST_BATCH_TOOL_NAME}
+# request_tool_access also writes to the same AttackVector row
+# (extra_tool_groups) - treated as a writer for the exact same reason.
+WRITER_TOOL_NAMES = {
+    RUN_SCOUTING_TOOL_NAME,
+    DISPATCH_PENTEST_BATCH_TOOL_NAME,
+    REQUEST_TOOL_ACCESS_TOOL_NAME,
+}
 READER_TOOL_NAMES = {REQUEST_REPORT_TOOL_NAME}
-# The orchestrator's own three tools never touch the target directly (see
-# this module's own docstring) - only the sub-agents they spawn do, and
-# each of those surfaces its OWN interrupt need through its own
-# agent_run_id, independent of the orchestrator's turn. Nothing here ever
-# needs human approval at the orchestrator's level.
+# run_scouting/dispatch_pentest_batch/request_report never touch the
+# target directly (see this module's own docstring) - only the sub-agents
+# they spawn do, and each of those surfaces its OWN interrupt need through
+# its own agent_run_id, independent of the orchestrator's turn. Nothing
+# there ever needs human approval at the orchestrator's level.
+#
+# request_tool_access is the one exception: it is itself the approval
+# gate for letting a vector exceed the project's own enabled_tools
+# ceiling, so it always pauses regardless of should_interrupt - see its
+# own factory function below.
 INTERRUPT_GATED_TOOL_NAMES: set = set()
-ALWAYS_INTERRUPT_TOOL_NAMES: set = set()
+ALWAYS_INTERRUPT_TOOL_NAMES: set = {REQUEST_TOOL_ACCESS_TOOL_NAME}
+
+
+def _project_enabled_group_ids(project_settings) -> set:
+    """The project's own tool_groups ceiling, as a set of group ids - None
+    means every default_enabled group (mirrors tool_groups.tool_names_for's
+    own None-handling, but at the group-id level instead of the raw
+    tool-name level, since this module works with the ids an orchestrator
+    picks per-vector, not raw tool names)."""
+    if project_settings.enabled_tools is None:
+        return {g.id for g in tool_groups.TOOL_GROUPS if g.default_enabled}
+    return set(project_settings.enabled_tools)
 
 
 async def _drain_sub_agent(
@@ -225,8 +249,19 @@ def create_dispatch_pentest_batch_tool(
     orchestrator_run_id: str,
     should_interrupt: bool,
 ):
+    # Captured here, before the inner tool function's own `tool_groups`
+    # parameter exists - that parameter name is fixed by the tool's public
+    # signature (the orchestrator LLM calls it by that name) and would
+    # shadow the `src.core.tool_groups` module import for every reference
+    # inside dispatch_pentest_batch/run_one, so the frozenset is pulled out
+    # under its own name here instead of referencing the module directly
+    # down there.
+    valid_tool_group_ids = tool_groups.TOOL_GROUP_IDS
+
     @tool(DISPATCH_PENTEST_BATCH_TOOL_NAME)
-    async def dispatch_pentest_batch(vector_ids: List[str]) -> str:
+    async def dispatch_pentest_batch(
+        vector_ids: List[str], tool_groups: Optional[Dict[str, List[str]]] = None
+    ) -> str:
         """Spawns one pentesting sub-agent per vector id given, runs them
         CONCURRENTLY (bounded by this project's max_concurrent_agents -
         pass as many ids as you judge reasonable to run together, the
@@ -236,6 +271,15 @@ def create_dispatch_pentest_batch_tool(
 
         Args:
             vector_ids: One or more pending AttackVector ids to test now.
+            tool_groups: Optional, keyed by vector id. Each value is a list
+                of tool_groups ids (e.g. "ftp", "sqlmap") to narrow that
+                vector's dispatch to - a vector id omitted from this dict
+                keeps the project's own full enabled_tools. This can only
+                NARROW what a vector gets, never expand it beyond the
+                project's own settings - for that, call
+                request_tool_access first. An unknown group id anywhere in
+                this dict rejects that one vector's dispatch (others in the
+                same call are unaffected).
         """
         from src.core.agent.roles.agents import pentesting_agent as pentesting_mod
 
@@ -247,6 +291,9 @@ def create_dispatch_pentest_batch_tool(
         prompt_template = (
             project_settings.pentesting_starting_prompt or ""
         ).strip() or default_pentesting_prompt
+
+        project_default_ids = _project_enabled_group_ids(project_settings)
+        requested_tool_groups = tool_groups or {}
 
         async def run_one(vector_id: str) -> str:
             vector = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)
@@ -266,6 +313,42 @@ def create_dispatch_pentest_batch_tool(
             # decision").
             if vector.status not in (AttackVectorStatus.PENDING, AttackVectorStatus.TESTING):
                 return f"{vector_id}: not pending/testing (status={vector.status}) - skipped."
+
+            # tool_groups only ever NARROWS the project's own ceiling - an
+            # id this project doesn't enable at all is dropped, never
+            # added (effective_ids below). The only way to actually exceed
+            # project_default_ids is vector.extra_tool_groups, which only
+            # request_tool_access is ever allowed to write to.
+            requested = requested_tool_groups.get(vector_id)
+            note = ""
+            if requested is None:
+                narrowed = project_default_ids
+            else:
+                unknown = [g for g in requested if g not in valid_tool_group_ids]
+                if unknown:
+                    # Rejected immediately - must not raise, since every
+                    # vector in this batch runs concurrently under
+                    # asyncio.gather and one bad id must never cancel or
+                    # otherwise affect its siblings.
+                    return (
+                        f"{vector_id}: unknown tool group '{unknown[0]}' in "
+                        "tool_groups - dispatch rejected."
+                    )
+                requested_ids = set(requested)
+                narrowed = requested_ids & project_default_ids
+                dropped = sorted(requested_ids - project_default_ids)
+                if dropped:
+                    note += " (note: " + ", ".join(
+                        f"'{d}' not enabled for this project, ignored" for d in dropped
+                    ) + ")"
+
+            vector_extra_ids = set(vector.extra_tool_groups or [])
+            effective_ids = narrowed | vector_extra_ids
+            approved_extra = sorted(vector_extra_ids - narrowed)
+            if approved_extra:
+                note += (
+                    f" (approved extra tool group(s) in use: {', '.join(approved_extra)})"
+                )
 
             await run_registry.acquire_agent_slot(project_id, max_concurrent_agents)
             agent_run_id = None
@@ -303,7 +386,7 @@ def create_dispatch_pentest_batch_tool(
                     context_window=context_window,
                     allow_shell=project_settings.allow_shell,
                     allow_install_packages=project_settings.allow_install_packages,
-                    enabled_tools=project_settings.enabled_tools,
+                    enabled_tools=sorted(effective_ids),
                 )
                 rendered_prompt = common.render_target_prompt(
                     prompt_template, target, attack_vector=vector.description
@@ -366,7 +449,7 @@ def create_dispatch_pentest_batch_tool(
             refreshed = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)
             outcome = agent.outcome or {}
             summary = outcome.get("summary") or agent.finish_summary or "(no outcome reported)"
-            return f"{vector_id} [{refreshed.status}]: {summary}"
+            return f"{vector_id} [{refreshed.status}]: {summary}{note}"
 
         # dict.fromkeys preserves first-seen order while dropping repeats -
         # the same id listed twice in one batch must dispatch exactly one
@@ -377,6 +460,71 @@ def create_dispatch_pentest_batch_tool(
         return "\n".join(results)
 
     return dispatch_pentest_batch
+
+
+def create_request_tool_access_tool(project_id: str, target_id: str):
+    """Builds request_tool_access, bound to a specific project/target. The
+    only sanctioned way for a dispatched pentesting sub-agent to use a
+    tool group beyond what this project's own enabled_tools would
+    otherwise allow, scoped to exactly one AttackVector via its
+    extra_tool_groups (see dispatch_pentest_batch's own narrowing/clamp
+    logic above - the two are two halves of the same mechanism and must
+    agree on what "allowed" means).
+
+    Deliberately NOT an automated grant, same rationale as
+    create_request_port_access_tool: this always pauses for human approval
+    (see this module's own ALWAYS_INTERRUPT_TOOL_NAMES, independent of
+    this project's should_interrupt setting) rather than letting the
+    orchestrator unilaterally expand what a vector can do. On denial,
+    LangGraph's existing rejection path means this function's body never
+    runs at all."""
+
+    @tool(REQUEST_TOOL_ACCESS_TOOL_NAME)
+    async def request_tool_access(vector_id: str, tool_group: str, reason: str) -> str:
+        """Asks a human operator for permission to let a specific attack
+        vector's future pentesting dispatches use a tool group beyond what
+        this project's own settings normally allow. This ALWAYS pauses for
+        human approval, regardless of this project's approval setting -
+        call it BEFORE dispatching a vector whose description names a tool
+        you don't currently have. Approval is scoped to this one vector
+        only and persists across redispatches - it never changes the
+        project's own settings.
+
+        Args:
+            vector_id: The AttackVector id this approval applies to.
+            tool_group: A tool_groups id (e.g. "sqlmap", "metasploit") -
+                must be a real, known id.
+            reason: A short, concrete justification - what the vector's
+                description suggests is needed and why.
+        """
+        if tool_group not in tool_groups.TOOL_GROUP_IDS:
+            return f"'{tool_group}' is not a known tool group - nothing changed."
+
+        loop = asyncio.get_running_loop()
+        vector = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)
+        if vector is None or str(vector.target_id) != str(target_id):
+            return f"{vector_id}: not found."
+
+        project_settings = await loop.run_in_executor(None, db_manager.get_project_settings, project_id)
+        already_allowed = _project_enabled_group_ids(project_settings) | set(vector.extra_tool_groups or [])
+        if tool_group in already_allowed:
+            return f"'{tool_group}' is already available for {vector_id} - no change needed."
+
+        # By the time this line runs, a human has already approved the
+        # request (see this module's own ALWAYS_INTERRUPT_TOOL_NAMES) -
+        # LangGraph's rejection path on denial means this function body
+        # never runs at all, same as request_port_access.
+        new_extra = sorted(set(vector.extra_tool_groups or []) | {tool_group})
+        vector.extra_tool_groups = new_extra
+        vector = await loop.run_in_executor(None, db_manager.update_attack_vector, vector)
+        await run_registry.broadcast_attack_vector(vector)
+
+        return (
+            f"Approved - '{tool_group}' is now available for {vector_id} "
+            f"(reason: {reason}). This vector's extra tool groups: {', '.join(new_extra)}."
+        )
+
+    return request_tool_access
 
 
 def create_request_report_tool(project_id: str, target_id: str, orchestrator_run_id: str):

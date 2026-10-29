@@ -358,12 +358,12 @@ def build_orchestrator_agent_tools(
     should_interrupt: bool,
     on_scouting_done: Callable[[], None],
 ) -> list:
-    """Orchestrator gets exactly three tools - run_scouting,
-    dispatch_pentest_batch, request_report - and nothing else: no shell,
-    no session, no target-touching tool of its own at all (see the tool
-    matrix in the implementation plan). It never acts on the target
-    directly, only through the scouting/pentesting/reporting sub-agents
-    each of these spawns and awaits."""
+    """Orchestrator gets exactly four tools - run_scouting,
+    dispatch_pentest_batch, request_report, request_tool_access - and
+    nothing else: no shell, no session, no target-touching tool of its own
+    at all (see the tool matrix in the implementation plan). It never acts
+    on the target directly, only through the scouting/pentesting/reporting
+    sub-agents each of these spawns and awaits."""
     from .roles import orchestrator_tools
 
     return [
@@ -374,4 +374,5 @@ def build_orchestrator_agent_tools(
             project_id, target_id, orchestrator_run_id, should_interrupt
         ),
         orchestrator_tools.create_request_report_tool(project_id, target_id, orchestrator_run_id),
+        orchestrator_tools.create_request_tool_access_tool(project_id, target_id),
     ]

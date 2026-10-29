@@ -49,6 +49,7 @@ class _FakeSubAgent:
         self.finish_summary = "done"
         self.outcome = {"outcome": "vulnerable", "summary": "ok", "new_vectors": []}
         self.created_vulnerability = None
+        self.kwargs = kwargs
         _FakeSubAgent.instances.append(self)
 
     async def start_agent(self, *args, **kwargs):
@@ -435,3 +436,193 @@ async def test_run_scouting_reports_total_pending_count_after_run(monkeypatch, i
 
     on_scouting_done.assert_called_once()
     assert "2 attack vector(s) now pending" in result
+
+
+# --- dispatch_pentest_batch: tool_groups narrowing is a ceiling, never an
+# expansion path - B2's actual enforcement mechanism (see
+# orchestrator_tools.py's module docstring and _project_enabled_group_ids). ---
+
+
+def _pending_vector(vector_id, target_id, extra_tool_groups=None):
+    return MagicMock(
+        id=vector_id,
+        target_id=target_id,
+        status=AttackVectorStatus.PENDING,
+        description="d",
+        extra_tool_groups=extra_tool_groups,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pentest_batch_tool_groups_narrows_below_project_default(monkeypatch, ids):
+    # Project allows every default-enabled group (enabled_tools=None), but
+    # this one vector is narrowed down to just "ftp" via tool_groups.
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.return_value = _pending_vector("v-1", ids["target_id"])
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    tool = orchestrator_tools.create_dispatch_pentest_batch_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
+    )
+    await tool.ainvoke({"vector_ids": ["v-1"], "tool_groups": {"v-1": ["ftp"]}})
+
+    assert len(_FakeSubAgent.instances) == 1
+    assert _FakeSubAgent.instances[0].kwargs["enabled_tools"] == ["ftp"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pentest_batch_tool_groups_never_expands_past_project_default(
+    monkeypatch, ids
+):
+    # The project's own enabled_tools is explicitly just "ftp" - asking for
+    # "metasploit" too via tool_groups must NOT add it. This is the test to
+    # break-and-watch-go-red per CLAUDE.md 2.1.
+    settings = MagicMock(
+        scouting_model_name="m",
+        base_model_name="m",
+        pentesting_model_name="m",
+        reporting_model_name="m",
+        max_context_window=None,
+        max_concurrent_agents=5,
+        allow_shell=False,
+        allow_install_packages=False,
+        enabled_tools=["ftp"],
+        scouting_starting_prompt="",
+        pentesting_starting_prompt="",
+        reporting_starting_prompt="",
+    )
+    fake_db = _wire_common_mocks(monkeypatch, ids, project_settings=settings)
+    fake_db.get_attack_vector.return_value = _pending_vector("v-1", ids["target_id"])
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    tool = orchestrator_tools.create_dispatch_pentest_batch_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
+    )
+    result = await tool.ainvoke(
+        {"vector_ids": ["v-1"], "tool_groups": {"v-1": ["ftp", "metasploit"]}}
+    )
+
+    assert _FakeSubAgent.instances[0].kwargs["enabled_tools"] == ["ftp"]
+    assert "metasploit" not in _FakeSubAgent.instances[0].kwargs["enabled_tools"]
+    # The drop is surfaced to the orchestrator, not swallowed silently.
+    assert "metasploit" in result
+    assert "ignored" in result
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pentest_batch_unknown_group_id_rejects_only_that_vector(monkeypatch, ids):
+    target_id = ids["target_id"]
+    vectors = {
+        "v-1": _pending_vector("v-1", target_id),
+        "v-2": _pending_vector("v-2", target_id),
+    }
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.side_effect = lambda vid: vectors[vid]
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    tool = orchestrator_tools.create_dispatch_pentest_batch_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
+    )
+    result = await tool.ainvoke(
+        {"vector_ids": ["v-1", "v-2"], "tool_groups": {"v-1": ["not-a-real-id"]}}
+    )
+
+    v1_line = next(line for line in result.splitlines() if line.startswith("v-1"))
+    v2_line = next(line for line in result.splitlines() if line.startswith("v-2"))
+    assert "not-a-real-id" in v1_line
+    assert "rejected" in v1_line
+
+    # Only one sub-agent was ever constructed, and it's v-2's - the bad id
+    # for v-1 never spawned anything, and v-1's rejection didn't cancel or
+    # otherwise affect v-2 running concurrently under asyncio.gather.
+    assert len(_FakeSubAgent.instances) == 1
+    assert _FakeSubAgent.instances[0].kwargs["attack_vector_id"] == "v-2"
+    assert "v-2" in v2_line
+
+
+# --- request_tool_access: the only expansion path, always human-gated ---
+
+
+@pytest.mark.asyncio
+async def test_request_tool_access_approves_and_dispatch_later_picks_it_up(monkeypatch, ids):
+    target_id = ids["target_id"]
+    vector = _pending_vector("v-1", target_id)
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.return_value = vector
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    access_tool = orchestrator_tools.create_request_tool_access_tool(
+        ids["project_id"], ids["target_id"]
+    )
+    approval_result = await access_tool.ainvoke(
+        {"vector_id": "v-1", "tool_group": "metasploit", "reason": "needs msf exploit"}
+    )
+
+    assert "Approved" in approval_result
+    fake_db.update_attack_vector.assert_called_once()
+    persisted_vector = fake_db.update_attack_vector.call_args.args[0]
+    assert persisted_vector.extra_tool_groups == ["metasploit"]
+
+    # Simulate the persisted state: the same vector object now carries the
+    # approved group, same as a fresh get_attack_vector would return after
+    # a real commit. The project's own enabled_tools never changed.
+    vector.extra_tool_groups = ["metasploit"]
+
+    dispatch_tool = orchestrator_tools.create_dispatch_pentest_batch_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
+    )
+    await dispatch_tool.ainvoke({"vector_ids": ["v-1"]})
+
+    assert "metasploit" in _FakeSubAgent.instances[0].kwargs["enabled_tools"]
+
+
+@pytest.mark.asyncio
+async def test_request_tool_access_already_available_is_a_no_op(monkeypatch, ids):
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.return_value = _pending_vector("v-1", ids["target_id"])
+
+    access_tool = orchestrator_tools.create_request_tool_access_tool(
+        ids["project_id"], ids["target_id"]
+    )
+    # "ftp" is already default_enabled for a project with enabled_tools=None.
+    result = await access_tool.ainvoke(
+        {"vector_id": "v-1", "tool_group": "ftp", "reason": "just in case"}
+    )
+
+    assert "already available" in result
+    fake_db.update_attack_vector.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_request_tool_access_rejects_unknown_group(monkeypatch, ids):
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+
+    access_tool = orchestrator_tools.create_request_tool_access_tool(
+        ids["project_id"], ids["target_id"]
+    )
+    result = await access_tool.ainvoke(
+        {"vector_id": "v-1", "tool_group": "not-a-real-id", "reason": "because"}
+    )
+
+    assert "not a known tool group" in result
+    fake_db.get_attack_vector.assert_not_called()
+    fake_db.update_attack_vector.assert_not_called()
+
+
+def test_request_tool_access_is_always_interrupt_gated():
+    assert (
+        orchestrator_tools.REQUEST_TOOL_ACCESS_TOOL_NAME
+        in orchestrator_tools.ALWAYS_INTERRUPT_TOOL_NAMES
+    )
+
+
+def test_build_orchestrator_agent_tools_returns_four_tools_including_request_tool_access(ids):
+    from src.core.agent.agent_tools.builders import build_orchestrator_agent_tools
+
+    tools = build_orchestrator_agent_tools(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False, lambda: None
+    )
+
+    assert len(tools) == 4
+    tool_names = {t.name for t in tools}
+    assert orchestrator_tools.REQUEST_TOOL_ACCESS_TOOL_NAME in tool_names
