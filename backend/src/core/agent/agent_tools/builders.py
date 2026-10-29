@@ -8,17 +8,17 @@ from typing import Callable, List, Optional
 from src.core import tool_groups
 from src.schemas import Vulnerability
 
-from .admin_tools import (
+from .category.admin_tools import (
     create_attack_log_tool,
     create_finish_task_tool,
     create_install_package_tool,
     create_request_port_access_tool,
     create_vulnerability_tool,
 )
-from .file_tools import create_file_tools
-from .guided_session_tools import create_guided_session_tools
-from .pentest_tools import create_pentest_tools
-from .terminal_tools import create_terminal_tools
+from .category.file_tools import create_file_tools
+from .category.guided_session_tools import create_guided_session_tools
+from .category.pentest_tools import create_pentest_tools
+from .category.terminal_tools import create_terminal_tools
 
 
 def build_agent_tools(
@@ -122,7 +122,7 @@ def build_agent_tools(
     # Deferred import - see this module's own comment above
     # build_scouting_agent_tools for why (single_agent_vector_tools needs
     # run_registry, which imports this package back).
-    from ..roles.tools import single_agent_vector_tools as vector_tools
+    from .roles import single_agent_vector_tools as vector_tools
 
     tools.append(
         vector_tools.create_propose_attack_vector_tool(
@@ -153,7 +153,7 @@ def build_agent_tools(
 # mode's own, above) - this is the single place "which tools does role X
 # get" is decided, so that policy never has to be found by reading four
 # different files. Each builder imports its role's OWN new tool
-# implementations from roles/tools/<role>_tools.py - a DEFERRED import (inside
+# implementations from agent_tools/roles/<role>_tools.py - a DEFERRED import (inside
 # the function, not at module level) specifically because those modules
 # import this package (for the shared tool-name constants their own
 # writer/reader sets are built from) - importing them back at this
@@ -186,7 +186,7 @@ def build_scouting_agent_tools(
     plan) plus the always-available request_port_access/file tools and
     shell access, and exactly one terminal action of its own,
     propose_attack_vector (plus finish_scouting)."""
-    from ..roles.tools import scouting_tools
+    from .roles import scouting_tools
 
     pentest_tools = create_pentest_tools(
         project_id, target_id, on_enumeration, mark_tested, on_raw_output
@@ -251,7 +251,7 @@ def build_pentesting_agent_tools(
     tool_groups/enabled_tools, same gating as today) plus all of the ftp/
     ssh/telnet guided tools - and exactly one terminal action of its own,
     report_outcome."""
-    from ..roles.tools import pentesting_tools
+    from .roles import pentesting_tools
 
     pentest_tools = create_pentest_tools(
         project_id, target_id, on_enumeration, mark_tested, on_raw_output
@@ -364,7 +364,7 @@ def build_orchestrator_agent_tools(
     matrix in the implementation plan). It never acts on the target
     directly, only through the scouting/pentesting/reporting sub-agents
     each of these spawns and awaits."""
-    from ..roles.tools import orchestrator_tools
+    from .roles import orchestrator_tools
 
     return [
         orchestrator_tools.create_run_scouting_tool(

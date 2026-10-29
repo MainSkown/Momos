@@ -1,4 +1,4 @@
-"""roles/tools/orchestrator_tools.py - run_scouting/dispatch_pentest_batch/
+"""agent_tools/roles/orchestrator_tools.py - run_scouting/dispatch_pentest_batch/
 request_report, _drain_sub_agent, and the writer/reader ordering hazard
 the module's own docstring says roles/common.py's guarded-tools-node must
 reject outright. Sub-agents (ScoutingAgent/PentestingAgent/ReportingAgent)
@@ -19,7 +19,7 @@ from langgraph.prebuilt import ToolNode
 
 from src.core.agent.roles import common
 from src.core.agent.roles.agents import pentesting_agent, reporting_agent, scouting_agent
-from src.core.agent.roles.tools import orchestrator_tools
+from src.core.agent.agent_tools.roles import orchestrator_tools
 from src.schemas.agent_run_scheme import AgentRunState
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 

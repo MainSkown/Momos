@@ -1,7 +1,7 @@
 """Orchestrator role: the pipeline's own outer loop - run scouting once,
 then repeatedly dispatch batches of pending attack vectors for pentesting
 and request a report for anything that comes back vulnerable - never
-acting on the target itself (see roles/tools/orchestrator_tools.py's own
+acting on the target itself (see agent_tools/roles/orchestrator_tools.py's own
 docstring for why it has no shell/session/scanning tool at all). A
 legitimate fork of agent.py's Agent, not a parametrization of it - see the
 "Each role is its own file/class" decision in the implementation plan.
@@ -31,7 +31,7 @@ from src.core import db_manager, settings
 from src.core.agent import agent_tools, run_registry
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 from .. import common
-from ..tools import orchestrator_tools
+from src.core.agent.agent_tools.roles import orchestrator_tools
 
 _STATUS_DISPLAY_ORDER = (
     "pending",

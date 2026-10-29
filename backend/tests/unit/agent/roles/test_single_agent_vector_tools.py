@@ -1,4 +1,4 @@
-"""roles/tools/single_agent_vector_tools.py - start_attack_vector/
+"""agent_tools/roles/single_agent_vector_tools.py - start_attack_vector/
 report_outcome for the Single Agent flow. report_outcome here resolves
 "whichever vector is current" with NO attack_vector_id argument (unlike
 pentesting_tools' own version, which takes one explicitly) - a silent
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.agent import agent_tools
-from src.core.agent.roles.tools import single_agent_vector_tools as sa_tools
+from src.core.agent.agent_tools.roles import single_agent_vector_tools as sa_tools
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 
 

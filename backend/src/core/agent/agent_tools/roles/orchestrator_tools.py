@@ -145,7 +145,7 @@ def create_run_scouting_tool(
         Call this once before dispatching any pentesting; calling it again
         later just re-enumerates (harmless, but wasteful - prefer
         dispatching against what it already found)."""
-        from ..agents import scouting_agent as scouting_mod
+        from src.core.agent.roles.agents import scouting_agent as scouting_mod
 
         loop = asyncio.get_running_loop()
         target = await loop.run_in_executor(None, db_manager.get_target, target_id)
@@ -237,7 +237,7 @@ def create_dispatch_pentest_batch_tool(
         Args:
             vector_ids: One or more pending AttackVector ids to test now.
         """
-        from ..agents import pentesting_agent as pentesting_mod
+        from src.core.agent.roles.agents import pentesting_agent as pentesting_mod
 
         loop = asyncio.get_running_loop()
         target = await loop.run_in_executor(None, db_manager.get_target, target_id)
@@ -392,7 +392,7 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
         Args:
             vector_id: The AttackVector id to write a report for.
         """
-        from ..agents import reporting_agent as reporting_mod
+        from src.core.agent.roles.agents import reporting_agent as reporting_mod
 
         loop = asyncio.get_running_loop()
         vector = await loop.run_in_executor(None, db_manager.get_attack_vector, vector_id)

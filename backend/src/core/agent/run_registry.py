@@ -87,7 +87,7 @@ current_session_for_target: Dict[str, str] = {}
 
 
 def current_session_id_for_target(target_id: str) -> Optional[str]:
-    """Small read-only accessor for the roles/tools/* modules that build
+    """Small read-only accessor for the agent_tools/roles/* modules that build
     AttackVector rows directly (scouting_tools.py/
     single_agent_vector_tools.py/pentesting_tools.py) - they already know
     target_id at tool-construction time, so this is all they need to stamp
@@ -468,7 +468,7 @@ async def persist_and_broadcast(
 
 async def broadcast_attack_vector(vector: AttackVector) -> None:
     """Pushes one AttackVector's current row over the websocket - called
-    by every place in roles/tools/ that creates or updates one
+    by every place in agent_tools/roles/ that creates or updates one
     (scouting_tools.create_propose_attack_vector_tool,
     pentesting_tools.create_report_outcome_tool,
     orchestrator_tools.py's dispatch_pentest_batch/request_report) right

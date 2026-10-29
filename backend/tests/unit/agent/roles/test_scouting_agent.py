@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.core.agent.roles.agents import scouting_agent as scouting_mod
-from src.core.agent.roles.tools import scouting_tools
+from src.core.agent.agent_tools.roles import scouting_tools
 
 
 def _make_agent(monkeypatch, allow_shell=False):

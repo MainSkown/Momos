@@ -1,11 +1,11 @@
-"""roles/tools/scouting_tools.py - propose_attack_vector/finish_scouting."""
+"""agent_tools/roles/scouting_tools.py - propose_attack_vector/finish_scouting."""
 
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
 
-from src.core.agent.roles.tools import scouting_tools
+from src.core.agent.agent_tools.roles import scouting_tools
 
 
 @pytest.fixture

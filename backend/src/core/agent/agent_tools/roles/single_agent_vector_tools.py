@@ -3,11 +3,12 @@ start_attack_vector, report_outcome - giving it the same discover-then-work
 pipeline multi-agent mode already has (scouting_tools.py/pentesting_tools.py),
 but as one agent doing both discovery and testing itself: no dispatch/
 orchestration step, since there's only one agent to pick its own next
-vector. Lives under roles/tools/ (not agent_tools.py itself) purely to
-reuse run_registry.broadcast_attack_vector - agent_tools.py can't import
-run_registry at module level (run_registry imports agent_tools, so that
-would cycle); this module, like scouting_tools.py/pentesting_tools.py, is
-instead deferred-imported from inside agent_tools.build_agent_tools.
+vector. Lives under agent_tools/roles/ (not agent_tools's own top level)
+purely to reuse run_registry.broadcast_attack_vector - agent_tools's top
+level can't import run_registry at module level (run_registry imports
+agent_tools, so that would cycle); this module, like scouting_tools.py/
+pentesting_tools.py, is instead deferred-imported from inside
+agent_tools.build_agent_tools.
 
 Unlike pentesting's report_outcome (one AttackVector bound at tool-build
 time, since a pentesting sub-agent only ever works one), the single agent

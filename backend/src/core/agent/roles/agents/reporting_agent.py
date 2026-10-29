@@ -28,7 +28,7 @@ from src.core import settings
 from src.core.agent import agent_tools
 from src.schemas import AgentLog, Vulnerability
 from .. import common
-from ..tools import reporting_tools
+from src.core.agent.agent_tools.roles import reporting_tools
 
 # Each entry's own raw_output is already capped once at the point it was
 # first stored (agent_tools._cap_raw_output, RAW_OUTPUT_MAX_CHARS=20000) -

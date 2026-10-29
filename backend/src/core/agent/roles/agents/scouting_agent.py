@@ -29,7 +29,7 @@ from src.core.agent import agent_tools
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
 from .. import common
-from ..tools import scouting_tools
+from src.core.agent.agent_tools.roles import scouting_tools
 
 _MAX_ENUMERATION_PROPOSED_SHOWN = 40
 

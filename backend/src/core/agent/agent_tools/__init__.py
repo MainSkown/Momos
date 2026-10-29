@@ -24,7 +24,7 @@ both keep working exactly as they did when this was a single flat module."""
 from src.core import db_manager  # noqa: F401 - re-exported for agent_tools.db_manager
 from src.core.kali_integration import kali_registry  # noqa: F401 - re-exported for agent_tools.kali_registry
 
-from .common import (
+from .category.common import (
     CLAIM_REJECTED_MARKER,
     DEFAULT_SESSION_COMMAND,
     DEFAULT_SESSION_NAME,
@@ -69,7 +69,7 @@ from .common import (
     _send_and_condense,
     _verify_claim_against_evidence,
 )
-from .file_tools import (
+from .category.file_tools import (
     DOWNLOAD_FILE_MAX_BYTES,
     DOWNLOAD_FILE_TIMEOUT_SECONDS,
     DOWNLOAD_FILE_TOOL_NAME,
@@ -86,7 +86,7 @@ from .file_tools import (
     _SAFE_FILENAME_PATTERN,
     create_file_tools,
 )
-from .pentest_tools import (
+from .category.pentest_tools import (
     DEFAULT_GOBUSTER_WORDLIST,
     GOBUSTER_SCAN_TIMEOUT_SECONDS,
     GOBUSTER_SCAN_TOOL_NAME,
@@ -126,7 +126,7 @@ from .pentest_tools import (
     _summarize_nmap_entries,
     create_pentest_tools,
 )
-from .guided_session_tools import (
+from .category.guided_session_tools import (
     FTP_COMMAND_READ_SECONDS,
     FTP_COMMAND_TOOL_NAME,
     FTP_CONNECT_TOOL_NAME,
@@ -148,7 +148,7 @@ from .guided_session_tools import (
     _send_ftp_passive,
     create_guided_session_tools,
 )
-from .terminal_tools import (
+from .category.terminal_tools import (
     CLOSE_SESSION_TOOL_NAME,
     INTERRUPT_SESSION_TOOL_NAME,
     LIST_SESSIONS_TOOL_NAME,
@@ -171,7 +171,7 @@ from .terminal_tools import (
     _suggest_command_fix,
     create_terminal_tools,
 )
-from .admin_tools import (
+from .category.admin_tools import (
     ATTACK_LOG_TOOL_NAME,
     ATTACK_OUTCOMES,
     CVSS4_EXAMPLE_VECTOR,
