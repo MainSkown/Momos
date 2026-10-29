@@ -247,6 +247,8 @@ class DatabaseManager:
             conn.execute(text("ALTER TABLE agentrun ADD COLUMN IF NOT EXISTS session_id UUID"))
             conn.execute(text("ALTER TABLE agentlog ADD COLUMN IF NOT EXISTS session_id UUID"))
             conn.execute(text("ALTER TABLE attackvector ADD COLUMN IF NOT EXISTS session_id UUID"))
+            # TEXT[] is what ARRAY(String) maps to - same as projectsettings.enabled_tools above.
+            conn.execute(text("ALTER TABLE attackvector ADD COLUMN IF NOT EXISTS extra_tool_groups TEXT[]"))
             conn.commit()
 
         # Indexes for session_id (all three tables) and target_id

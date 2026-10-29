@@ -1,8 +1,9 @@
 import uuid
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 from sqlmodel import SQLModel, Field, Relationship, Column, DateTime
+from sqlalchemy import ARRAY, String
 from . import Target
 
 
@@ -60,6 +61,13 @@ class AttackVectorBase(SQLModel):
     # every past one too - see DatabaseManager.get_attack_vectors_for_target.
     session_id: Optional[uuid.UUID] = Field(
         default=None, foreign_key="testsession.id", index=True
+    )
+    # Tool groups approved for this vector beyond what the project's
+    # enabled_tools (and the orchestrator's per-dispatch narrowing) would
+    # otherwise allow. Persists across redispatches of the same vector and
+    # only ever grows - nothing auto-clears it. Set by request_tool_access.
+    extra_tool_groups: Optional[List[str]] = Field(
+        default=None, sa_column=Column(ARRAY(String))
     )
 
 
