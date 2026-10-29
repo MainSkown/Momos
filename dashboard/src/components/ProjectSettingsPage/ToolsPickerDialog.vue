@@ -1,6 +1,6 @@
 <template>
   <Dialog v-model:visible="visible" :title="$t('settings.tools_dialog_title')">
-    <div class="tools-picker-body scrollable-panel column gap-low" style="max-height: 60vh">
+    <div class="tools-picker-body scrollable-panel" style="max-height: 70vh">
       <div
         v-for="group in TOOL_GROUPS"
         :key="group.id"
@@ -106,8 +106,17 @@ function toggle(group: (typeof TOOL_GROUPS)[number]) {
 
 <style scoped>
 .tools-picker-body {
-  width: 420px;
+  /* Three columns instead of one long list - the dialog was getting tall
+     with 20 groups in a single column, and three ~300px columns read
+     comfortably at this content's line length without needing the extra
+     per-row chrome a card layout would add. */
+  width: 960px;
+  max-width: calc(100vw - 48px);
   padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px 24px;
+  align-content: start;
 }
 
 .tool-group-row {
