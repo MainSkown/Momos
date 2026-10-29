@@ -39,6 +39,7 @@ from pydantic import ValidationError
 
 from src.core.agent import agent_tools
 from src.core.agent.agent_tools import (
+    DNS_RECON_TOOL_NAME,
     DOWNLOAD_FILE_TOOL_NAME,
     FTP_COMMAND_TOOL_NAME,
     FTP_CONNECT_TOOL_NAME,
@@ -50,6 +51,10 @@ from src.core.agent.agent_tools import (
     NEW_SESSION_TOOL_NAME,
     NIKTO_SCAN_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
+    PACKET_CAPTURE_TOOL_NAME,
+    RESPONDER_READ_TOOL_NAME,
+    RESPONDER_START_TOOL_NAME,
+    RESPONDER_STOP_TOOL_NAME,
     RUN_PYTHON_SCRIPT_TOOL_NAME,
     RUN_TOOL_NAME,
     SMB_ENUM_TOOL_NAME,
@@ -57,7 +62,9 @@ from src.core.agent.agent_tools import (
     SQLMAP_RUN_TOOL_NAME,
     SSH_RUN_TOOL_NAME,
     SWITCH_SESSION_TOOL_NAME,
+    TESTSSL_SCAN_TOOL_NAME,
     WHATWEB_SCAN_TOOL_NAME,
+    WPSCAN_ENUM_TOOL_NAME,
     WRITE_LOCAL_FILE_TOOL_NAME,
     create_file_tools,
     create_guided_session_tools,
@@ -555,6 +562,237 @@ class TestCreatePentestTools:
         assert "evil.example.com" not in command
         assert "http://10.0.0.5:80/x" in command
 
+    async def test_testssl_scan_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[443])
+        testssl_output = "Testing server preferences\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=testssl_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[TESTSSL_SCAN_TOOL_NAME], port=443)
+
+        assert result.content == testssl_output
+        assert result.artifact == testssl_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(testssl_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 240 testssl --warnings off 10.0.0.5:443",
+        ]
+
+    async def test_testssl_scan_includes_the_starttls_flag_when_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=None)
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[TESTSSL_SCAN_TOOL_NAME], port=25, starttls="smtp")
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "--starttls smtp" in cmd
+        assert "10.0.0.5:25" in cmd
+
+    async def test_testssl_scan_rejects_an_invalid_starttls_value_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=None)
+        tools, cb = self._build()
+
+        result = await _invoke(tools[TESTSSL_SCAN_TOOL_NAME], starttls="smtp;id")
+
+        assert "Invalid `starttls`" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_testssl_scan_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[TESTSSL_SCAN_TOOL_NAME], port=443)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_wpscan_enum_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        wpscan_output = "[+] WordPress version 6.1 identified\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=wpscan_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[WPSCAN_ENUM_TOOL_NAME])
+
+        assert result.content == wpscan_output
+        assert result.artifact == wpscan_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(wpscan_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 180 wpscan --url http://10.0.0.5:80/ "
+            "--enumerate vp,vt,u --no-update",
+        ]
+
+    async def test_wpscan_enum_never_sends_a_caller_supplied_host_only_this_targets_own_host(
+        self, kali_exec, patched_db_manager
+    ):
+        """Mirrors test_sqlmap_run_never_sends_a_caller_supplied_host_...
+        above - verified by temporarily making the URL construction naive/
+        free-form; that change makes this test go red since the naive URL
+        would still embed "evil.example.com" (CLAUDE.md 2.1)."""
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[WPSCAN_ENUM_TOOL_NAME], path="http://evil.example.com/wp")
+
+        command = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "evil.example.com" not in command
+        assert "http://10.0.0.5:80/wp" in command
+
+    async def test_wpscan_enum_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[WPSCAN_ENUM_TOOL_NAME], port=443)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_dns_recon_omitted_nameserver_resolves_to_this_runs_own_target(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"std results\n")
+        tools, cb = self._build()
+
+        result = await _invoke(tools[DNS_RECON_TOOL_NAME], domain="example.com")
+
+        assert result.content == "std results\n"
+        cb["mark_tested"].assert_called_once()
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 120 dnsrecon -d example.com -n 10.0.0.5 -t std",
+        ]
+
+    async def test_dns_recon_axfr_mode_passes_the_axfr_flag_to_dnsrecon(
+        self, kali_exec, patched_db_manager
+    ):
+        """Verified by breaking it: temporarily hardcoding `-t std`
+        regardless of `mode` makes this test go red (CLAUDE.md 2.1)."""
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"axfr results\n")
+        tools, cb = self._build()
+
+        await _invoke(
+            tools[DNS_RECON_TOOL_NAME],
+            domain="example.com",
+            nameserver="ns1.example.com",
+            mode="axfr",
+        )
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "-t axfr" in cmd
+        assert "-n ns1.example.com" in cmd
+
+    async def test_dns_recon_rejects_an_invalid_mode_outright(self, kali_exec):
+        tools, _ = self._build()
+
+        with pytest.raises(ValidationError):
+            await _invoke(tools[DNS_RECON_TOOL_NAME], domain="example.com", mode="brute")
+
+        kali_exec.exec_run.assert_not_called()
+
+    async def test_dns_recon_rejects_an_invalid_domain_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        tools, cb = self._build()
+
+        result = await _invoke(tools[DNS_RECON_TOOL_NAME], domain="example.com; id")
+
+        assert "Invalid `domain`" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_packet_capture_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        capture_output = "5 packets captured\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=capture_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[PACKET_CAPTURE_TOOL_NAME], duration_seconds=10)
+
+        assert result.content == capture_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(capture_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 25 timeout 10 tshark -i any -f 'host 10.0.0.5' "
+            "-a duration:10",
+        ]
+
+    async def test_packet_capture_includes_max_packets_flag_when_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[PACKET_CAPTURE_TOOL_NAME], duration_seconds=10, max_packets=50)
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "-c 50" in cmd
+
+    async def test_packet_capture_filter_always_pins_the_target_host_regardless_of_input(
+        self, kali_exec, patched_db_manager
+    ):
+        """The one property that keeps a capture inside the authorized
+        scope: the BPF filter sent to tshark is always "host <target ip>",
+        never anything caller-influenced. Verified by breaking it:
+        temporarily building the filter from an extra free-form argument
+        (or dropping the host entirely) makes this test go red (CLAUDE.md
+        2.1) - there is no argument on this tool that should be able to
+        change the filter at all."""
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"ok\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[PACKET_CAPTURE_TOOL_NAME], duration_seconds=5, max_packets=1)
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "host 10.0.0.5" in cmd
+
+    async def test_packet_capture_rejects_a_duration_above_the_cap_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        tools, cb = self._build()
+
+        result = await _invoke(tools[PACKET_CAPTURE_TOOL_NAME], duration_seconds=121)
+
+        assert "must be at most" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
 
 class TestCreateGuidedSessionTools:
     def _build(self, **callbacks):
@@ -745,6 +983,157 @@ class TestCreateGuidedSessionTools:
 
         assert "No MySQL session is currently open" in result.content
         assert fake_session_manager.run_in_current_session_calls == []
+
+    async def test_responder_start_opens_a_background_session_without_blocking_on_a_read(
+        self, fake_session_manager
+    ):
+        """Unlike mysql_connect's own initial read, responder_start must
+        not wait on run_in_current_session at all - responder runs
+        indefinitely, so there's nothing to usefully wait for at launch
+        time (see responder_start's own docstring)."""
+        tools, cb = self._build()
+
+        result = await _invoke(tools[RESPONDER_START_TOOL_NAME])
+
+        assert fake_session_manager.sessions["responder"].command == "responder -I eth0"
+        assert fake_session_manager.current_name == "responder"
+        assert fake_session_manager.run_in_current_session_calls == []
+        cb["mark_tested"].assert_called_once()
+        cb["on_session_change"].assert_called_once_with("responder", "responder -I eth0")
+        assert result.artifact is None
+
+    async def test_responder_start_with_custom_interface_builds_the_expected_command(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        await _invoke(tools[RESPONDER_START_TOOL_NAME], interface="eth1")
+
+        assert fake_session_manager.sessions["responder"].command == "responder -I eth1"
+
+    async def test_responder_start_rejects_a_newline_in_interface_before_touching_the_session(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        result = await _invoke(tools[RESPONDER_START_TOOL_NAME], interface="eth0\nrm -rf /")
+
+        assert "cannot contain newlines" in result.content
+        assert fake_session_manager.sessions == {}
+
+    async def test_responder_start_refuses_to_reopen_an_already_running_session(
+        self, fake_session_manager
+    ):
+        fake_session_manager.sessions["responder"] = KaliSession(
+            name="responder",
+            command="responder -I eth0",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "responder"
+        tools, cb = self._build()
+
+        result = await _invoke(tools[RESPONDER_START_TOOL_NAME], interface="eth1")
+
+        assert "already running" in result.content
+        # Still the original command - the existing session was never
+        # replaced by this call.
+        assert fake_session_manager.sessions["responder"].command == "responder -I eth0"
+        cb["mark_tested"].assert_not_called()
+
+    async def test_responder_read_polls_the_open_session_for_captured_output(
+        self, fake_session_manager
+    ):
+        fake_session_manager.sessions["responder"] = KaliSession(
+            name="responder",
+            command="responder -I eth0",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "responder"
+        captured = (
+            "[LLMNR] Poisoned answer sent to 10.0.0.9\n"
+            "[SMB] NTLMv2-SSP Hash captured: WORKSTATION::...\n"
+        )
+        fake_session_manager.run_in_current_session_responses = [captured]
+        tools, cb = self._build()
+
+        result = await _invoke(tools[RESPONDER_READ_TOOL_NAME])
+
+        assert fake_session_manager.run_in_current_session_calls == [(None, 8)]
+        assert "NTLMv2-SSP Hash captured" in result.artifact
+        cb["on_raw_output"].assert_called_once_with(captured)
+
+    async def test_responder_read_switches_to_the_responder_session_if_not_current(
+        self, fake_session_manager
+    ):
+        fake_session_manager.sessions["ftp"] = KaliSession(
+            name="ftp",
+            command="ftp -n 10.0.0.5",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.sessions["responder"] = KaliSession(
+            name="responder",
+            command="responder -I eth0",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "ftp"
+        fake_session_manager.run_in_current_session_responses = [""]
+        tools, _ = self._build()
+
+        await _invoke(tools[RESPONDER_READ_TOOL_NAME])
+
+        assert fake_session_manager.current_name == "responder"
+
+    async def test_responder_read_with_no_session_open_is_rejected(self, fake_session_manager):
+        tools, cb = self._build()
+
+        result = await _invoke(tools[RESPONDER_READ_TOOL_NAME])
+
+        assert "No responder session is open" in result.content
+        assert fake_session_manager.run_in_current_session_calls == []
+        cb["on_raw_output"].assert_not_called()
+
+    async def test_responder_stop_closes_an_open_session(self, fake_session_manager):
+        fake_session_manager.sessions["responder"] = KaliSession(
+            name="responder",
+            command="responder -I eth0",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "responder"
+        tools, _ = self._build()
+
+        result = await _invoke(tools[RESPONDER_STOP_TOOL_NAME])
+
+        assert "stopped" in result.content.lower()
+        assert fake_session_manager.sessions["responder"].closed is True
+
+    async def test_responder_stop_with_no_session_open_reports_nothing_to_stop(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        result = await _invoke(tools[RESPONDER_STOP_TOOL_NAME])
+
+        assert "No responder session" in result.content
 
 
 class TestSshRun:

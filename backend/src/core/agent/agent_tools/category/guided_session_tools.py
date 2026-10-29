@@ -1,5 +1,12 @@
 """Tier 2: guided wrappers around the three interactive protocols the agent
-needs most often (ftp/ssh/telnet). See create_guided_session_tools."""
+needs most often (ftp/ssh/telnet), plus mysql and responder. See
+create_guided_session_tools.
+
+responder_start/responder_read/responder_stop are a different SHAPE of
+guided session from every other tool here - a long-lived background
+listener, not a request/response exchange - see responder_start's own
+docstring for why it also gets the strongest interrupt-gating in this
+module (pentesting_tools.ALWAYS_INTERRUPT_TOOL_NAMES)."""
 
 import re
 import shlex
@@ -26,6 +33,9 @@ SSH_RUN_TOOL_NAME = "ssh_run"
 TELNET_PROBE_TOOL_NAME = "telnet_probe"
 MYSQL_CONNECT_TOOL_NAME = "mysql_connect"
 MYSQL_QUERY_TOOL_NAME = "mysql_query"
+RESPONDER_START_TOOL_NAME = "responder_start"
+RESPONDER_READ_TOOL_NAME = "responder_read"
+RESPONDER_STOP_TOOL_NAME = "responder_stop"
 
 # How long ftp_command waits for a command's real output - deliberately
 # longer than common's SESSION_OPEN_READ_SECONDS (which is for a
@@ -50,8 +60,26 @@ MYSQL_QUERY_READ_SECONDS = 20
 # role as ssh_check_login/ssh_run's "-o ConnectTimeout=10".
 MYSQL_CONNECT_TIMEOUT_SECONDS = 10
 
+# How long responder_read waits for newly-accumulated output before giving
+# up and returning whatever arrived - deliberately shorter than every other
+# guided-session read window above. Those all wait for a specific REQUEST's
+# response (a login, a query); this is a POLL of a background process that
+# never "finishes" and may go quiet for long stretches between broadcast
+# captures, so there's no real reply to wait out - a short window that the
+# agent can call again is the right shape, not a long one that just ties up
+# the turn waiting on a listener that may have nothing new to say.
+RESPONDER_READ_WAIT_SECONDS = 8
+
+# This Kali container's conventional primary network interface - no
+# existing convention for this was found elsewhere in kali_integration/, so
+# this is a judgment call (a plain Docker container's default NIC is
+# almost always "eth0"), not a value pinned by prior code. Only used when
+# responder_start's own `interface` argument is omitted.
+RESPONDER_DEFAULT_INTERFACE = "eth0"
+
 FTP_SESSION_NAME = "ftp"
 MYSQL_SESSION_NAME = "mysql"
+RESPONDER_SESSION_NAME = "responder"
 
 # "150 ..." (data connection opening) with no "226 .../425 .../426 ..."
 # (transfer complete/failed) anywhere after it means the data connection
@@ -912,6 +940,120 @@ def create_guided_session_tools(
         )
         return condensed, raw_output
 
+    @tool(RESPONDER_START_TOOL_NAME, response_format="content_and_artifact")
+    async def responder_start(interface: Optional[str] = None) -> str:
+        """Starts Responder as a long-lived background listener on this
+        run's Kali container, poisoning LLMNR/NBT-NS/mDNS broadcast name
+        resolution to capture credential hashes from whichever hosts
+        answer. UNLIKE every other tool here, this affects every host on
+        the Docker network segment this Kali container sits on, not just
+        this run's single authorized target - starting it is a deliberate,
+        explicitly accepted exception to this agent's usual single-target
+        scope. Because of that, this tool ALWAYS pauses for human approval
+        before it runs at all, regardless of this project's own
+        should_interrupt setting - the same treatment as
+        request_port_access.
+
+        Returns as soon as the listener process has actually launched -
+        responder runs indefinitely once started, so there is nothing
+        meaningful to wait for here. Call responder_read afterward (and
+        again later, as many times as you like) to see what it has
+        captured so far, and responder_stop when you're done with it.
+
+        Args:
+            interface: Network interface for Responder to listen on, e.g.
+                "eth0". Defaults to this Kali container's conventional
+                primary interface if omitted.
+        """
+        if interface and ("\n" in interface or "\r" in interface):
+            return "Interface cannot contain newlines.", None
+
+        manager = await kali_registry.get_manager(project_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
+        existing = next(
+            (s for s in sessions if s.name == RESPONDER_SESSION_NAME and not s.closed), None
+        )
+        if existing is not None:
+            return (
+                "A responder session is already running - call "
+                "responder_stop first if you want to restart it (e.g. with "
+                "a different interface), or responder_read to check what "
+                "it has captured so far.",
+                None,
+            )
+
+        interface_name = interface or RESPONDER_DEFAULT_INTERFACE
+        command = f"responder -I {shlex.quote(interface_name)}"
+        try:
+            await manager.open_session(target_id, agent_run_id, RESPONDER_SESSION_NAME, command)
+        except KaliSessionError as e:
+            return str(e), None
+
+        # Launching the real responder process against the live network
+        # segment is the attempt itself - counts as testing the same way
+        # mysql_connect's own open-session launch does, with no separate
+        # input to gate it on (see mysql_connect's own comment on this).
+        mark_tested()
+        on_session_change(RESPONDER_SESSION_NAME, command)
+
+        return (
+            f"Responder started on interface '{interface_name}' as a "
+            "background listener (session 'responder') - it will keep "
+            "running and poisoning broadcast traffic on the whole network "
+            "segment until responder_stop is called. Call responder_read "
+            "to see what it has captured so far.",
+            None,
+        )
+
+    @tool(RESPONDER_READ_TOOL_NAME, response_format="content_and_artifact")
+    async def responder_read() -> str:
+        """Polls your already-running responder session for whatever
+        output (poisoned-request log lines, captured hashes, ...) has
+        accumulated since the last time you checked. Call responder_start
+        first if you haven't - this never starts a session itself.
+        Captured output is returned verbatim, not paraphrased, since the
+        exact hash text is what a later cracking attempt needs."""
+        manager = await kali_registry.get_manager(project_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
+        existing = next(
+            (s for s in sessions if s.name == RESPONDER_SESSION_NAME and not s.closed), None
+        )
+        if existing is None:
+            return "No responder session is open - call responder_start first.", None
+
+        if manager.get_current_session_name(target_id, agent_run_id) != RESPONDER_SESSION_NAME:
+            try:
+                await manager.switch_session(target_id, agent_run_id, RESPONDER_SESSION_NAME)
+            except KaliSessionError as e:
+                return str(e), None
+        current_session = manager.get_current_session(target_id, agent_run_id)
+
+        try:
+            raw_output = await manager.run_in_current_session(
+                target_id, agent_run_id, None, wait_seconds=RESPONDER_READ_WAIT_SECONDS
+            )
+        except KaliSessionError as e:
+            return str(e), None
+
+        on_raw_output(raw_output)
+        # Not routed through _maybe_condense's LLM-parsing branch (it never
+        # will be - "responder" isn't in _NETWORK_FACING_BINARIES): the
+        # whole point of this output is the verbatim captured hash text,
+        # which a summarizing parse would risk corrupting or dropping.
+        if not raw_output.strip():
+            return "No new responder output since the last check.", raw_output
+        return raw_output, raw_output
+
+    @tool(RESPONDER_STOP_TOOL_NAME, response_format="content_and_artifact")
+    async def responder_stop() -> str:
+        """Stops your running responder session, terminating the listener
+        process. Safe to call even if nothing is running."""
+        manager = await kali_registry.get_manager(project_id)
+        closed = await manager.close_session(target_id, agent_run_id, RESPONDER_SESSION_NAME)
+        if not closed:
+            return "No responder session was open - nothing to stop.", None
+        return "Responder session stopped - the listener has been terminated.", None
+
     return [
         ftp_connect,
         ftp_command,
@@ -920,4 +1062,7 @@ def create_guided_session_tools(
         telnet_probe,
         mysql_connect,
         mysql_query,
+        responder_start,
+        responder_read,
+        responder_stop,
     ]
