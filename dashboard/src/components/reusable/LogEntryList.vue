@@ -106,7 +106,8 @@ type ToolName =
   | "report_outcome"
   | "dispatch_pentest_batch"
   | "request_report"
-  | "run_scouting";
+  | "run_scouting"
+  | "request_tool_access";
 
 // Multi Agent mode's AgentLogResponse rows carry role/agent_run_id (always
 // "single_agent" for the Single Agent flow, never varying within one run -
@@ -142,6 +143,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
   dispatch_pentest_batch: $t("agent_logs.tool_dispatch_pentest_batch"),
   request_report: $t("agent_logs.tool_request_report"),
   run_scouting: $t("agent_logs.tool_run_scouting"),
+  request_tool_access: $t("agent_logs.tool_request_tool_access"),
 };
 
 const TOOL_ICONS: Record<ToolName, string> = {
@@ -161,6 +163,7 @@ const TOOL_ICONS: Record<ToolName, string> = {
   dispatch_pentest_batch: "call_split",
   request_report: "summarize",
   run_scouting: "travel_explore",
+  request_tool_access: "verified_user",
 };
 
 function isKnownTool(toolName: string): toolName is ToolName {

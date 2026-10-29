@@ -52,6 +52,19 @@ const TOOL_GROUPS = [
     descKey: "metasploit_desc",
     defaultEnabled: false,
   },
+  { id: "sqlmap", labelKey: "sqlmap", descKey: "sqlmap_desc", defaultEnabled: true },
+  { id: "mysql", labelKey: "mysql", descKey: "mysql_desc", defaultEnabled: true },
+  { id: "snmp", labelKey: "snmp", descKey: "snmp_desc", defaultEnabled: true },
+  { id: "scripting", labelKey: "scripting", descKey: "scripting_desc", defaultEnabled: false },
+  { id: "testssl", labelKey: "testssl", descKey: "testssl_desc", defaultEnabled: true },
+  { id: "wpscan", labelKey: "wpscan", descKey: "wpscan_desc", defaultEnabled: true },
+  { id: "dnsrecon", labelKey: "dnsrecon", descKey: "dnsrecon_desc", defaultEnabled: true },
+  { id: "tshark", labelKey: "tshark", descKey: "tshark_desc", defaultEnabled: true },
+  { id: "netexec", labelKey: "netexec", descKey: "netexec_desc", defaultEnabled: false },
+  { id: "impacket", labelKey: "impacket", descKey: "impacket_desc", defaultEnabled: false },
+  { id: "responder", labelKey: "responder", descKey: "responder_desc", defaultEnabled: false },
+  { id: "password_cracking", labelKey: "password_cracking", descKey: "password_cracking_desc", defaultEnabled: false },
+  { id: "commix", labelKey: "commix", descKey: "commix_desc", defaultEnabled: true },
 ] as const;
 
 const visible = defineModel<boolean>("visible", { default: false });
