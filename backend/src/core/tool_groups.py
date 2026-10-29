@@ -88,6 +88,19 @@ TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
     ),
     ToolGroup("snmp", ("snmp_enum",), ("snmp",), default_enabled=True),
     ToolGroup("scripting", ("run_python_script",), ("python3",), default_enabled=False),
+    ToolGroup("testssl", ("testssl_scan",), ("testssl.sh",), default_enabled=True),
+    ToolGroup("wpscan", ("wpscan_enum",), ("wpscan",), default_enabled=True),
+    ToolGroup("dnsrecon", ("dns_recon",), ("dnsrecon",), default_enabled=True),
+    ToolGroup("tshark", ("packet_capture",), ("tshark",), default_enabled=True),
+    ToolGroup("netexec", ("netexec_run",), ("netexec",), default_enabled=False),
+    ToolGroup(
+        "impacket", ("impacket_kerberoast", "impacket_exec"), ("impacket-scripts",), default_enabled=False
+    ),
+    ToolGroup(
+        "responder", ("responder_start", "responder_read", "responder_stop"), ("responder",), default_enabled=False
+    ),
+    ToolGroup("password_cracking", ("crack_hashes",), ("hashcat", "john"), default_enabled=False),
+    ToolGroup("commix", ("commix_run",), ("commix",), default_enabled=True),
 )
 
 TOOL_GROUP_IDS: Final[FrozenSet[str]] = frozenset(g.id for g in TOOL_GROUPS)
