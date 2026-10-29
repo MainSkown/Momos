@@ -152,7 +152,7 @@ _NETWORK_FACING_BINARIES = {
     "nmap", "curl", "wget", "nc", "ncat", "netcat", "telnet", "ftp", "ssh",
     "gobuster", "nikto", "whatweb", "smbclient", "whois", "hydra",
     "sqlmap", "dig", "nslookup", "host", "ping", "ping6", "traceroute",
-    "msfconsole", "msfvenom",
+    "msfconsole", "msfvenom", "snmpwalk",
 }
 
 # Binaries/session commands known to give NO natural confirmation of their
@@ -202,6 +202,10 @@ _PARSER_COMMAND_HINTS: Dict[str, str] = {
     "whois": (
         "Registration metadata (dates, registrar, name servers) - not "
         "live port/service state."
+    ),
+    "snmpwalk": (
+        "SNMP MIB-tree walk output - OID numbers like "
+        "'.1.3.6.1.2.1.1.1.0' are object identifiers, never port numbers."
     ),
 }
 

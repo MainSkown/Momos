@@ -45,10 +45,15 @@ from src.core.agent.agent_tools import (
     HYDRA_BRUTEFORCE_TOOL_NAME,
     KALI_COMMAND_TOOL_NAME,
     NEW_SESSION_TOOL_NAME,
+    NIKTO_SCAN_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
     RUN_TOOL_NAME,
+    SMB_ENUM_TOOL_NAME,
+    SNMP_ENUM_TOOL_NAME,
+    SQLMAP_RUN_TOOL_NAME,
     SSH_RUN_TOOL_NAME,
     SWITCH_SESSION_TOOL_NAME,
+    WHATWEB_SCAN_TOOL_NAME,
     WRITE_LOCAL_FILE_TOOL_NAME,
     create_file_tools,
     create_guided_session_tools,
@@ -332,6 +337,215 @@ class TestCreatePentestTools:
         assert result.artifact is not None
         assert "/admin" in result.artifact
         cb["mark_tested"].assert_called_once()
+
+    async def test_nikto_scan_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        nikto_output = "+ Server leaks inodes via ETags\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=nikto_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[NIKTO_SCAN_TOOL_NAME], port=80)
+
+        assert result.content == nikto_output
+        assert result.artifact == nikto_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(nikto_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 300 nikto -h 10.0.0.5 -p 80",
+        ]
+
+    async def test_nikto_scan_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[NIKTO_SCAN_TOOL_NAME], port=8080)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_whatweb_scan_builds_the_expected_command_and_populates_enumeration(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        whatweb_output = "http://10.0.0.5 [200 OK] Apache[2.4.41], Country[RESERVED][ZZ]\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=whatweb_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[WHATWEB_SCAN_TOOL_NAME], port=80)
+
+        assert result.content == whatweb_output
+        assert result.artifact == whatweb_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(whatweb_output)
+        cb["on_enumeration"].assert_called_once_with(
+            {"80": {"service": "http", "version": "", "notes": "Apache[2.4.41]; Country[RESERVED]"}}
+        )
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 60 whatweb http://10.0.0.5:80/",
+        ]
+
+    async def test_whatweb_scan_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[WHATWEB_SCAN_TOOL_NAME], port=8080)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+        cb["on_enumeration"].assert_not_called()
+
+    async def test_smb_enum_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[445])
+        smb_output = "\tSharename       Type      Comment\n\tpublic          Disk\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=smb_output.encode())
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SMB_ENUM_TOOL_NAME], port=445)
+
+        assert result.content == smb_output
+        assert result.artifact == smb_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(smb_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 30 smbclient -L //10.0.0.5 -N -p 445",
+        ]
+
+    async def test_smb_enum_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SMB_ENUM_TOOL_NAME], port=445)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_snmp_enum_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[161])
+        snmp_output = "SNMPv2-MIB::sysDescr.0 = STRING: Linux target\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=snmp_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SNMP_ENUM_TOOL_NAME], community="public", port=161)
+
+        assert result.content == snmp_output
+        assert result.artifact == snmp_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(snmp_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 60 snmpwalk -v2c -c public 10.0.0.5:161",
+        ]
+
+    async def test_snmp_enum_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SNMP_ENUM_TOOL_NAME], port=162)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_sqlmap_run_builds_the_expected_command(self, kali_exec, patched_db_manager):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        sqlmap_output = "sqlmap identified the following injection point(s)\n"
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=sqlmap_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SQLMAP_RUN_TOOL_NAME], path="/login.php", port=80)
+
+        assert result.content == sqlmap_output
+        assert result.artifact == sqlmap_output
+        cb["mark_tested"].assert_called_once()
+        cb["on_raw_output"].assert_called_once_with(sqlmap_output)
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"]
+        assert cmd == [
+            "/bin/bash",
+            "-c",
+            "timeout --kill-after=5 300 sqlmap --batch -u http://10.0.0.5:80/login.php",
+        ]
+
+    async def test_sqlmap_run_refuses_an_out_of_scope_port_without_executing_anything(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[21, 80])
+        tools, cb = self._build()
+
+        result = await _invoke(tools[SQLMAP_RUN_TOOL_NAME], path="/x", port=443)
+
+        assert "outside this target's authorized scope" in result.content
+        kali_exec.exec_run.assert_not_called()
+        cb["mark_tested"].assert_not_called()
+
+    async def test_sqlmap_run_includes_param_and_data_flags_when_given(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"sqlmap output\n")
+        tools, cb = self._build()
+
+        await _invoke(
+            tools[SQLMAP_RUN_TOOL_NAME],
+            path="/login.php",
+            port=80,
+            param="id",
+            data="username=admin&password=test",
+        )
+
+        cmd = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "-p id" in cmd
+        assert "--data 'username=admin&password=test'" in cmd
+
+    async def test_sqlmap_run_never_sends_a_caller_supplied_host_only_this_targets_own_host(
+        self, kali_exec, patched_db_manager
+    ):
+        """Even a `path` that looks like a full URL pointing at a
+        different host must only ever contribute its own path component -
+        the URL sqlmap actually receives always targets this run's own
+        target host, never anything the caller embeds in `path`. Verified
+        by temporarily making the URL construction naive/free-form (e.g.
+        f"{scheme}://{host}:{port}/{path}") - that change makes this test
+        go red, since the naive URL would still embed "evil.example.com"
+        and would not equal the expected same-host URL (CLAUDE.md 2.1)."""
+        patched_db_manager.get_target.return_value = _make_target(ports=[80])
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"sqlmap output\n")
+        tools, cb = self._build()
+
+        await _invoke(tools[SQLMAP_RUN_TOOL_NAME], path="http://evil.example.com/x", port=80)
+
+        command = kali_exec.exec_run.call_args.kwargs["cmd"][-1]
+        assert "evil.example.com" not in command
+        assert "http://10.0.0.5:80/x" in command
 
 
 class TestCreateGuidedSessionTools:
