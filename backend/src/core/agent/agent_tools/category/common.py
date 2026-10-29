@@ -152,7 +152,7 @@ _NETWORK_FACING_BINARIES = {
     "nmap", "curl", "wget", "nc", "ncat", "netcat", "telnet", "ftp", "ssh",
     "gobuster", "nikto", "whatweb", "smbclient", "whois", "hydra",
     "sqlmap", "dig", "nslookup", "host", "ping", "ping6", "traceroute",
-    "msfconsole", "msfvenom", "snmpwalk",
+    "msfconsole", "msfvenom", "snmpwalk", "mysql",
 }
 
 # Binaries/session commands known to give NO natural confirmation of their

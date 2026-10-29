@@ -24,6 +24,8 @@ FTP_COMMAND_TOOL_NAME = "ftp_command"
 SSH_CHECK_LOGIN_TOOL_NAME = "ssh_check_login"
 SSH_RUN_TOOL_NAME = "ssh_run"
 TELNET_PROBE_TOOL_NAME = "telnet_probe"
+MYSQL_CONNECT_TOOL_NAME = "mysql_connect"
+MYSQL_QUERY_TOOL_NAME = "mysql_query"
 
 # How long ftp_command waits for a command's real output - deliberately
 # longer than common's SESSION_OPEN_READ_SECONDS (which is for a
@@ -37,7 +39,19 @@ SSH_CHECK_LOGIN_TIMEOUT_SECONDS = 20
 SSH_RUN_TIMEOUT_SECONDS = 60
 TELNET_PROBE_TIMEOUT_SECONDS = 15
 
+# How long mysql_query waits for a statement's real output - mirrors
+# FTP_COMMAND_READ_SECONDS exactly (same reasoning: a query, like an ftp
+# transfer, can legitimately take a while, unlike the short banner/prompt
+# wait SESSION_OPEN_READ_SECONDS is meant for).
+MYSQL_QUERY_READ_SECONDS = 20
+# Passed as the mysql client's own --connect-timeout, so a target with
+# nothing listening fails fast with a normal "Can't connect..." message
+# instead of hanging for the session machinery's own read window - same
+# role as ssh_check_login/ssh_run's "-o ConnectTimeout=10".
+MYSQL_CONNECT_TIMEOUT_SECONDS = 10
+
 FTP_SESSION_NAME = "ftp"
+MYSQL_SESSION_NAME = "mysql"
 
 # "150 ..." (data connection opening) with no "226 .../425 .../426 ..."
 # (transfer complete/failed) anywhere after it means the data connection
@@ -147,6 +161,44 @@ _FTP_ALLOWED_COMMANDS = frozenset(
         "prompt",
     }
 )
+
+
+# The real mysql CLI's own error line format - "ERROR <code> (<sqlstate>):
+# <message>", e.g. "ERROR 2002 (HY000): Can't connect to MySQL server on
+# '10.0.0.5:3306' (111)" for a target with nothing listening, or "ERROR
+# 1045 (28000): Access denied for user 'root'@'...' (using password: YES)"
+# for bad credentials. Used both to classify a fresh connection attempt's
+# outcome and, on an already-open session, to tell a live connection apart
+# from one whose server side died (same role as ftp_connect's own "pwd"
+# liveness probe - see mysql_connect below). Not line-anchored like ftp's
+# reply-code checks: unlike an FTP reply code, "ERROR \d+ (...)" has no
+# legitimate look-alike elsewhere in this client's own output.
+_MYSQL_ERROR_PATTERN = re.compile(r"ERROR \d+ \([A-Za-z0-9]+\):")
+
+
+def _mysql_connection_failed(raw_output: str) -> bool:
+    return bool(_MYSQL_ERROR_PATTERN.search(raw_output))
+
+
+def _build_mysql_connect_command(
+    host: str, username: str, password: str, database: Optional[str]
+) -> str:
+    """The real mysql CLI authenticates as part of connecting - unlike
+    ftp, there's no separate interactive login step to drive afterward,
+    so username/password/database are all baked into the launch command
+    itself (shlex-quoted - unlike the target host, these are agent-
+    supplied). "-p" must be directly attached to the password with no
+    space (mysql's own CLI parsing rule - a space hands the password's
+    value to "-p" and anything after it, including a `database` token, to
+    the wrong place) - shlex.quote's own output concatenates onto "-p" as
+    one shell word either way, quoted or not."""
+    command = (
+        f"mysql -h {shlex.quote(host)} -u {shlex.quote(username)} "
+        f"-p{shlex.quote(password)} --connect-timeout={MYSQL_CONNECT_TIMEOUT_SECONDS}"
+    )
+    if database:
+        command += f" {shlex.quote(database)}"
+    return command
 
 
 async def _ensure_ftp_session(
@@ -698,4 +750,174 @@ def create_guided_session_tools(
         on_raw_output(output)
         return output, output
 
-    return [ftp_connect, ftp_command, ssh_check_login, ssh_run, telnet_probe]
+    @tool(MYSQL_CONNECT_TOOL_NAME, response_format="content_and_artifact")
+    async def mysql_connect(
+        username: str, password: str, database: Optional[str] = None
+    ) -> str:
+        """Connects to this run's target's MySQL service and logs in -
+        the real mysql client authenticates as part of connecting, so
+        there's no separate interactive login step to drive, unlike
+        ftp_connect. Only call this once per set of credentials - once it
+        reports a successful connection, the session is already open, so
+        use mysql_query for everything else (SELECT, SHOW, ...) instead
+        of calling this again. Only retry this tool if the previous call
+        actually failed (bad credentials, connection error), you need to
+        try different credentials/database, or a mysql_query result told
+        you the connection is gone - it's safe to call again on an
+        already-open session, it just confirms that rather than
+        reconnecting.
+
+        Args:
+            username: MySQL username to try.
+            password: Password to try.
+            database: Database to select on connect. Optional - omit to
+                connect without selecting one.
+        """
+        if "\n" in username or "\r" in username or "\n" in password or "\r" in password:
+            return "Username/password cannot contain newlines.", None
+        if database and ("\n" in database or "\r" in database):
+            return "Database name cannot contain newlines.", None
+
+        host, error = await _get_target_host(target_id)
+        if error:
+            return error, None
+
+        manager = await kali_registry.get_manager(project_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
+        existing = next(
+            (s for s in sessions if s.name == MYSQL_SESSION_NAME and not s.closed), None
+        )
+
+        if existing is not None:
+            if manager.get_current_session_name(target_id, agent_run_id) != MYSQL_SESSION_NAME:
+                try:
+                    await manager.switch_session(target_id, agent_run_id, MYSQL_SESSION_NAME)
+                except KaliSessionError as e:
+                    return str(e), None
+            current_session = manager.get_current_session(target_id, agent_run_id)
+            # Cheap read-only probe (not a reconnect) to tell a live
+            # session from one whose server side died without the
+            # wrapper session itself closing - mirrors ftp_connect's own
+            # "pwd" liveness probe for the exact same reason (see its
+            # comment): nothing else ever re-checks an already-open
+            # session on its own.
+            _, probe_raw = await _send_and_condense(
+                manager,
+                project_id,
+                target_id,
+                agent_run_id,
+                current_session,
+                "SELECT 1;",
+                MYSQL_QUERY_READ_SECONDS,
+                on_enumeration,
+                mark_tested,
+                on_session_change,
+                on_prompt_state_change,
+                on_raw_output,
+            )
+            if probe_raw is not None and not _mysql_connection_failed(probe_raw):
+                return (
+                    "Already connected to this MySQL session - no need "
+                    "to reconnect. Use mysql_query for anything else "
+                    "(SELECT, SHOW, ...).",
+                    None,
+                )
+            # The session is actually dead - close it and fall through to
+            # a fresh connect below, using the credentials given THIS
+            # call.
+            await manager.close_session(target_id, agent_run_id, MYSQL_SESSION_NAME)
+
+        command = _build_mysql_connect_command(host, username, password, database)
+        try:
+            await manager.open_session(target_id, agent_run_id, MYSQL_SESSION_NAME, command)
+        except KaliSessionError as e:
+            return str(e), None
+        on_session_change(MYSQL_SESSION_NAME, command)
+
+        try:
+            raw_output = await manager.run_in_current_session(
+                target_id, agent_run_id, None, wait_seconds=SESSION_OPEN_READ_SECONDS
+            )
+        except KaliSessionError as e:
+            return str(e), None
+
+        # Opening this session just launched the real mysql client with
+        # real credentials against the target - counts as testing the
+        # same way new_session's own mark_tested call does for an opening
+        # command, not gated behind _send_and_condense's "only when input
+        # was actually sent" check (there's no separate input here - the
+        # attempt already happened at open time).
+        mark_tested()
+        on_raw_output(raw_output)
+        current_session = manager.get_current_session(target_id, agent_run_id)
+        on_prompt_state_change(current_session.at_shell_prompt if current_session else True)
+
+        condensed = await _maybe_condense(
+            project_id, command, raw_output, on_enumeration, session_command=command
+        )
+
+        if _mysql_connection_failed(raw_output):
+            prefix = "Connection failed."
+        elif raw_output.strip():
+            prefix = "Connected successfully."
+        else:
+            prefix = (
+                "Connection outcome unclear from the response - check the "
+                "raw output below."
+            )
+
+        return f"{prefix}\n\n{condensed}", raw_output
+
+    @tool(MYSQL_QUERY_TOOL_NAME, response_format="content_and_artifact")
+    async def mysql_query(sql: str) -> str:
+        """Sends one SQL statement to your already-open MySQL session
+        (SELECT, SHOW, ...) - call mysql_connect first if you haven't
+        yet. Not gated by shell access: the mysql client's own session
+        can't reach outside the already-open connection to the target.
+
+        Args:
+            sql: The SQL statement to send, e.g. "SELECT version();" or
+                "SHOW DATABASES;".
+        """
+        if "\n" in sql or "\r" in sql:
+            return "SQL statement cannot contain newlines - send one statement at a time.", None
+
+        manager = await kali_registry.get_manager(project_id)
+        sessions = await manager.list_sessions(target_id, agent_run_id)
+        existing = next(
+            (s for s in sessions if s.name == MYSQL_SESSION_NAME and not s.closed), None
+        )
+        if existing is None:
+            return "No MySQL session is currently open - call mysql_connect first.", None
+        if manager.get_current_session_name(target_id, agent_run_id) != MYSQL_SESSION_NAME:
+            try:
+                await manager.switch_session(target_id, agent_run_id, MYSQL_SESSION_NAME)
+            except KaliSessionError as e:
+                return str(e), None
+        current_session = manager.get_current_session(target_id, agent_run_id)
+
+        condensed, raw_output = await _send_and_condense(
+            manager,
+            project_id,
+            target_id,
+            agent_run_id,
+            current_session,
+            sql,
+            MYSQL_QUERY_READ_SECONDS,
+            on_enumeration,
+            mark_tested,
+            on_session_change,
+            on_prompt_state_change,
+            on_raw_output,
+        )
+        return condensed, raw_output
+
+    return [
+        ftp_connect,
+        ftp_command,
+        ssh_check_login,
+        ssh_run,
+        telnet_probe,
+        mysql_connect,
+        mysql_query,
+    ]

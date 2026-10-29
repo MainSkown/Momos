@@ -44,6 +44,8 @@ from src.core.agent.agent_tools import (
     GOBUSTER_SCAN_TOOL_NAME,
     HYDRA_BRUTEFORCE_TOOL_NAME,
     KALI_COMMAND_TOOL_NAME,
+    MYSQL_CONNECT_TOOL_NAME,
+    MYSQL_QUERY_TOOL_NAME,
     NEW_SESSION_TOOL_NAME,
     NIKTO_SCAN_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
@@ -616,6 +618,127 @@ class TestCreateGuidedSessionTools:
 
         assert "cannot contain newlines" in result.content
         assert fake_session_manager.sessions == {}
+
+    async def test_mysql_connect_rejects_a_newline_in_username_before_any_session_work(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        result = await _invoke(
+            tools[MYSQL_CONNECT_TOOL_NAME], username="a\nb", password="x"
+        )
+
+        assert "cannot contain newlines" in result.content
+        assert fake_session_manager.sessions == {}
+
+    async def test_mysql_connect_opens_a_fresh_session_and_reports_connection_failure_normally(
+        self, fake_session_manager, patched_db_manager
+    ):
+        """The spec's own edge case: a target with nothing actually
+        listening on the MySQL port. The real client exits immediately with
+        a connection-error message rather than hanging or raising - this
+        pins that mysql_connect surfaces that as normal, readable failure
+        output instead of letting an exception escape."""
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        # mysql is network-facing (see _NETWORK_FACING_BINARIES), so the
+        # fresh-connect path's own command text would otherwise reach
+        # _parse_output's real ChatOllama/Ollama call - same reasoning as
+        # TestSshRun's own comment on this fixture.
+        patched_db_manager.get_project_settings.return_value = None
+        fake_session_manager.run_in_current_session_responses = [
+            "ERROR 2002 (HY000): Can't connect to MySQL server on "
+            "'10.0.0.5:3306' (111)\n"
+        ]
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[MYSQL_CONNECT_TOOL_NAME], username="root", password="toor"
+        )
+
+        assert result.content.startswith("Connection failed.")
+        assert "ERROR 2002" in result.artifact
+        cb["mark_tested"].assert_called_once()
+        assert "mysql" in fake_session_manager.sessions
+        assert fake_session_manager.sessions["mysql"].command.startswith("mysql -h 10.0.0.5")
+
+    async def test_mysql_connect_reuses_an_already_open_session(
+        self, fake_session_manager, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target(ipv4="10.0.0.5")
+        fake_session_manager.sessions["mysql"] = KaliSession(
+            name="mysql",
+            command="mysql -h 10.0.0.5 -u root -ptoor --connect-timeout=10",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "mysql"
+        fake_session_manager.run_in_current_session_responses = [
+            "+---+\n| 1 |\n+---+\n| 1 |\n+---+\n"
+        ]
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[MYSQL_CONNECT_TOOL_NAME], username="root", password="toor"
+        )
+
+        assert "Already connected" in result.content
+        assert fake_session_manager.run_in_current_session_calls == [("SELECT 1;", 20)]
+        cb["mark_tested"].assert_called_once()
+
+    async def test_mysql_query_sends_sql_to_the_already_open_session(
+        self, fake_session_manager
+    ):
+        fake_session_manager.sessions["mysql"] = KaliSession(
+            name="mysql",
+            command="mysql -h 10.0.0.5 -u root -ptoor --connect-timeout=10",
+            target_id="target1",
+            agent_run_id="run1",
+            exec_id="x",
+            sock=None,
+            user="momos",
+        )
+        fake_session_manager.current_name = "mysql"
+        fake_session_manager.run_in_current_session_responses = [
+            "+----------+\n| version()|\n+----------+\n| 8.0.30   |\n+----------+\n"
+        ]
+        tools, cb = self._build()
+
+        result = await _invoke(tools[MYSQL_QUERY_TOOL_NAME], sql="SELECT version();")
+
+        assert fake_session_manager.run_in_current_session_calls == [
+            ("SELECT version();", 20)
+        ]
+        assert "8.0.30" in result.artifact
+        cb["mark_tested"].assert_called_once()
+
+    async def test_mysql_query_rejects_a_newline_before_touching_the_session(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        result = await _invoke(tools[MYSQL_QUERY_TOOL_NAME], sql="SELECT 1;\nSELECT 2;")
+
+        assert "cannot contain newlines" in result.content
+        assert fake_session_manager.run_in_current_session_calls == []
+
+    async def test_mysql_query_missing_required_argument_is_rejected(
+        self, fake_session_manager
+    ):
+        tools, _ = self._build()
+
+        with pytest.raises(ValidationError):
+            await _invoke(tools[MYSQL_QUERY_TOOL_NAME])
+
+    async def test_mysql_query_with_no_session_open_is_rejected(self, fake_session_manager):
+        tools, _ = self._build()
+
+        result = await _invoke(tools[MYSQL_QUERY_TOOL_NAME], sql="SELECT 1;")
+
+        assert "No MySQL session is currently open" in result.content
+        assert fake_session_manager.run_in_current_session_calls == []
 
 
 class TestSshRun:
