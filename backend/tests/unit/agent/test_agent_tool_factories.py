@@ -27,6 +27,7 @@ Two fixtures provide the two kinds of fake "Kali" a factory needs:
 """
 
 import asyncio
+import inspect
 import shlex
 import uuid
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ from src.core.agent.agent_tools import (
     NEW_SESSION_TOOL_NAME,
     NIKTO_SCAN_TOOL_NAME,
     NMAP_SCAN_TOOL_NAME,
+    RUN_PYTHON_SCRIPT_TOOL_NAME,
     RUN_TOOL_NAME,
     SMB_ENUM_TOOL_NAME,
     SNMP_ENUM_TOOL_NAME,
@@ -60,7 +62,11 @@ from src.core.agent.agent_tools import (
     create_file_tools,
     create_guided_session_tools,
     create_kali_tool,
+    build_agent_tools,
+    build_pentesting_agent_tools,
+    build_scouting_agent_tools,
     create_pentest_tools,
+    create_scripting_tools,
     create_terminal_tools,
     create_vulnerability_tool,
 )
@@ -923,6 +929,111 @@ class TestCreateFileTools:
             await _invoke(tools[DOWNLOAD_FILE_TOOL_NAME])
 
         kali_exec.exec_run.assert_not_called()
+
+
+class TestCreateScriptingTools:
+    async def test_run_python_script_returns_the_scripts_output_and_marks_tested(self, kali_exec):
+        kali_exec.exec_run.side_effect = [
+            SimpleNamespace(exit_code=0, output=b""),
+            SimpleNamespace(exit_code=0, output=b"hello from python\n"),
+        ]
+        mark_tested = MagicMock()
+        on_raw_output = MagicMock()
+        tools = _tools_by_name(
+            create_scripting_tools("proj1", on_raw_output=on_raw_output, mark_tested=mark_tested)
+        )
+
+        result = await _invoke(tools[RUN_PYTHON_SCRIPT_TOOL_NAME], code="print('hello from python')")
+
+        assert "hello from python" in result.content
+        mark_tested.assert_called_once_with()
+        on_raw_output.assert_called_once_with("hello from python\n")
+        write_cmd, run_cmd = [call.kwargs["cmd"][-1] for call in kali_exec.exec_run.call_args_list]
+        assert "base64 -d" in write_cmd
+        assert "python3 " in run_cmd
+
+    async def test_run_python_script_never_interpolates_code_raw_into_the_shell_command(
+        self, kali_exec
+    ):
+        tools = _tools_by_name(
+            create_scripting_tools("proj1", on_raw_output=MagicMock(), mark_tested=MagicMock())
+        )
+        payload = "print('$(touch /tmp/INJECTED)')"
+
+        await _invoke(tools[RUN_PYTHON_SCRIPT_TOOL_NAME], code=payload)
+
+        for call in kali_exec.exec_run.call_args_list:
+            assert payload not in call.kwargs["cmd"][-1]
+
+    async def test_failing_script_still_returns_its_output_and_marks_tested(self, kali_exec):
+        kali_exec.exec_run.side_effect = [
+            SimpleNamespace(exit_code=0, output=b""),
+            SimpleNamespace(exit_code=1, output=b"Traceback: boom"),
+        ]
+        mark_tested = MagicMock()
+        on_raw_output = MagicMock()
+        tools = _tools_by_name(
+            create_scripting_tools("proj1", on_raw_output=on_raw_output, mark_tested=mark_tested)
+        )
+
+        result = await _invoke(tools[RUN_PYTHON_SCRIPT_TOOL_NAME], code="raise SystemExit(1)")
+
+        assert "Traceback: boom" in result.content
+        mark_tested.assert_called_once_with()
+        # A failure's error text must never be recorded as real evidence -
+        # on_raw_output feeds _last_raw_output, which claim verification
+        # checks a reported outcome against (see every other Tier-1 tool's
+        # own "mark_tested() then return early on failure, before
+        # on_raw_output" convention - e.g. nikto_scan/sqlmap_run).
+        on_raw_output.assert_not_called()
+
+    async def test_failed_write_step_skips_the_run_and_does_not_mark_tested(self, kali_exec):
+        kali_exec.exec_run.side_effect = [SimpleNamespace(exit_code=1, output=b"no space left")]
+        mark_tested = MagicMock()
+        tools = _tools_by_name(
+            create_scripting_tools("proj1", on_raw_output=MagicMock(), mark_tested=mark_tested)
+        )
+
+        result = await _invoke(tools[RUN_PYTHON_SCRIPT_TOOL_NAME], code="print(1)")
+
+        assert "no space left" in result.content
+        assert kali_exec.exec_run.call_count == 1
+        mark_tested.assert_not_called()
+
+
+class TestScriptingGateIsIndependentOfShell:
+    @pytest.mark.parametrize("allow_shell", [True, False])
+    @pytest.mark.parametrize(
+        ("builder", "builder_overrides"),
+        [
+            (agent_tools.build_agent_tools, {}),
+            (agent_tools.build_scouting_agent_tools, {}),
+            (agent_tools.build_pentesting_agent_tools, {"attack_vector_id": "vec1"}),
+        ],
+        ids=["single_agent", "scouting", "pentesting"],
+    )
+    def test_run_python_script_is_present_only_when_scripting_group_is_enabled(
+        self, builder, builder_overrides, allow_shell
+    ):
+        def names_for(enabled_tools):
+            kwargs = _builder_kwargs(
+                builder,
+                allow_shell=allow_shell,
+                allow_install_packages=False,
+                enabled_tools=enabled_tools,
+                **builder_overrides,
+            )
+            return {t.name for t in builder(**kwargs)}
+
+        assert RUN_PYTHON_SCRIPT_TOOL_NAME in names_for(["scripting"])
+        assert RUN_PYTHON_SCRIPT_TOOL_NAME not in names_for(None)
+
+
+def _builder_kwargs(builder, **overrides) -> dict:
+    kwargs = {name: MagicMock() for name in inspect.signature(builder).parameters}
+    kwargs.update(project_id="proj1", target_id="target1", agent_run_id="run1")
+    kwargs.update(overrides)
+    return kwargs
 
 
 class TestCreateVulnerabilityTool:

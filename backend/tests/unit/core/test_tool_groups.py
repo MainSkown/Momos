@@ -50,6 +50,14 @@ def test_default_none_enables_new_groups_tools(tool_name):
     assert tool_name in tool_names_for(None)
 
 
+def test_scripting_is_excluded_from_default_none():
+    assert "run_python_script" not in tool_names_for(None)
+
+
+def test_scripting_is_included_when_explicitly_enabled():
+    assert "run_python_script" in tool_names_for(["scripting"])
+
+
 def test_default_none_installs_new_groups_packages():
     packages = packages_for_enabled_tools(None)
     assert "default-mysql-client" in packages

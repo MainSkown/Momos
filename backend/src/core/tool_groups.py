@@ -87,6 +87,7 @@ TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
         "mysql", ("mysql_connect", "mysql_query"), ("default-mysql-client",), default_enabled=True
     ),
     ToolGroup("snmp", ("snmp_enum",), ("snmp",), default_enabled=True),
+    ToolGroup("scripting", ("run_python_script",), ("python3",), default_enabled=False),
 )
 
 TOOL_GROUP_IDS: Final[FrozenSet[str]] = frozenset(g.id for g in TOOL_GROUPS)

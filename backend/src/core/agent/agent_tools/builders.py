@@ -18,6 +18,7 @@ from .category.admin_tools import (
 from .category.file_tools import create_file_tools
 from .category.guided_session_tools import create_guided_session_tools
 from .category.pentest_tools import create_pentest_tools
+from .category.scripting_tools import create_scripting_tools
 from .category.terminal_tools import create_terminal_tools
 
 
@@ -51,6 +52,7 @@ def build_agent_tools(
         # deleted - see create_kali_tool's docstring. The terminal tools
         # below are the agent's only way to run arbitrary commands now.
         *create_pentest_tools(project_id, target_id, on_enumeration, mark_tested, on_raw_output),
+        *create_scripting_tools(project_id, on_raw_output, mark_tested),
         *create_guided_session_tools(
             project_id,
             target_id,
@@ -198,6 +200,11 @@ def build_scouting_agent_tools(
         if t.name in scouting_tools.ALLOWED_PENTEST_TOOL_NAMES
         and (t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names)
     ]
+    tools.extend(
+        t
+        for t in create_scripting_tools(project_id, on_raw_output, mark_tested)
+        if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
+    )
 
     tools.append(create_request_port_access_tool(project_id, target_id, on_ports_changed))
     tools.extend(create_file_tools(project_id))
@@ -263,6 +270,11 @@ def build_pentesting_agent_tools(
         if t.name in pentesting_tools.ALLOWED_PENTEST_TOOL_NAMES
         and (t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names)
     ]
+    tools.extend(
+        t
+        for t in create_scripting_tools(project_id, on_raw_output, mark_tested)
+        if t.name not in tool_groups.ALL_GROUPED_TOOL_NAMES or t.name in allowed_tool_names
+    )
 
     guided_tools = create_guided_session_tools(
         project_id,

@@ -10,7 +10,8 @@ tools it builds:
   (create_guided_session_tools).
 - terminal_tools.py: run/new_session/switch_session/list_sessions/
   close_session/interrupt_session (create_terminal_tools).
-- scripting_tools.py: reserved for a future run_python_script tool.
+- scripting_tools.py: run_python_script, gated by its own "scripting"
+  tool group (create_scripting_tools).
 - admin_tools.py: package installs, request_port_access, the raw
   execute_kali_command escape hatch, report_vulnerability/
   log_attack_attempt/finish_task.
@@ -169,6 +170,10 @@ from .category.guided_session_tools import (
     _send_ftp_passive,
     create_guided_session_tools,
 )
+from .category.scripting_tools import (
+    RUN_PYTHON_SCRIPT_TOOL_NAME,
+    create_scripting_tools,
+)
 from .category.terminal_tools import (
     CLOSE_SESSION_TOOL_NAME,
     INTERRUPT_SESSION_TOOL_NAME,
@@ -287,6 +292,8 @@ __all__ = [
     "MYSQL_CONNECT_TIMEOUT_SECONDS",
     "MYSQL_QUERY_READ_SECONDS",
     "create_guided_session_tools",
+    "RUN_PYTHON_SCRIPT_TOOL_NAME",
+    "create_scripting_tools",
     "RUN_TOOL_NAME",
     "NEW_SESSION_TOOL_NAME",
     "SWITCH_SESSION_TOOL_NAME",
