@@ -157,6 +157,10 @@ def test_scouting_allowed_pentest_tool_names_is_exact_set():
         agent_tools.WHATWEB_SCAN_TOOL_NAME,
         agent_tools.SMB_ENUM_TOOL_NAME,
         agent_tools.SNMP_ENUM_TOOL_NAME,
+        agent_tools.TESTSSL_SCAN_TOOL_NAME,
+        agent_tools.WPSCAN_ENUM_TOOL_NAME,
+        agent_tools.DNS_RECON_TOOL_NAME,
+        agent_tools.PACKET_CAPTURE_TOOL_NAME,
     }
 
 
@@ -171,3 +175,16 @@ def test_scouting_writer_tool_names_includes_the_new_target_touching_tools():
     assert agent_tools.SMB_ENUM_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
     assert agent_tools.SNMP_ENUM_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
     assert scouting_tools.INTERRUPT_GATED_TOOL_NAMES is scouting_tools.WRITER_TOOL_NAMES
+
+
+def test_scouting_writer_tool_names_includes_the_new_recon_tools():
+    # Hand-enumerated set, not a union with ALLOWED_PENTEST_TOOL_NAMES - a new
+    # target-touching tool added only to the allowed set silently escapes the
+    # race guard and interrupt gating.
+    new_recon_writers = {
+        agent_tools.TESTSSL_SCAN_TOOL_NAME,
+        agent_tools.WPSCAN_ENUM_TOOL_NAME,
+        agent_tools.DNS_RECON_TOOL_NAME,
+        agent_tools.PACKET_CAPTURE_TOOL_NAME,
+    }
+    assert new_recon_writers <= scouting_tools.WRITER_TOOL_NAMES

@@ -30,6 +30,10 @@ ALLOWED_PENTEST_TOOL_NAMES = {
     agent_tools.WHATWEB_SCAN_TOOL_NAME,
     agent_tools.SMB_ENUM_TOOL_NAME,
     agent_tools.SNMP_ENUM_TOOL_NAME,
+    agent_tools.TESTSSL_SCAN_TOOL_NAME,
+    agent_tools.WPSCAN_ENUM_TOOL_NAME,
+    agent_tools.DNS_RECON_TOOL_NAME,
+    agent_tools.PACKET_CAPTURE_TOOL_NAME,
 }
 
 # Writer/reader sets for roles/common.py's make_guarded_tools_node - see
@@ -47,6 +51,10 @@ WRITER_TOOL_NAMES = {
     agent_tools.WHATWEB_SCAN_TOOL_NAME,
     agent_tools.SMB_ENUM_TOOL_NAME,
     agent_tools.SNMP_ENUM_TOOL_NAME,
+    agent_tools.TESTSSL_SCAN_TOOL_NAME,
+    agent_tools.WPSCAN_ENUM_TOOL_NAME,
+    agent_tools.DNS_RECON_TOOL_NAME,
+    agent_tools.PACKET_CAPTURE_TOOL_NAME,
 }
 READER_TOOL_NAMES = {PROPOSE_ATTACK_VECTOR_TOOL_NAME}
 # Every writer is target-touching here, so the same set doubles as the
