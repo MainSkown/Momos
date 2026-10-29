@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.core.agent import agent_tools
 from src.core.agent.agent_tools.roles import scouting_tools
 
 
@@ -144,3 +145,29 @@ async def test_finish_scouting_calls_on_finish_exactly_once():
 
     assert calls == ["enumerated everything"]
     assert "Ending the run now" in result
+
+
+def test_scouting_allowed_pentest_tool_names_is_exact_set():
+    assert scouting_tools.ALLOWED_PENTEST_TOOL_NAMES == {
+        agent_tools.NMAP_SCAN_TOOL_NAME,
+        agent_tools.GOBUSTER_SCAN_TOOL_NAME,
+        agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
+        agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
+        agent_tools.NIKTO_SCAN_TOOL_NAME,
+        agent_tools.WHATWEB_SCAN_TOOL_NAME,
+        agent_tools.SMB_ENUM_TOOL_NAME,
+        agent_tools.SNMP_ENUM_TOOL_NAME,
+    }
+
+
+def test_scouting_writer_tool_names_includes_the_new_target_touching_tools():
+    # nikto_scan/whatweb_scan/smb_enum/snmp_enum all send real traffic to
+    # the target, same as nmap_scan/gobuster_scan - they must be writers
+    # (and therefore interrupt-gated, since INTERRUPT_GATED_TOOL_NAMES is
+    # just an alias of this set) or make_guarded_tools_node's write/read
+    # race guard silently stops covering them.
+    assert agent_tools.NIKTO_SCAN_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
+    assert agent_tools.WHATWEB_SCAN_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
+    assert agent_tools.SMB_ENUM_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
+    assert agent_tools.SNMP_ENUM_TOOL_NAME in scouting_tools.WRITER_TOOL_NAMES
+    assert scouting_tools.INTERRUPT_GATED_TOOL_NAMES is scouting_tools.WRITER_TOOL_NAMES
