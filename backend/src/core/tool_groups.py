@@ -16,8 +16,8 @@ from typing import Final, FrozenSet, List, Optional, Set, Tuple
 #
 # Deliberately NOT included here - core/always-on, never shown as a toggle,
 # never interrupt-gated (see agent.py's _INTERRUPT_GATED_TOOL_NAMES): nmap_scan,
-# searchsploit_search, searchsploit_view - none of these touch the target's
-# actual services, they're local/recon-only. Also not included: run/
+# searchsploit_search, searchsploit_view, nikto_scan, whatweb_scan, smb_enum -
+# none of these touch the target's actual services, they're local/recon-only. Also not included: run/
 # new_session/the rest of the shell-session tools - gated solely by
 # allow_shell, a fully separate capability this module must not touch; the
 # local file read/write/list/download tools - unconditional utility tools, not tied
@@ -82,6 +82,11 @@ TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
     ToolGroup(
         "metasploit", ("metasploit_run",), ("metasploit-framework",), default_enabled=False
     ),
+    ToolGroup("sqlmap", ("sqlmap_run",), (), default_enabled=True),
+    ToolGroup(
+        "mysql", ("mysql_connect", "mysql_query"), ("default-mysql-client",), default_enabled=True
+    ),
+    ToolGroup("snmp", ("snmp_enum",), ("snmp",), default_enabled=True),
 )
 
 TOOL_GROUP_IDS: Final[FrozenSet[str]] = frozenset(g.id for g in TOOL_GROUPS)
