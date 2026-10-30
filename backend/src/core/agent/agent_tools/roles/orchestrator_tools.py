@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 from src.core import db_manager, tool_groups
 from src.core.agent import agent_checkpointer, run_registry
 from src.core.agent.roles import common
+from src.core.kali_integration import kali_registry
 from src.schemas.agent_run_scheme import AgentRunState
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 from src.schemas.project_scheme import (
@@ -220,6 +221,15 @@ def create_run_scouting_tool(
                 parent_run_id=orchestrator_run_id,
             )
         finally:
+            manager = await kali_registry.get_manager_if_exists(project_id)
+            if manager is not None:
+                # Scoped to just THIS sub-run's own sessions, not every
+                # session on the target - close_sessions_for_target would
+                # tear down a sibling sub-agent's sessions too, once more
+                # than one can be live on the same target at once (mirrors
+                # agent_service.py's own _run_agent cleanup).
+                await manager.close_sessions_for_run(target_id, agent_run_id)
+
             await run_registry.persist_run_state(
                 project_id=project_id,
                 target_id=target_id,
@@ -425,6 +435,16 @@ def create_dispatch_pentest_batch_tool(
                 # granted above.
                 if agent_run_id is not None:
                     try:
+                        manager = await kali_registry.get_manager_if_exists(project_id)
+                        if manager is not None:
+                            # Scoped to just THIS sub-run's own sessions, not
+                            # every session on the target - close_sessions_for_target
+                            # would tear down a sibling sub-agent's sessions too,
+                            # once more than one can be live on the same target at
+                            # once (mirrors agent_service.py's own _run_agent
+                            # cleanup).
+                            await manager.close_sessions_for_run(target_id, agent_run_id)
+
                         await run_registry.persist_run_state(
                             project_id=project_id,
                             target_id=target_id,
@@ -603,6 +623,15 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
                 attack_vector_id=vector_id,
             )
         finally:
+            manager = await kali_registry.get_manager_if_exists(project_id)
+            if manager is not None:
+                # Scoped to just THIS sub-run's own sessions, not every
+                # session on the target - close_sessions_for_target would
+                # tear down a sibling sub-agent's sessions too, once more
+                # than one can be live on the same target at once (mirrors
+                # agent_service.py's own _run_agent cleanup).
+                await manager.close_sessions_for_run(target_id, agent_run_id)
+
             await run_registry.persist_run_state(
                 project_id=project_id,
                 target_id=target_id,

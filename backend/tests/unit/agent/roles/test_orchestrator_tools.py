@@ -20,6 +20,7 @@ from langgraph.prebuilt import ToolNode
 from src.core.agent.roles import common
 from src.core.agent.roles.agents import pentesting_agent, reporting_agent, scouting_agent
 from src.core.agent.agent_tools.roles import orchestrator_tools
+from src.core.kali_integration import kali_registry
 from src.schemas.agent_run_scheme import AgentRunState
 from src.schemas.attack_vector_scheme import AttackVectorStatus
 
@@ -311,6 +312,30 @@ async def test_dispatch_pentest_batch_releases_slot_even_if_persist_run_state_ra
     assert "v-1" in result
 
 
+@pytest.mark.asyncio
+async def test_dispatch_pentest_batch_closes_kali_sessions_for_the_sub_run(monkeypatch, ids):
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.return_value = _pending_vector("v-1", ids["target_id"])
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    run_id = uuid.uuid4()
+    monkeypatch.setattr(
+        orchestrator_tools.run_registry, "start_sub_run", AsyncMock(return_value=MagicMock(id=run_id))
+    )
+    fake_manager = MagicMock()
+    fake_manager.close_sessions_for_run = AsyncMock()
+    monkeypatch.setattr(
+        kali_registry, "get_manager_if_exists", AsyncMock(return_value=fake_manager)
+    )
+
+    tool = orchestrator_tools.create_dispatch_pentest_batch_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False
+    )
+    await tool.ainvoke({"vector_ids": ["v-1"]})
+
+    fake_manager.close_sessions_for_run.assert_awaited_once_with(ids["target_id"], str(run_id))
+
+
 # --- request_report: each guard checked in order ---
 
 
@@ -391,6 +416,36 @@ async def test_request_report_status_mismatch_takes_precedence_over_existing_lin
     assert "not tested_vulnerable" in result
 
 
+@pytest.mark.asyncio
+async def test_request_report_closes_kali_sessions_for_the_sub_run(monkeypatch, ids):
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vector.return_value = MagicMock(
+        target_id=ids["target_id"],
+        status=AttackVectorStatus.TESTED_VULNERABLE,
+        linked_vulnerability_id=None,
+        assigned_run_id=str(uuid.uuid4()),
+    )
+    fake_db.get_agent_logs_for_run.return_value = []
+    fake_db.update_attack_vector.side_effect = lambda v: v
+
+    run_id = uuid.uuid4()
+    monkeypatch.setattr(
+        orchestrator_tools.run_registry, "start_sub_run", AsyncMock(return_value=MagicMock(id=run_id))
+    )
+    fake_manager = MagicMock()
+    fake_manager.close_sessions_for_run = AsyncMock()
+    monkeypatch.setattr(
+        kali_registry, "get_manager_if_exists", AsyncMock(return_value=fake_manager)
+    )
+
+    tool = orchestrator_tools.create_request_report_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"]
+    )
+    await tool.ainvoke({"vector_id": "v-1"})
+
+    fake_manager.close_sessions_for_run.assert_awaited_once_with(ids["target_id"], str(run_id))
+
+
 # --- run_scouting: model fallback and pending-count summary ---
 
 
@@ -436,6 +491,35 @@ async def test_run_scouting_reports_total_pending_count_after_run(monkeypatch, i
 
     on_scouting_done.assert_called_once()
     assert "2 attack vector(s) now pending" in result
+
+
+# --- S3: sub-agent Kali sessions must be closed on exit, same as
+# agent_service.py's own _run_agent cleanup (close_sessions_for_run, scoped
+# to just this sub-run's own agent_run_id - never close_sessions_for_target,
+# which would tear down a sibling sub-run's sessions on the same target). ---
+
+
+@pytest.mark.asyncio
+async def test_run_scouting_closes_kali_sessions_for_its_own_run(monkeypatch, ids):
+    fake_db = _wire_common_mocks(monkeypatch, ids)
+    fake_db.get_attack_vectors_for_target.return_value = []
+
+    run_id = uuid.uuid4()
+    monkeypatch.setattr(
+        orchestrator_tools.run_registry, "start_sub_run", AsyncMock(return_value=MagicMock(id=run_id))
+    )
+    fake_manager = MagicMock()
+    fake_manager.close_sessions_for_run = AsyncMock()
+    monkeypatch.setattr(
+        kali_registry, "get_manager_if_exists", AsyncMock(return_value=fake_manager)
+    )
+
+    tool = orchestrator_tools.create_run_scouting_tool(
+        ids["project_id"], ids["target_id"], ids["orchestrator_run_id"], False, lambda: None
+    )
+    await tool.ainvoke({})
+
+    fake_manager.close_sessions_for_run.assert_awaited_once_with(ids["target_id"], str(run_id))
 
 
 # --- dispatch_pentest_batch: tool_groups narrowing is a ceiling, never an
