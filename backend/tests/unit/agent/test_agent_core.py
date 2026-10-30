@@ -28,6 +28,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
 from src.core.agent import agent as agent_module
+from src.core.agent import agent_tools
 from src.core.agent.agent import Agent, _mode_gate_conflict
 from src.core.database_manager import DatabaseManager
 from src.schemas import Target
@@ -237,6 +238,24 @@ class TestModeGateConflict:
     def test_no_conflict_returns_an_empty_reader_set(self):
         writers, readers = _mode_gate_conflict({"run", "list_sessions"})
         assert readers == set()
+
+    def test_a_new_milestone_2_writer_tool_conflicts_with_a_reader(self):
+        """sqlmap_run is one of the ~19 Milestone 2 tools that call
+        mark_tested()/update _last_raw_output just like run()/nmap_scan
+        do, so it must be treated as a writer for the same batched-with-
+        a-reader race _mode_gate_conflict exists to catch (R1)."""
+        writers, readers = _mode_gate_conflict({"sqlmap_run", "report_vulnerability"})
+        assert writers == {"sqlmap_run"}
+        assert readers == {"report_vulnerability"}
+
+
+class TestAlwaysInterruptToolNames:
+    def test_responder_start_is_always_interrupt_gated_in_single_agent_mode(self):
+        """Multi-agent mode's pentesting_tools.ALWAYS_INTERRUPT_TOOL_NAMES
+        already includes RESPONDER_START_TOOL_NAME because it poisons the
+        whole network segment, not just the target - single-agent mode's
+        equivalent set must give it the same treatment (S2)."""
+        assert agent_tools.RESPONDER_START_TOOL_NAME in agent_module._ALWAYS_INTERRUPT_TOOL_NAMES
 
 
 class TestRecordEnumeration:

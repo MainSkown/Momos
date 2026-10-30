@@ -107,30 +107,39 @@ _STATUS_DISPLAY_ORDER = (
 # importing it from agent.py's own top level would cycle (same reason
 # run_registry.render_tool_call_content already uses bare string literals
 # for these same tool names).
-_MODE_GATE_WRITER_TOOL_NAMES = {
-    agent_tools.RUN_TOOL_NAME,
-    agent_tools.NEW_SESSION_TOOL_NAME,
-    # start_attack_vector resets has_tested (clear_tested()) on selection,
-    # same role switch_mode used to have ("fresh vector, fresh requirement
-    # to prove something was actually tried against it").
-    "start_attack_vector",
-    # Tier 1/2 tools (create_pentest_tools/create_guided_session_tools) -
-    # every one of these calls mark_tested()/updates _last_raw_output just
-    # like run() does, so the same batched-with-a-reader race applies to
-    # them too.
-    agent_tools.NMAP_SCAN_TOOL_NAME,
-    agent_tools.HYDRA_BRUTEFORCE_TOOL_NAME,
-    agent_tools.GOBUSTER_SCAN_TOOL_NAME,
-    agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
-    agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
-    agent_tools.SEARCHSPLOIT_RUN_TOOL_NAME,
-    agent_tools.FTP_CONNECT_TOOL_NAME,
-    agent_tools.FTP_COMMAND_TOOL_NAME,
-    agent_tools.SSH_CHECK_LOGIN_TOOL_NAME,
-    agent_tools.SSH_RUN_TOOL_NAME,
-    agent_tools.TELNET_PROBE_TOOL_NAME,
-    agent_tools.METASPLOIT_RUN_TOOL_NAME,
-}
+_MODE_GATE_WRITER_TOOL_NAMES = (
+    {
+        agent_tools.RUN_TOOL_NAME,
+        agent_tools.NEW_SESSION_TOOL_NAME,
+        # start_attack_vector resets has_tested (clear_tested()) on
+        # selection, same role switch_mode used to have ("fresh vector,
+        # fresh requirement to prove something was actually tried
+        # against it").
+        "start_attack_vector",
+        # Tier 1/2 tools that are core/always-on rather than individually
+        # toggleable (tool_groups.py deliberately excludes these - see its
+        # own module comment) - every one of these calls mark_tested()/
+        # updates _last_raw_output just like run() does, so the same
+        # batched-with-a-reader race applies to them too.
+        agent_tools.NMAP_SCAN_TOOL_NAME,
+        agent_tools.SEARCHSPLOIT_SEARCH_TOOL_NAME,
+        agent_tools.SEARCHSPLOIT_VIEW_TOOL_NAME,
+        agent_tools.NIKTO_SCAN_TOOL_NAME,
+        agent_tools.WHATWEB_SCAN_TOOL_NAME,
+        agent_tools.SMB_ENUM_TOOL_NAME,
+    }
+    # Every project-toggleable Tier 1/2 tool (hydra_bruteforce,
+    # gobuster_scan, searchsploit_run, ftp/ssh/telnet/metasploit, and every
+    # Milestone 2 addition - sqlmap_run, snmp_enum, testssl_scan,
+    # wpscan_enum, dns_recon, packet_capture, netexec_run,
+    # impacket_kerberoast/exec, crack_hashes, commix_run, mysql_connect/
+    # query, responder_start/read/stop, run_python_script) calls
+    # mark_tested()/updates _last_raw_output the same way - derived from
+    # tool_groups.py the same way _INTERRUPT_GATED_TOOL_NAMES below already
+    # is, so a future addition to TOOL_GROUPS can't silently miss this set
+    # again the way this branch's new tools originally did.
+    | tool_groups.ALL_GROUPED_TOOL_NAMES
+)
 _MODE_GATE_READER_TOOL_NAMES = {
     agent_tools.REPORT_VULNERABILITY_TOOL_NAME,
     agent_tools.ATTACK_LOG_TOOL_NAME,
@@ -172,7 +181,14 @@ _INTERRUPT_GATED_TOOL_NAMES = (
 # touch _last_raw_output the way every member of that set does, so it has
 # no part in the writer/reader batch-rejection race those sets exist to
 # prevent (see _tools_node below).
-_ALWAYS_INTERRUPT_TOOL_NAMES = {agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME}
+_ALWAYS_INTERRUPT_TOOL_NAMES = {
+    agent_tools.REQUEST_PORT_ACCESS_TOOL_NAME,
+    # responder_start poisons the whole broadcast domain, not just the
+    # target, so it always pauses regardless of should_interrupt - same
+    # rationale as multi-agent mode's pentesting_tools.
+    # ALWAYS_INTERRUPT_TOOL_NAMES, which already includes it.
+    agent_tools.RESPONDER_START_TOOL_NAME,
+}
 
 
 def _mode_gate_conflict(names: set) -> tuple:
