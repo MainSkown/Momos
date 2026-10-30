@@ -1,5 +1,5 @@
 """Reporting role's tool-name-set constants - see the tool matrix in
-docs/features/multi-agent-pentest-pipeline.md's implementation plan.
+the implementation plan.
 Reporting has exactly one tool, report_vulnerability, reused as-is from
 agent_tools.create_vulnerability_tool (see agent_tools.build_reporting_agent_tools,
 the actual gatherer) rather than reimplemented here - there is no new tool
