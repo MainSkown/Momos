@@ -17,7 +17,9 @@ from typing import Final, FrozenSet, List, Optional, Set, Tuple
 # Deliberately NOT included here - core/always-on, never shown as a toggle,
 # never interrupt-gated (see agent.py's _INTERRUPT_GATED_TOOL_NAMES): nmap_scan,
 # searchsploit_search, searchsploit_view, nikto_scan, whatweb_scan, smb_enum -
-# none of these touch the target's actual services, they're local/recon-only. Also not included: run/
+# always-on baseline recon, so they aren't gated behind a toggle. Not because they're
+# local-only: nikto/whatweb/smb_enum do send requests straight to the target's services.
+# Also not included: run/
 # new_session/the rest of the shell-session tools - gated solely by
 # allow_shell, a fully separate capability this module must not touch; the
 # local file read/write/list/download tools - unconditional utility tools, not tied
@@ -94,10 +96,16 @@ TOOL_GROUPS: Final[Tuple[ToolGroup, ...]] = (
     ToolGroup("tshark", ("packet_capture",), ("tshark",), default_enabled=True),
     ToolGroup("netexec", ("netexec_run",), ("netexec",), default_enabled=False),
     ToolGroup(
-        "impacket", ("impacket_kerberoast", "impacket_exec"), ("impacket-scripts",), default_enabled=False
+        "impacket",
+        ("impacket_kerberoast", "impacket_exec"),
+        ("impacket-scripts",),
+        default_enabled=False,
     ),
     ToolGroup(
-        "responder", ("responder_start", "responder_read", "responder_stop"), ("responder",), default_enabled=False
+        "responder",
+        ("responder_start", "responder_read", "responder_stop"),
+        ("responder",),
+        default_enabled=False,
     ),
     ToolGroup("password_cracking", ("crack_hashes",), ("hashcat", "john"), default_enabled=False),
     ToolGroup("commix", ("commix_run",), ("commix",), default_enabled=True),
