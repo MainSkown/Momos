@@ -192,7 +192,11 @@ async def test_drain_sub_agent_persists_interrupt_and_sends_request(monkeypatch,
         yield {"kind": "interrupt", "accept": accept, "tool_calls": [{"name": "run", "args": {}, "id": "1"}]}
 
     await orchestrator_tools._drain_sub_agent(
-        events(), ids["project_id"], ids["target_id"], "run-1", "pentesting"
+        events(),
+        project_id=ids["project_id"],
+        target_id=ids["target_id"],
+        agent_run_id="run-1",
+        role="pentesting",
     )
 
     assert orchestrator_tools.run_registry.pending_interrupts["run-1"] is accept
@@ -217,7 +221,11 @@ async def test_drain_sub_agent_context_usage_sent_but_not_persisted(monkeypatch,
         yield {"kind": "context_usage", "used_tokens": 10, "context_window": 2048}
 
     await orchestrator_tools._drain_sub_agent(
-        events(), ids["project_id"], ids["target_id"], "run-1", "pentesting"
+        events(),
+        project_id=ids["project_id"],
+        target_id=ids["target_id"],
+        agent_run_id="run-1",
+        role="pentesting",
     )
 
     assert len(sent_messages) == 1
@@ -239,7 +247,11 @@ async def test_drain_sub_agent_persists_real_messages(monkeypatch, ids):
         yield AIMessage(content="thinking about it", tool_calls=[])
 
     await orchestrator_tools._drain_sub_agent(
-        events(), ids["project_id"], ids["target_id"], "run-1", "pentesting"
+        events(),
+        project_id=ids["project_id"],
+        target_id=ids["target_id"],
+        agent_run_id="run-1",
+        role="pentesting",
     )
 
     assert len(persisted) == 1
@@ -520,6 +532,57 @@ async def test_run_scouting_closes_kali_sessions_for_its_own_run(monkeypatch, id
     await tool.ainvoke({})
 
     fake_manager.close_sessions_for_run.assert_awaited_once_with(ids["target_id"], str(run_id))
+
+
+# --- _resolve_effective_tool_groups: the pure helper C2 extracted out of
+# run_one - no db_manager/run_registry mocking needed, since narrowing/
+# clamping/union is now independent of any dispatch I/O. ---
+
+
+def test_resolve_effective_tool_groups_defaults_to_project_ceiling_when_nothing_requested():
+    vector = SimpleNamespace(extra_tool_groups=None)
+    effective_ids, note = orchestrator_tools._resolve_effective_tool_groups(
+        vector, None, {"ftp", "sqlmap"}, frozenset({"ftp", "sqlmap", "metasploit"})
+    )
+    assert effective_ids == {"ftp", "sqlmap"}
+    assert note == ""
+
+
+def test_resolve_effective_tool_groups_narrowing_is_a_ceiling_not_an_expansion():
+    # Requesting a group the project doesn't enable must drop it, never add
+    # it - this is the test to break-and-watch-go-red per CLAUDE.md 2.1.
+    vector = SimpleNamespace(extra_tool_groups=None)
+    effective_ids, note = orchestrator_tools._resolve_effective_tool_groups(
+        vector,
+        ["ftp", "metasploit"],
+        {"ftp"},
+        frozenset({"ftp", "sqlmap", "metasploit"}),
+    )
+    assert effective_ids == {"ftp"}
+    assert "metasploit" not in effective_ids
+    assert "metasploit" in note
+    assert "ignored" in note
+
+
+def test_resolve_effective_tool_groups_unknown_id_returns_none_and_the_bad_id():
+    vector = SimpleNamespace(extra_tool_groups=None)
+    effective_ids, note = orchestrator_tools._resolve_effective_tool_groups(
+        vector, ["not-a-real-id"], {"ftp"}, frozenset({"ftp", "sqlmap"})
+    )
+    assert effective_ids is None
+    assert note == "not-a-real-id"
+
+
+def test_resolve_effective_tool_groups_unions_with_vector_extra_tool_groups():
+    # vector.extra_tool_groups (request_tool_access's own grant) is the
+    # only way to exceed project_default_ids - narrowing must not erase it.
+    vector = SimpleNamespace(extra_tool_groups=["metasploit"])
+    effective_ids, note = orchestrator_tools._resolve_effective_tool_groups(
+        vector, ["ftp"], {"ftp", "sqlmap"}, frozenset({"ftp", "sqlmap", "metasploit"})
+    )
+    assert effective_ids == {"ftp", "metasploit"}
+    assert "metasploit" in note
+    assert "approved extra tool group" in note
 
 
 # --- dispatch_pentest_batch: tool_groups narrowing is a ceiling, never an

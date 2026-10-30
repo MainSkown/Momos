@@ -19,7 +19,8 @@ approval plumbing needs no role-specific case to resolve one."""
 import asyncio
 from typing import Callable, Dict, List, Optional
 from langchain_core.tools import tool
-from src.core import db_manager, tool_groups
+from src.core import db_manager
+from src.core import tool_groups as tool_groups_module
 from src.core.agent import agent_checkpointer, run_registry
 from src.core.agent.roles import common
 from src.core.kali_integration import kali_registry
@@ -74,12 +75,13 @@ def _project_enabled_group_ids(project_settings) -> set:
     tool-name level, since this module works with the ids an orchestrator
     picks per-vector, not raw tool names)."""
     if project_settings.enabled_tools is None:
-        return {g.id for g in tool_groups.TOOL_GROUPS if g.default_enabled}
+        return {g.id for g in tool_groups_module.TOOL_GROUPS if g.default_enabled}
     return set(project_settings.enabled_tools)
 
 
 async def _drain_sub_agent(
     agent_events,
+    *,
     project_id: str,
     target_id: str,
     agent_run_id: str,
@@ -173,8 +175,10 @@ def create_run_scouting_tool(
         from src.core.agent.roles.agents import scouting_agent as scouting_mod
 
         loop = asyncio.get_running_loop()
-        target = await loop.run_in_executor(None, db_manager.get_target, target_id)
-        project_settings = await loop.run_in_executor(None, db_manager.get_project_settings, project_id)
+        target, project_settings = await asyncio.gather(
+            loop.run_in_executor(None, db_manager.get_target, target_id),
+            loop.run_in_executor(None, db_manager.get_project_settings, project_id),
+        )
 
         model_name = project_settings.scouting_model_name or project_settings.base_model_name
         reasoning, context_window = await common.resolve_model_capabilities(
@@ -214,10 +218,10 @@ def create_run_scouting_tool(
                     should_interrupt=should_interrupt,
                     stop_event=stop_event,
                 ),
-                project_id,
-                target_id,
-                agent_run_id,
-                "scouting",
+                project_id=project_id,
+                target_id=target_id,
+                agent_run_id=agent_run_id,
+                role="scouting",
                 parent_run_id=orchestrator_run_id,
             )
         finally:
@@ -253,21 +257,55 @@ def create_run_scouting_tool(
     return run_scouting
 
 
+def _resolve_effective_tool_groups(
+    vector,
+    requested: Optional[List[str]],
+    project_default_ids: set,
+    valid_tool_group_ids: frozenset,
+) -> tuple[Optional[set], str]:
+    """Returns (effective_ids, note) - effective_ids is None if `requested`
+    names an unknown group id (caller should reject the dispatch outright
+    in that case, using `note` as the offending id); note is a short
+    string describing any narrowing-drop or extra-group-in-use, to surface
+    in the dispatch result, or "" if neither applies.
+
+    tool_groups only ever NARROWS the project's own ceiling - an id this
+    project doesn't enable at all is dropped, never added (narrowed
+    below). The only way to actually exceed project_default_ids is
+    vector.extra_tool_groups, which only request_tool_access is ever
+    allowed to write to."""
+    note = ""
+    if requested is None:
+        narrowed = project_default_ids
+    else:
+        unknown = [g for g in requested if g not in valid_tool_group_ids]
+        if unknown:
+            return None, unknown[0]
+        requested_ids = set(requested)
+        narrowed = requested_ids & project_default_ids
+        dropped = sorted(requested_ids - project_default_ids)
+        if dropped:
+            note += " (note: " + ", ".join(
+                f"'{d}' not enabled for this project, ignored" for d in dropped
+            ) + ")"
+
+    vector_extra_ids = set(vector.extra_tool_groups or [])
+    effective_ids = narrowed | vector_extra_ids
+    approved_extra = sorted(vector_extra_ids - narrowed)
+    if approved_extra:
+        note += (
+            f" (approved extra tool group(s) in use: {', '.join(approved_extra)})"
+        )
+
+    return effective_ids, note
+
+
 def create_dispatch_pentest_batch_tool(
     project_id: str,
     target_id: str,
     orchestrator_run_id: str,
     should_interrupt: bool,
 ):
-    # Captured here, before the inner tool function's own `tool_groups`
-    # parameter exists - that parameter name is fixed by the tool's public
-    # signature (the orchestrator LLM calls it by that name) and would
-    # shadow the `src.core.tool_groups` module import for every reference
-    # inside dispatch_pentest_batch/run_one, so the frozenset is pulled out
-    # under its own name here instead of referencing the module directly
-    # down there.
-    valid_tool_group_ids = tool_groups.TOOL_GROUP_IDS
-
     @tool(DISPATCH_PENTEST_BATCH_TOOL_NAME)
     async def dispatch_pentest_batch(
         vector_ids: List[str], tool_groups: Optional[Dict[str, List[str]]] = None
@@ -294,8 +332,10 @@ def create_dispatch_pentest_batch_tool(
         from src.core.agent.roles.agents import pentesting_agent as pentesting_mod
 
         loop = asyncio.get_running_loop()
-        target = await loop.run_in_executor(None, db_manager.get_target, target_id)
-        project_settings = await loop.run_in_executor(None, db_manager.get_project_settings, project_id)
+        target, project_settings = await asyncio.gather(
+            loop.run_in_executor(None, db_manager.get_target, target_id),
+            loop.run_in_executor(None, db_manager.get_project_settings, project_id),
+        )
         max_concurrent_agents = project_settings.max_concurrent_agents
         model_name = project_settings.pentesting_model_name or project_settings.base_model_name
         prompt_template = (
@@ -324,40 +364,18 @@ def create_dispatch_pentest_batch_tool(
             if vector.status not in (AttackVectorStatus.PENDING, AttackVectorStatus.TESTING):
                 return f"{vector_id}: not pending/testing (status={vector.status}) - skipped."
 
-            # tool_groups only ever NARROWS the project's own ceiling - an
-            # id this project doesn't enable at all is dropped, never
-            # added (effective_ids below). The only way to actually exceed
-            # project_default_ids is vector.extra_tool_groups, which only
-            # request_tool_access is ever allowed to write to.
             requested = requested_tool_groups.get(vector_id)
-            note = ""
-            if requested is None:
-                narrowed = project_default_ids
-            else:
-                unknown = [g for g in requested if g not in valid_tool_group_ids]
-                if unknown:
-                    # Rejected immediately - must not raise, since every
-                    # vector in this batch runs concurrently under
-                    # asyncio.gather and one bad id must never cancel or
-                    # otherwise affect its siblings.
-                    return (
-                        f"{vector_id}: unknown tool group '{unknown[0]}' in "
-                        "tool_groups - dispatch rejected."
-                    )
-                requested_ids = set(requested)
-                narrowed = requested_ids & project_default_ids
-                dropped = sorted(requested_ids - project_default_ids)
-                if dropped:
-                    note += " (note: " + ", ".join(
-                        f"'{d}' not enabled for this project, ignored" for d in dropped
-                    ) + ")"
-
-            vector_extra_ids = set(vector.extra_tool_groups or [])
-            effective_ids = narrowed | vector_extra_ids
-            approved_extra = sorted(vector_extra_ids - narrowed)
-            if approved_extra:
-                note += (
-                    f" (approved extra tool group(s) in use: {', '.join(approved_extra)})"
+            effective_ids, note = _resolve_effective_tool_groups(
+                vector, requested, project_default_ids, tool_groups_module.TOOL_GROUP_IDS
+            )
+            if effective_ids is None:
+                # Rejected immediately - must not raise, since every vector
+                # in this batch runs concurrently under asyncio.gather and
+                # one bad id must never cancel or otherwise affect its
+                # siblings.
+                return (
+                    f"{vector_id}: unknown tool group '{note}' in "
+                    "tool_groups - dispatch rejected."
                 )
 
             await run_registry.acquire_agent_slot(project_id, max_concurrent_agents)
@@ -409,10 +427,10 @@ def create_dispatch_pentest_batch_tool(
                         should_interrupt=should_interrupt,
                         stop_event=stop_event,
                     ),
-                    project_id,
-                    target_id,
-                    agent_run_id,
-                    "pentesting",
+                    project_id=project_id,
+                    target_id=target_id,
+                    agent_run_id=agent_run_id,
+                    role="pentesting",
                     parent_run_id=orchestrator_run_id,
                     attack_vector_id=vector_id,
                 )
@@ -517,7 +535,7 @@ def create_request_tool_access_tool(project_id: str, target_id: str):
             reason: A short, concrete justification - what the vector's
                 description suggests is needed and why.
         """
-        if tool_group not in tool_groups.TOOL_GROUP_IDS:
+        if tool_group not in tool_groups_module.TOOL_GROUP_IDS:
             return f"'{tool_group}' is not a known tool group - nothing changed."
 
         loop = asyncio.get_running_loop()
@@ -615,10 +633,10 @@ def create_request_report_tool(project_id: str, target_id: str, orchestrator_run
                     thread_id=f"{target_id}:{agent_run_id}",
                     stop_event=stop_event,
                 ),
-                project_id,
-                target_id,
-                agent_run_id,
-                "reporting",
+                project_id=project_id,
+                target_id=target_id,
+                agent_run_id=agent_run_id,
+                role="reporting",
                 parent_run_id=orchestrator_run_id,
                 attack_vector_id=vector_id,
             )
