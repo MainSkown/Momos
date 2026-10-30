@@ -65,6 +65,7 @@ from src.core.agent.agent_tools import (
     SMB_ENUM_TOOL_NAME,
     SNMP_ENUM_TOOL_NAME,
     SQLMAP_RUN_TOOL_NAME,
+    SSH_CHECK_LOGIN_TOOL_NAME,
     SSH_RUN_TOOL_NAME,
     SWITCH_SESSION_TOOL_NAME,
     TESTSSL_SCAN_TOOL_NAME,
@@ -317,6 +318,35 @@ class TestCreatePentestTools:
         assert "only one of `username`/`username_list`" in result.content
         kali_exec.exec_run.assert_not_called()
         cb["mark_tested"].assert_not_called()
+
+    async def test_hydra_bruteforce_accumulates_multiple_valid_credentials_for_the_same_port(
+        self, kali_exec, patched_db_manager
+    ):
+        """B2: a second valid-credential match for the same port used to
+        overwrite the enumeration entry's `notes` outright instead of
+        accumulating - the full raw output (returned as the artifact) kept
+        every match, but the structured table the agent is told to trust
+        over its own memory silently lost the earlier one."""
+        patched_db_manager.get_target.return_value = _make_target()
+        hydra_output = (
+            "[21][ftp] host: 10.0.0.5   login: admin   password: admin123\n"
+            "[21][ftp] host: 10.0.0.5   login: root   password: toor\n"
+        )
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=0, output=hydra_output.encode()
+        )
+        tools, cb = self._build()
+
+        result = await _invoke(
+            tools[HYDRA_BRUTEFORCE_TOOL_NAME], service="ftp", username="x", password="y"
+        )
+
+        assert result.artifact == hydra_output
+        cb["on_enumeration"].assert_called_once()
+        entries = cb["on_enumeration"].call_args.args[0]
+        notes = entries["21"]["notes"]
+        assert "login='admin'" in notes
+        assert "login='root'" in notes
 
     async def test_gobuster_scan_rejects_malformed_extensions_without_ever_running_gobuster(
         self, kali_exec, patched_db_manager
@@ -1615,6 +1645,62 @@ class TestSshRun:
 
         assert result.content == "root\n"
         assert result.artifact == "root\n"
+
+
+class TestSshCheckLogin:
+    async def test_successful_login_returns_output_and_records_it_as_evidence(
+        self, kali_exec, patched_db_manager
+    ):
+        patched_db_manager.get_target.return_value = _make_target()
+        kali_exec.exec_run.return_value = SimpleNamespace(exit_code=0, output=b"")
+        mark_tested = MagicMock()
+        on_raw_output = MagicMock()
+        tools = _tools_by_name(
+            create_guided_session_tools(
+                "proj1", "target1", "run1", MagicMock(), mark_tested, MagicMock(),
+                MagicMock(), on_raw_output,
+            )
+        )
+
+        result = await _invoke(
+            tools[SSH_CHECK_LOGIN_TOOL_NAME], username="root", password="toor"
+        )
+
+        assert result.content.startswith("Login successful")
+        mark_tested.assert_called_once()
+        on_raw_output.assert_called_once_with("")
+
+    async def test_failed_login_does_not_record_the_connection_error_as_evidence(
+        self, kali_exec, patched_db_manager
+    ):
+        """B1: a failed one-shot's `output` is _execute_one_shot's own
+        wrapped RuntimeError message, not real command output (see its own
+        docstring) - it must never reach on_raw_output, which feeds
+        _last_raw_output, the evidence a later "vulnerable" claim is
+        checked against. Same bug class as scripting_tools' run_python_script
+        (see test_failing_script_still_returns_its_output_and_marks_tested),
+        a second, separate instance that slipped through on this tool."""
+        patched_db_manager.get_target.return_value = _make_target()
+        kali_exec.exec_run.return_value = SimpleNamespace(
+            exit_code=1, output=b"Permission denied, please try again.\n"
+        )
+        mark_tested = MagicMock()
+        on_raw_output = MagicMock()
+        tools = _tools_by_name(
+            create_guided_session_tools(
+                "proj1", "target1", "run1", MagicMock(), mark_tested, MagicMock(),
+                MagicMock(), on_raw_output,
+            )
+        )
+
+        result = await _invoke(
+            tools[SSH_CHECK_LOGIN_TOOL_NAME], username="root", password="wrong"
+        )
+
+        assert "Login failed" in result.content
+        mark_tested.assert_called_once()
+        on_raw_output.assert_not_called()
+        assert result.artifact is None
 
 
 class TestCreateTerminalTools:

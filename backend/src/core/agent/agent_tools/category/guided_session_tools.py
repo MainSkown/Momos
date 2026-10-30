@@ -703,10 +703,10 @@ def create_guided_session_tools(
         )
         ok, output = await _execute_one_shot(project_id, command, SSH_CHECK_LOGIN_TIMEOUT_SECONDS)
         mark_tested()
+        if not ok:
+            return f"Login failed for '{username}' (or a connection error).\n\n{output}", None
         on_raw_output(output)
-        if ok:
-            return f"Login successful for '{username}'.\n\n{output}", output
-        return f"Login failed for '{username}' (or a connection error).\n\n{output}", output
+        return f"Login successful for '{username}'.\n\n{output}", output
 
     @tool(SSH_RUN_TOOL_NAME, response_format="content_and_artifact")
     async def ssh_run(username: str, password: str, command: str) -> str:
