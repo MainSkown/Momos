@@ -1240,10 +1240,35 @@ class AgentService:
                     continue
 
                 if isinstance(event, dict):
-                    # OrchestratorAgent.start_agent's own requires_interrupt
-                    # always returns False (see its own docstring) - this
-                    # shape never actually occurs, kept only so an
-                    # unexpected dict here can't crash this loop.
+                    # AgentInterruptAction - pause and wait for approval,
+                    # same handling as the single-agent run loop above
+                    # (OrchestratorAgent.requires_interrupt can now return
+                    # True, for request_tool_access - see its own docstring).
+                    run_registry.pending_interrupts[agent_run_id] = event["accept"]
+                    tool_calls = [
+                        {"name": tc["name"], "args": tc["args"]}
+                        for tc in event["tool_calls"]
+                    ]
+                    run_registry.pending_interrupt_tool_calls[agent_run_id] = tool_calls
+
+                    await run_registry.persist_run_state(
+                        project_id=project_id,
+                        target_id=target_id,
+                        status=AgentRunState.INTERRUPTED,
+                        remaining_seconds=run_state.get("time_left", 0),
+                        agent_run_id=agent_run_id,
+                        role=role,
+                    )
+
+                    await ws_registry.send_message(
+                        AgentInterruptRequest(
+                            type=WsTypes.AgentInterruptRequest,
+                            project_id=project_id,
+                            target_id=target_id,
+                            tool_calls=tool_calls,
+                            agent_run_id=agent_run_id,
+                        )
+                    )
                     continue
 
                 for log_type, content, tool_name, raw_output in run_registry.message_to_log_specs(

@@ -69,6 +69,7 @@ class OrchestratorAgent:
         self.agent_run_id = agent_run_id
         self.checkpointer = checkpointer
         self.context_window = context_window or common.DEFAULT_CONTEXT_WINDOW_FALLBACK
+        self.should_interrupt = should_interrupt
         self._scouting_done = False
 
         self.tools = agent_tools.build_orchestrator_agent_tools(
@@ -230,13 +231,23 @@ class OrchestratorAgent:
             }
 
         def requires_interrupt(tool_call_names) -> bool:
-            # orchestrator_tools.ALWAYS_INTERRUPT_TOOL_NAMES/
-            # INTERRUPT_GATED_TOOL_NAMES are both empty - none of the
-            # orchestrator's own 3 tools ever need human approval at its
-            # level; each sub-agent it spawns surfaces its OWN interrupt
-            # need independently, keyed by its own agent_run_id (see
-            # orchestrator_tools._drain_sub_agent).
-            return False
+            # Each sub-agent the orchestrator spawns ALSO surfaces its own
+            # interrupt need independently, keyed by its own agent_run_id
+            # (see orchestrator_tools._drain_sub_agent) - this check is
+            # only about the orchestrator's OWN tools (currently just
+            # request_tool_access, via ALWAYS_INTERRUPT_TOOL_NAMES).
+            _, readers = common.turn_conflict(
+                tool_call_names,
+                orchestrator_tools.WRITER_TOOL_NAMES,
+                orchestrator_tools.READER_TOOL_NAMES,
+            )
+            if readers:
+                return False
+            always = bool(tool_call_names & orchestrator_tools.ALWAYS_INTERRUPT_TOOL_NAMES)
+            return always or (
+                self.should_interrupt
+                and bool(tool_call_names & orchestrator_tools.INTERRUPT_GATED_TOOL_NAMES)
+            )
 
         async for event in common.run_graph_loop(
             self.app,

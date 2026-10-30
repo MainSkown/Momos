@@ -161,6 +161,11 @@ async def test_start_agent_passes_check_done_mid_turn_false(monkeypatch):
         pass
 
     assert captured["check_done_mid_turn"] is False
-    # The orchestrator's own 3 tools never need human approval at its
-    # level (each sub-agent surfaces its own interrupt independently).
+    # run_scouting/dispatch_pentest_batch/request_report never need human
+    # approval at the orchestrator's own level (each sub-agent surfaces
+    # its own interrupt independently).
     assert captured["requires_interrupt"]({"run_scouting", "request_report"}) is False
+    # request_tool_access is the one orchestrator tool that always must
+    # (orchestrator_tools.ALWAYS_INTERRUPT_TOOL_NAMES) - this is the gate
+    # the whole request_tool_access feature depends on actually firing.
+    assert captured["requires_interrupt"]({"request_tool_access"}) is True
