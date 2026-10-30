@@ -63,7 +63,12 @@ const TOOL_GROUPS = [
   { id: "netexec", labelKey: "netexec", descKey: "netexec_desc", defaultEnabled: false },
   { id: "impacket", labelKey: "impacket", descKey: "impacket_desc", defaultEnabled: false },
   { id: "responder", labelKey: "responder", descKey: "responder_desc", defaultEnabled: false },
-  { id: "password_cracking", labelKey: "password_cracking", descKey: "password_cracking_desc", defaultEnabled: false },
+  {
+    id: "password_cracking",
+    labelKey: "password_cracking",
+    descKey: "password_cracking_desc",
+    defaultEnabled: false,
+  },
   { id: "commix", labelKey: "commix", descKey: "commix_desc", defaultEnabled: true },
 ] as const;
 

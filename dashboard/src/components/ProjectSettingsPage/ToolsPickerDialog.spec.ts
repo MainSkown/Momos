@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, type VueWrapper } from "@vue/test-utils";
 import ToolsPickerDialog from "./ToolsPickerDialog.vue";
 
 const DEFAULT_CHECKED_BY_GROUP: ReadonlyArray<[string, boolean]> = [
@@ -18,12 +18,16 @@ const DEFAULT_CHECKED_BY_GROUP: ReadonlyArray<[string, boolean]> = [
   ["commix", true],
 ];
 
+const mountedPickers: VueWrapper[] = [];
+
 function mountPicker(enabledTools: string[] | null) {
-  return mount(ToolsPickerDialog, {
+  const wrapper = mount(ToolsPickerDialog, {
     props: { visible: true, enabledTools },
     global: { mocks: { $t: (key: string) => key } },
     attachTo: document.body,
   });
+  mountedPickers.push(wrapper);
+  return wrapper;
 }
 
 function checkboxFor(groupId: string): HTMLInputElement | null {
@@ -32,6 +36,7 @@ function checkboxFor(groupId: string): HTMLInputElement | null {
 
 describe("ToolsPickerDialog default checked state (enabledTools unset)", () => {
   afterEach(() => {
+    mountedPickers.splice(0).forEach((wrapper) => wrapper.unmount());
     document.body.innerHTML = "";
   });
 

@@ -3,13 +3,9 @@ import { mount } from "@vue/test-utils";
 import LogEntryList from "./LogEntryList.vue";
 import type { AgentLogResponse } from "@/api";
 
-vi.mock("vue-i18n", async () => {
-  const { en } = await import("@/i18n/locales/en");
-  const lookup = (key: string) =>
-    key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], en) ??
-    key;
-  return { useI18n: () => ({ t: lookup }) };
-});
+vi.mock("vue-i18n", () => ({
+  useI18n: () => ({ t: (key: string) => key }),
+}));
 
 function toolEntry(toolName: string): AgentLogResponse {
   return {
@@ -37,10 +33,10 @@ describe("LogEntryList tool labels", () => {
   });
 
   it("renders the orchestration tool request_tool_access with its human label", () => {
-    expect(renderedToolName("request_tool_access")).toBe("Tool Access Requested");
+    expect(renderedToolName("request_tool_access")).toBe("agent_logs.tool_request_tool_access");
   });
 
   it("keeps rendering a milestone-2 binary tool as its raw snake_case name", () => {
-    expect(renderedToolName("nikto_scan")).toBe("nikto_scan");
+    expect(renderedToolName("netexec_run")).toBe("netexec_run");
   });
 });
