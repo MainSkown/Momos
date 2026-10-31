@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import DiscoveryResults from "./DiscoveryResults.vue";
+import DiscoveryResults from "@/components/ProjectSettingsPage/DiscoveryResults.vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { DiscoveredHost } from "@/api";
 

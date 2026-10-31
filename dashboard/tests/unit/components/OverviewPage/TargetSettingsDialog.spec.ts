@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, DOMWrapper } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import TargetSettingsDialog from "./TargetSettingsDialog.vue";
+import TargetSettingsDialog from "@/components/OverviewPage/TargetSettingsDialog.vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { ResponseTarget } from "@/api";
 

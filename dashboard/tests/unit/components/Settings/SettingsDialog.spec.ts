@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect } from "vitest";
 import { mount, DOMWrapper } from "@vue/test-utils";
-import SettingsDialog from "./SettingsDialog.vue";
-import { USER_SETTINGS_KEYS, user_settings } from "../tools";
+import SettingsDialog from "@/components/Settings/SettingsDialog.vue";
+import { USER_SETTINGS_KEYS, user_settings } from "@/components/tools";
 
 function mountDialog() {
   return mount(SettingsDialog, {

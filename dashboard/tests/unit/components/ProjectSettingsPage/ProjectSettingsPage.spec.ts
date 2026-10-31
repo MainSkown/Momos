@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import ProjectSettingsPage from "./ProjectSettingsPage.vue";
+import ProjectSettingsPage from "@/components/ProjectSettingsPage/ProjectSettingsPage.vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { ProjectSettings } from "@/api";
 

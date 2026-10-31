@@ -5,7 +5,7 @@ vi.mock("@/composables/useAccentTheme", () => ({
 }));
 
 import { applyAccent } from "@/composables/useAccentTheme";
-import { applyPersistedAccentColor } from "./applyPersistedAccentColor";
+import { applyPersistedAccentColor } from "@/bootstrap/applyPersistedAccentColor";
 
 function fakeStore(overrides: {
   loadUserSettings?: () => Promise<void>;

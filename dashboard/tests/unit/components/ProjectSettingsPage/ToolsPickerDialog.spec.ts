@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
-import ToolsPickerDialog from "./ToolsPickerDialog.vue";
+import ToolsPickerDialog from "@/components/ProjectSettingsPage/ToolsPickerDialog.vue";
 
 const DEFAULT_CHECKED_BY_GROUP: ReadonlyArray<[string, boolean]> = [
   ["sqlmap", true],

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import SessionDetail from "./SessionDetail.vue";
+import SessionDetail from "@/components/HistoryPage/SessionDetail.vue";
 import type { ResponseAttackVector, TestSessionDetailResponse } from "@/api";
 
 vi.mock("vue-i18n", () => ({

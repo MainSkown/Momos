@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises, DOMWrapper } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import ScopeAuthorizationDialog from "./ScopeAuthorizationDialog.vue";
-import DiscoveryResults from "./DiscoveryResults.vue";
+import ScopeAuthorizationDialog from "@/components/ProjectSettingsPage/ScopeAuthorizationDialog.vue";
+import DiscoveryResults from "@/components/ProjectSettingsPage/DiscoveryResults.vue";
 import { useMomosStore } from "@/store/momos_store";
 
 vi.mock("vue-i18n", () => ({

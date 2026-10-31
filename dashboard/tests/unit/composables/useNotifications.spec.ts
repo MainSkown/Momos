@@ -18,7 +18,7 @@ afterEach(() => {
 describe("requestNotificationPermission", () => {
   it("resolves to unsupported and does not throw when window.Notification is absent", async () => {
     vi.stubGlobal("Notification", undefined);
-    const { requestNotificationPermission } = await import("./useNotifications");
+    const { requestNotificationPermission } = await import("@/composables/useNotifications");
 
     await expect(requestNotificationPermission()).resolves.toBe("unsupported");
   });
@@ -27,7 +27,7 @@ describe("requestNotificationPermission", () => {
     MockNotification.permission = "granted";
     MockNotification.requestPermission = vi.fn();
     vi.stubGlobal("Notification", MockNotification);
-    const { requestNotificationPermission } = await import("./useNotifications");
+    const { requestNotificationPermission } = await import("@/composables/useNotifications");
 
     await expect(requestNotificationPermission()).resolves.toBe("granted");
     expect(MockNotification.requestPermission).not.toHaveBeenCalled();
@@ -37,7 +37,7 @@ describe("requestNotificationPermission", () => {
     MockNotification.permission = "default";
     MockNotification.requestPermission = vi.fn().mockResolvedValue("granted");
     vi.stubGlobal("Notification", MockNotification);
-    const { requestNotificationPermission } = await import("./useNotifications");
+    const { requestNotificationPermission } = await import("@/composables/useNotifications");
 
     await expect(requestNotificationPermission()).resolves.toBe("granted");
     expect(MockNotification.requestPermission).toHaveBeenCalledOnce();
@@ -47,7 +47,7 @@ describe("requestNotificationPermission", () => {
     MockNotification.permission = "default";
     MockNotification.requestPermission = vi.fn().mockResolvedValue("denied");
     vi.stubGlobal("Notification", MockNotification);
-    const { requestNotificationPermission } = await import("./useNotifications");
+    const { requestNotificationPermission } = await import("@/composables/useNotifications");
 
     await expect(requestNotificationPermission()).resolves.toBe("denied");
   });
@@ -60,7 +60,7 @@ describe("requestNotificationPermission", () => {
       return undefined as unknown as Promise<NotificationPermission>;
     });
     vi.stubGlobal("Notification", MockNotification);
-    const { requestNotificationPermission } = await import("./useNotifications");
+    const { requestNotificationPermission } = await import("@/composables/useNotifications");
 
     await expect(requestNotificationPermission()).resolves.toBe("granted");
   });
@@ -69,7 +69,7 @@ describe("requestNotificationPermission", () => {
 describe("showBrowserNotification", () => {
   it("does not throw when window.Notification is absent", async () => {
     vi.stubGlobal("Notification", undefined);
-    const { showBrowserNotification } = await import("./useNotifications");
+    const { showBrowserNotification } = await import("@/composables/useNotifications");
 
     expect(() => showBrowserNotification("title", "body")).not.toThrow();
   });
@@ -87,7 +87,7 @@ describe("showBrowserNotification", () => {
     }
     vi.stubGlobal("Notification", SpiedNotification);
 
-    const { showBrowserNotification } = await import("./useNotifications");
+    const { showBrowserNotification } = await import("@/composables/useNotifications");
     showBrowserNotification("Agent finished", "Run on project X completed");
 
     expect(constructorSpy).toHaveBeenCalledWith("Agent finished", { body: "Run on project X completed" });
@@ -109,7 +109,7 @@ describe("showBrowserNotification", () => {
     // Simulate the OS/browser revoking permission after it was granted in-app.
     SpiedNotification.permission = "denied";
 
-    const { showBrowserNotification } = await import("./useNotifications");
+    const { showBrowserNotification } = await import("@/composables/useNotifications");
     expect(() => showBrowserNotification("title", "body")).not.toThrow();
     expect(constructorSpy).not.toHaveBeenCalled();
   });

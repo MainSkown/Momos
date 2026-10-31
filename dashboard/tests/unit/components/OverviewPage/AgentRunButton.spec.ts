@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import AgentRunButton from "./AgentRunButton.vue";
+import AgentRunButton from "@/components/OverviewPage/AgentRunButton.vue";
 import type { AgentRunResponse, ResponseTarget } from "@/api";
 
 vi.mock("vue-i18n", () => ({

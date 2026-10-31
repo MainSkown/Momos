@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, DOMWrapper } from "@vue/test-utils";
 import { createTestingPinia } from "@pinia/testing";
-import ProjectDialog from "./ProjectDialog.vue";
+import ProjectDialog from "@/components/MainPage/ProjectDialog.vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { OllamaModelData } from "@/api";
 

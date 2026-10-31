@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import ScopeRangeInput from "./ScopeRangeInput.vue";
+import ScopeRangeInput from "@/components/ProjectSettingsPage/ScopeRangeInput.vue";
 import type { tScopeRange } from "@/types";
 
 vi.mock("vue-i18n", () => ({

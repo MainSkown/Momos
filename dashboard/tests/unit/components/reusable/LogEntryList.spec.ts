@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
-import LogEntryList from "./LogEntryList.vue";
+import LogEntryList from "@/components/reusable/LogEntryList.vue";
 import type { AgentLogResponse } from "@/api";
 
 vi.mock("vue-i18n", () => ({
