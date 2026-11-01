@@ -8,6 +8,7 @@ from .vulnerability_router import router as vulnerability_router
 from .session_router import router as session_router
 from .user_settings_router import router as user_settings_router
 from .scope_discovery_router import router as scope_discovery_router
+from .connection_router import router as connection_router
 
 __all__ = [
     "project_router",
@@ -20,4 +21,5 @@ __all__ = [
     "session_router",
     "user_settings_router",
     "scope_discovery_router",
+    "connection_router",
 ]
