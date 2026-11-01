@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from . import agent_tools, run_registry
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
-from src.core import db_manager, settings, tool_groups
+from src.core import db_manager, ollama_manager, settings, tool_groups
 import time
 
 logger = logging.getLogger("momos.agent")
@@ -328,7 +328,8 @@ class Agent:
         # once," so its own target_id already uniquely identifies it.
         self.agent_run_id = agent_run_id or target_id
         self.checkpointer = checkpointer
-        self.ollama_url = settings.ollama_url
+        self.ollama_url = ollama_manager.base_url
+        self.ollama_headers = ollama_manager.headers
         self.finish_summary: Optional[str] = None
 
         # Best-effort per-model info from ollama_manager.get_model_capabilities
@@ -1283,7 +1284,7 @@ class Agent:
         # that doesn't pass one) preserves the old default of True rather
         # than silently disabling reasoning for a model that might need it.
         use_reasoning = True if reasoning is None else reasoning
-        llm = ChatOllama(
+        chat_ollama_kwargs = dict(
             model=model_name,
             base_url=self.ollama_url,
             reasoning=use_reasoning,
@@ -1301,6 +1302,13 @@ class Agent:
             # above assumes it has room for.
             num_ctx=self.context_window,
         )
+        # Only set when a Remote connection's API key header is configured
+        # (see O4's ollama_manager.reconfigure) - omitted entirely for
+        # Local, so this call stays byte-for-byte identical to before this
+        # existed rather than passing a no-op client_kwargs={}.
+        if self.ollama_headers:
+            chat_ollama_kwargs["client_kwargs"] = {"headers": self.ollama_headers}
+        llm = ChatOllama(**chat_ollama_kwargs)
         self.llm_with_tools = llm.bind_tools(self.tools)
 
     # --- Execution and Interaction ---

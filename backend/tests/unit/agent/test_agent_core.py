@@ -124,8 +124,10 @@ def fake_db_manager():
     return db
 
 
-def _build_agent(monkeypatch, llm, session_manager, fake_db_manager, checkpointer, **overrides):
-    monkeypatch.setattr(agent_module, "ChatOllama", lambda **_: llm)
+def _build_agent(
+    monkeypatch, llm, session_manager, fake_db_manager, checkpointer, chat_ollama=None, **overrides
+):
+    monkeypatch.setattr(agent_module, "ChatOllama", chat_ollama or (lambda **_: llm))
     monkeypatch.setattr(agent_module, "db_manager", fake_db_manager)
 
     async def _get_manager(project_id, on_stage=None):
@@ -427,3 +429,71 @@ class TestTrimMessagesForModel:
         # trimmed[2] (recent[0]), the kept window's own first message.
         assert trimmed[0] is messages[0]
         assert not isinstance(trimmed[2], ToolMessage)
+
+
+class TestOllamaConnectionWiring:
+    """O5: Agent.__init__ reads the live ollama_manager's base_url/headers
+    (set by OllamaManager.reconfigure - see O4) instead of settings.ollama_url
+    directly, and changeModel threads self.ollama_headers through to
+    ChatOllama's client_kwargs only when non-empty - a Local connection
+    (ollama_manager.headers == {}) must build ChatOllama with no
+    client_kwargs at all, byte-for-byte identical to before this feature
+    existed, since langchain_ollama's ChatOllama treats an explicit
+    client_kwargs={} differently from omitting it in some paths."""
+
+    def test_init_reads_ollama_url_and_headers_from_ollama_manager_not_settings(
+        self, monkeypatch, fake_db_manager
+    ):
+        fake_manager = MagicMock()
+        fake_manager.base_url = "http://remote-host:11434"
+        fake_manager.headers = {"Authorization": "Bearer abc"}
+        monkeypatch.setattr(agent_module, "ollama_manager", fake_manager)
+
+        agent = _build_agent(
+            monkeypatch, ScriptedLLM(responses=[]), FakeSessionManager(), fake_db_manager, InMemorySaver()
+        )
+
+        assert agent.ollama_url == "http://remote-host:11434"
+        assert agent.ollama_headers == {"Authorization": "Bearer abc"}
+
+    def test_changeModel_omits_client_kwargs_when_ollama_manager_headers_empty(
+        self, monkeypatch, fake_db_manager
+    ):
+        fake_manager = MagicMock()
+        fake_manager.base_url = "http://localhost:11434"
+        fake_manager.headers = {}
+        monkeypatch.setattr(agent_module, "ollama_manager", fake_manager)
+        chat_ollama_mock = MagicMock()
+
+        _build_agent(
+            monkeypatch,
+            ScriptedLLM(responses=[]),
+            FakeSessionManager(),
+            fake_db_manager,
+            InMemorySaver(),
+            chat_ollama=chat_ollama_mock,
+        )
+
+        assert "client_kwargs" not in chat_ollama_mock.call_args.kwargs
+
+    def test_changeModel_passes_headers_through_client_kwargs_when_present(
+        self, monkeypatch, fake_db_manager
+    ):
+        fake_manager = MagicMock()
+        fake_manager.base_url = "http://remote-host:11434"
+        fake_manager.headers = {"Authorization": "Bearer abc"}
+        monkeypatch.setattr(agent_module, "ollama_manager", fake_manager)
+        chat_ollama_mock = MagicMock()
+
+        _build_agent(
+            monkeypatch,
+            ScriptedLLM(responses=[]),
+            FakeSessionManager(),
+            fake_db_manager,
+            InMemorySaver(),
+            chat_ollama=chat_ollama_mock,
+        )
+
+        assert chat_ollama_mock.call_args.kwargs["client_kwargs"] == {
+            "headers": {"Authorization": "Bearer abc"}
+        }
