@@ -24,7 +24,7 @@ column).
 
 import asyncio
 import uuid
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from src.core import db_manager, settings
 from src.core.agent import agent_tools
@@ -32,6 +32,7 @@ from src.schemas.agent_log_scheme import AgentLog, AgentLogResponse, AgentLogTyp
 from src.schemas.agent_run_scheme import AgentRun, AgentRunResponse, AgentRunState
 from src.schemas.attack_vector_scheme import AttackVector, ResponseAttackVector
 from src.schemas.vulnerability_scheme import Vulnerability, ResponseVulnerability
+from src.utils.exceptions import ConnectionSwitchBlockedException
 from src.websocket import (
     ws_registry,
     WsTypes,
@@ -40,6 +41,8 @@ from src.websocket import (
     AttackVectorUpdate,
     VulnerabilityFound,
 )
+
+T = TypeVar("T")
 
 # agent_run_id -> pending interrupt's accept callback. See this module's
 # own docstring for why agent_run_id, not target_id.
@@ -179,6 +182,25 @@ async def release_agent_slot(project_id: str) -> None:
         _project_slot_counts[project_id] = current - 1
         _global_slot_count = max(0, _global_slot_count - 1)
         _project_slot_condition.notify_all()
+
+
+async def run_exclusively_if_idle(action: Callable[[], Awaitable[T]]) -> T:
+    """Runs `action` (connection_service.save_connection's DB write +
+    ollama_manager.reconfigure) atomically with the "no agents currently
+    running" check, by holding the SAME _project_slot_condition lock
+    acquire_agent_slot/release_agent_slot use across both the check and
+    the action - a plain "check _global_slot_count, then separately await
+    action()" would leave a window where acquire_agent_slot could slip in
+    between the two and start a run against a connection that's mid-switch,
+    exactly the half-finished-run scenario this guard exists to prevent."""
+    async with _project_slot_condition:
+        if _global_slot_count > 0:
+            raise ConnectionSwitchBlockedException(
+                f"Cannot switch the Ollama connection while {_global_slot_count} "
+                "agent run(s) are in progress.",
+                _global_slot_count,
+            )
+        return await action()
 
 
 async def persist_run_state(
