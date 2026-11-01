@@ -1,3 +1,4 @@
+from typing import Optional
 from urllib.parse import quote
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     # only realistically run one model at a time (the actual default this
     # project ships with, since most local setups are exactly that).
     GLOBAL_MAX_CONCURRENT_AGENTS: int = 1
+
+    # Fernet key for encrypting secrets at rest (e.g. a saved remote Ollama
+    # connection's API key). Optional at the type level because Settings()
+    # is constructed before encryption_service.ensure_encryption_key_provisioned()
+    # has a chance to run and self-provision one on first boot - see
+    # docs/plans/milestone-3-remote-ollama-connection.md Part E.
+    APP_ENCRYPTION_KEY: Optional[str] = None
 
     # Tell Pydantic to look for the .env file in the root directory
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

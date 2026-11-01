@@ -58,3 +58,12 @@ class ModelAlreadyDownloadedException(ValueError):
     def __init__(self, message, model_name: str):
         super().__init__(message)
         self.model_name = model_name
+
+class EncryptionKeyMissingException(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
+class ConnectionSwitchBlockedException(Exception):
+    def __init__(self, message, running_count: int):
+        super().__init__(message)
+        self.running_count = running_count
