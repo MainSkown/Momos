@@ -627,6 +627,74 @@ export type ModelPullingUpdate = {
 };
 
 /**
+ * OllamaConnectionPublic
+ */
+export type OllamaConnectionPublic = {
+    /**
+     * Mode
+     */
+    mode: string;
+    /**
+     * Remote Url
+     */
+    remote_url: string;
+    /**
+     * Has Remote Api Key
+     */
+    has_remote_api_key: boolean;
+};
+
+/**
+ * OllamaConnectionTestRequest
+ */
+export type OllamaConnectionTestRequest = {
+    /**
+     * Remote Url
+     */
+    remote_url: string;
+    /**
+     * Remote Api Key
+     */
+    remote_api_key?: string | null;
+};
+
+/**
+ * OllamaConnectionTestResult
+ */
+export type OllamaConnectionTestResult = {
+    /**
+     * Reachable
+     */
+    reachable: boolean;
+    /**
+     * Latency Ms
+     */
+    latency_ms?: number | null;
+    /**
+     * Error
+     */
+    error?: string | null;
+};
+
+/**
+ * OllamaConnectionUpdate
+ */
+export type OllamaConnectionUpdate = {
+    /**
+     * Mode
+     */
+    mode: string;
+    /**
+     * Remote Url
+     */
+    remote_url?: string;
+    /**
+     * Remote Api Key
+     */
+    remote_api_key?: string | null;
+};
+
+/**
  * OllamaDownloadProgress
  */
 export type OllamaDownloadProgress = {
@@ -1036,6 +1104,10 @@ export type ResponseAttackVector = {
      * Session Id
      */
     session_id?: string | null;
+    /**
+     * Extra Tool Groups
+     */
+    extra_tool_groups?: Array<string> | null;
     /**
      * Id
      */
@@ -3008,6 +3080,72 @@ export type DiscoverProjectHostsResponses = {
 };
 
 export type DiscoverProjectHostsResponse = DiscoverProjectHostsResponses[keyof DiscoverProjectHostsResponses];
+
+export type GetOllamaConnectionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/connection';
+};
+
+export type GetOllamaConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: OllamaConnectionPublic;
+};
+
+export type GetOllamaConnectionResponse = GetOllamaConnectionResponses[keyof GetOllamaConnectionResponses];
+
+export type UpdateOllamaConnectionData = {
+    body: OllamaConnectionUpdate;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/connection';
+};
+
+export type UpdateOllamaConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type UpdateOllamaConnectionError = UpdateOllamaConnectionErrors[keyof UpdateOllamaConnectionErrors];
+
+export type UpdateOllamaConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: OllamaConnectionPublic;
+};
+
+export type UpdateOllamaConnectionResponse = UpdateOllamaConnectionResponses[keyof UpdateOllamaConnectionResponses];
+
+export type TestOllamaConnectionData = {
+    body: OllamaConnectionTestRequest;
+    path?: never;
+    query?: never;
+    url: '/api/ollama/connection/test';
+};
+
+export type TestOllamaConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type TestOllamaConnectionError = TestOllamaConnectionErrors[keyof TestOllamaConnectionErrors];
+
+export type TestOllamaConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: OllamaConnectionTestResult;
+};
+
+export type TestOllamaConnectionResponse = TestOllamaConnectionResponses[keyof TestOllamaConnectionResponses];
 
 export type WsTypesData = {
     body?: never;
