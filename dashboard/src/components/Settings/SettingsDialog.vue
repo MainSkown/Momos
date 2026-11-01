@@ -14,7 +14,7 @@
     </button>
     </div>
       <!-- Display Options-->
-      <div class="column">
+      <div class="column settings-content">
         <AISettings v-if="selectedSettings === USER_SETTINGS_KEYS.AI" />
         <UserOptions v-if="selectedSettings === USER_SETTINGS_KEYS.USER_OPTIONS" />
       </div>
@@ -49,6 +49,16 @@ const selectedSettings = ref<string>(user_settings[0]?.key ?? '')
    wrap mid-word. */
 .settings-sidebar {
   flex-shrink: 0;
+}
+
+/* Without this, a flex row item defaults to min-width:auto - it refuses
+   to shrink below its content's own intrinsic width (here, AISettings'
+   model grid/filter row), so at narrow widths the whole dialog silently
+   overflowed past .settings' 85vw instead of the content wrapping/
+   scrolling inside it as the narrow-width styles intend. */
+.settings-content {
+  min-width: 0;
+  flex: 1;
 }
 
 .settings-options {

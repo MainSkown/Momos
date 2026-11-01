@@ -26,6 +26,8 @@ import {
   type TestSessionUpdate as TestSessionUpdateMessage,
   getUserSettings,
   type UserSettings,
+  getOllamaConnection,
+  type OllamaConnectionPublic,
   getProjectScope,
   updateProjectScope,
   submitAuthorizationAcknowledgment,
@@ -82,6 +84,11 @@ interface State {
   // notification websocket hooks below) can tell "not loaded yet" apart
   // from "loaded, every toggle off".
   user_settings: UserSettings | null;
+  // The saved Ollama connection (mode + remote_url + whether a remote key is
+  // stored, never the key itself - see OllamaConnectionPublic). Null until
+  // loadOllamaConnection resolves at least once, same convention as
+  // user_settings above.
+  ollama_connection: OllamaConnectionPublic | null;
 }
 
 // Registered once for the app's lifetime (not per-component-mount, unlike
@@ -194,6 +201,7 @@ export const useMomosStore = defineStore("momos", {
     sessions: {},
     session_detail: {},
     user_settings: null,
+    ollama_connection: null,
   }),
 
   getters: {
@@ -210,6 +218,7 @@ export const useMomosStore = defineStore("momos", {
     getSessionDetail: (state) => (sessionID: string) =>
       state.session_detail[sessionID] ?? null,
     getUserSettings: (state) => state.user_settings,
+    getOllamaConnection: (state) => state.ollama_connection,
     getQueueObjectCompletion:
       (state) =>
       (model_name: string): { completed: number; total: number } => {
@@ -481,6 +490,21 @@ export const useMomosStore = defineStore("momos", {
 
     setUserSettings(settings: UserSettings) {
       this.user_settings = settings;
+    },
+
+    /* Ollama Connection */
+    async loadOllamaConnection() {
+      const result = await getOllamaConnection();
+
+      if (result.error || result.data === undefined) {
+        throw Error("Could not load Ollama connection");
+      }
+
+      this.ollama_connection = result.data;
+    },
+
+    setOllamaConnection(connection: OllamaConnectionPublic) {
+      this.ollama_connection = connection;
     },
 
     async loadRunningTarget(projectID: string) {

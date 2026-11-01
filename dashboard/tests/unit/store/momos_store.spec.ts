@@ -17,6 +17,7 @@ vi.mock("@/api", () => ({
   getTestSession: vi.fn(),
   deleteTestSession: vi.fn(),
   getUserSettings: vi.fn(),
+  getOllamaConnection: vi.fn(),
   getProjectScope: vi.fn(),
   updateProjectScope: vi.fn(),
   submitAuthorizationAcknowledgment: vi.fn(),
@@ -37,6 +38,7 @@ import {
   discoverProjectHosts,
   getAcknowledgmentStatus,
   getOllamaDownloadQueueDetails,
+  getOllamaConnection,
   getProjectScope,
   getUserSettings,
   postProject,
@@ -45,6 +47,7 @@ import {
   updateProjectScope,
   updateTarget,
   type DiscoveredHost,
+  type OllamaConnectionPublic,
   type ResponseTarget,
   type UserSettings,
 } from "@/api";
@@ -142,6 +145,57 @@ describe("setUserSettings", () => {
     store.setUserSettings(settings);
 
     expect(store.user_settings).toEqual(settings);
+  });
+});
+
+describe("loadOllamaConnection", () => {
+  function makeConnection(overrides: Partial<OllamaConnectionPublic> = {}): OllamaConnectionPublic {
+    return {
+      mode: "local",
+      remote_url: "",
+      has_remote_api_key: false,
+      ...overrides,
+    };
+  }
+
+  it("stores whatever GetOllamaConnection returns, as the shared source other parts of the app read live state from", async () => {
+    const connection = makeConnection({ mode: "remote", remote_url: "https://ollama.example.com" });
+    vi.mocked(getOllamaConnection).mockResolvedValue({
+      data: connection,
+      response: { status: 200 },
+    } as never);
+    const store = useMomosStore();
+
+    await store.loadOllamaConnection();
+
+    expect(store.ollama_connection).toEqual(connection);
+    expect(store.getOllamaConnection).toEqual(connection);
+  });
+
+  it("throws instead of silently leaving stale/null state on a failed fetch", async () => {
+    vi.mocked(getOllamaConnection).mockResolvedValue({
+      error: { detail: "boom" },
+      response: { status: 500 },
+    } as never);
+    const store = useMomosStore();
+
+    await expect(store.loadOllamaConnection()).rejects.toThrow();
+    expect(store.ollama_connection).toBeNull();
+  });
+});
+
+describe("setOllamaConnection", () => {
+  it("replaces the stored Ollama connection in place, mirroring setUserSettings's role for user settings", () => {
+    const store = useMomosStore();
+    const connection: OllamaConnectionPublic = {
+      mode: "remote",
+      remote_url: "https://ollama.example.com",
+      has_remote_api_key: true,
+    };
+
+    store.setOllamaConnection(connection);
+
+    expect(store.ollama_connection).toEqual(connection);
   });
 });
 
