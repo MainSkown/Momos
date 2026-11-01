@@ -4,6 +4,7 @@ import { createTestingPinia } from "@pinia/testing";
 import ProjectSettingsPage from "@/components/ProjectSettingsPage/ProjectSettingsPage.vue";
 import { useMomosStore } from "@/store/momos_store";
 import type { ProjectSettings } from "@/api";
+import type { OllamaModelData } from "@/api/types.gen";
 
 vi.mock("vue-i18n", () => ({
   useI18n: () => ({ t: (key: string) => key }),
@@ -23,7 +24,29 @@ vi.mock("@/api", () => ({
   updateProjectSettings: vi.fn(),
 }));
 
+// Mirrors AISettings.spec.ts's mock of this module, but keeps isInstalled's
+// real logic (reading back whatever the test puts into installed_models)
+// rather than a vi.fn() stub - a hardcoded return would make the warning's
+// own v-if untestable against real "is this name present" behavior.
+vi.mock("@/components/tools", () => {
+  const installed_models = { value: [] as OllamaModelData[] };
+  return {
+    aiModelsManager: {
+      installed_models,
+      isInstalled: (modelName: string) =>
+        installed_models.value.some((m) => m.name === modelName),
+      // A real vi.fn() (not a no-op stub) so the regression test below can
+      // assert it was actually invoked on mount - this is the call B2 found
+      // missing. Its mock implementation is set per-test via
+      // mockImplementation/mockResolvedValue where a test needs
+      // installed_models to end up populated.
+      initialize: vi.fn().mockResolvedValue(undefined),
+    },
+  };
+});
+
 import { getProjectSettings, updateProjectSettings } from "@/api";
+import { aiModelsManager } from "@/components/tools";
 
 function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
   return {
@@ -105,6 +128,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(getProjectSettings).mockReset();
   vi.mocked(updateProjectSettings).mockReset().mockResolvedValue({ data: {} } as never);
+  aiModelsManager.installed_models.value = [];
+  vi.mocked(aiModelsManager.initialize).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -301,5 +326,115 @@ describe("ProjectSettingsPage scope & authorization status badge", () => {
     await flushPromises();
 
     expect(store.getProjectScope).toHaveBeenCalledWith("project-a");
+  });
+});
+
+describe("ProjectSettingsPage model-mismatch warning", () => {
+  // All six model fields follow the same "warn if set and not installed"
+  // rule - looped rather than six near-duplicate test bodies, per
+  // CLAUDE.md rule 2's "keep tests small and direct" without losing
+  // per-field coverage (each field is still asserted individually, it's
+  // just the test body that's shared).
+  const modelFields: {
+    field: keyof ProjectSettings;
+    label: string;
+    requiresMultiAgent: boolean;
+  }[] = [
+    { field: "base_model_name", label: "models.base_model", requiresMultiAgent: false },
+    { field: "parsing_model_name", label: "models.parsing_model", requiresMultiAgent: false },
+    { field: "orchestrator_model_name", label: "models.orchestrator_model", requiresMultiAgent: true },
+    { field: "scouting_model_name", label: "models.scouting_model", requiresMultiAgent: true },
+    { field: "pentesting_model_name", label: "models.pentesting_model", requiresMultiAgent: true },
+    { field: "reporting_model_name", label: "models.reporting_model", requiresMultiAgent: true },
+  ];
+
+  function warningFor(wrapper: VueWrapper, label: string) {
+    return fieldGroupControl(wrapper, label, ".text-red");
+  }
+
+  async function mountWithField(
+    field: keyof ProjectSettings,
+    value: string,
+    requiresMultiAgent: boolean,
+  ) {
+    vi.mocked(getProjectSettings).mockResolvedValue({
+      data: makeSettings({
+        pipeline_mode: requiresMultiAgent ? "multi_agent" : "single_agent",
+        [field]: value,
+      }),
+    } as never);
+    const { wrapper } = mountPage("project-a");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it.each(modelFields)(
+    "renders the warning for $field when its model is not in installed_models",
+    async ({ field, label, requiresMultiAgent }) => {
+      aiModelsManager.installed_models.value = [{ name: "other-model" } as OllamaModelData];
+      const wrapper = await mountWithField(field, "missing-model", requiresMultiAgent);
+
+      const warning = warningFor(wrapper, label);
+      expect(warning.exists()).toBe(true);
+      expect(warning.text()).toContain("models.model_not_available");
+      expect(warning.text()).toContain('"name":"missing-model"');
+    },
+  );
+
+  it.each(modelFields)(
+    "renders no warning for $field when its model is in installed_models",
+    async ({ field, label, requiresMultiAgent }) => {
+      aiModelsManager.installed_models.value = [{ name: "present-model" } as OllamaModelData];
+      const wrapper = await mountWithField(field, "present-model", requiresMultiAgent);
+
+      expect(warningFor(wrapper, label).exists()).toBe(false);
+    },
+  );
+
+  it.each(modelFields)(
+    "never renders the warning for $field when its value is an empty string (not chosen yet), regardless of installed_models",
+    async ({ field, label, requiresMultiAgent }) => {
+      // Empty installed_models means isInstalled("") would be false - if
+      // the v-if ever lost its modelName truthiness guard, this is exactly
+      // the case that would start rendering the warning for an unset field.
+      aiModelsManager.installed_models.value = [];
+      const wrapper = await mountWithField(field, "", requiresMultiAgent);
+
+      expect(warningFor(wrapper, label).exists()).toBe(false);
+    },
+  );
+
+  // Regression test for B2 (code-review-report.md): a user who navigates
+  // straight to Project Configuration without first opening AI Settings or
+  // any model picker never triggered aiModelsManager's own population of
+  // installed_models, so every configured model was flagged "not
+  // installed" even when it genuinely was. The fix is a call to
+  // aiModelsManager.initialize() in this component's own onMounted - this
+  // is the call that was missing.
+  it("calls aiModelsManager.initialize() on mount, so installed_models is populated without depending on some other component having mounted first", async () => {
+    vi.mocked(getProjectSettings).mockResolvedValue({ data: makeSettings() } as never);
+    mountPage("project-a");
+    await flushPromises();
+
+    expect(aiModelsManager.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the warning for a cold-navigation model once aiModelsManager.initialize() resolves, without needing any other component to have mounted first", async () => {
+    // installed_models starts empty (the exact state B2 described after a
+    // cold navigation straight to this page) - initialize()'s mock
+    // implementation is what populates it, simulating the real
+    // refreshInstalledModels() call landing asynchronously.
+    vi.mocked(aiModelsManager.initialize).mockImplementation(async () => {
+      aiModelsManager.installed_models.value = [{ name: "already-installed" } as OllamaModelData];
+    });
+    vi.mocked(getProjectSettings).mockResolvedValue({
+      data: makeSettings({ base_model_name: "already-installed" }),
+    } as never);
+
+    const { wrapper } = mountPage("project-a");
+    await flushPromises();
+
+    expect(aiModelsManager.initialize).toHaveBeenCalledTimes(1);
+    expect(warningFor(wrapper, "models.base_model").exists()).toBe(false);
   });
 });

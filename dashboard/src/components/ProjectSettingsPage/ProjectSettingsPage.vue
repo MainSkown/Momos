@@ -145,6 +145,12 @@
                 >
                   {{ project_settings.base_model_name || $t("models.select_model") }}
                 </button>
+                <span
+                  v-if="project_settings.base_model_name && !aiModelsManager.isInstalled(project_settings.base_model_name)"
+                  class="text-red"
+                >
+                  {{ $t("models.model_not_available", { name: project_settings.base_model_name }) }}
+                </span>
               </div>
 
               <div class="field-group">
@@ -157,6 +163,12 @@
                 >
                   {{ project_settings.parsing_model_name || $t("models.select_model") }}
                 </button>
+                <span
+                  v-if="project_settings.parsing_model_name && !aiModelsManager.isInstalled(project_settings.parsing_model_name)"
+                  class="text-red"
+                >
+                  {{ $t("models.model_not_available", { name: project_settings.parsing_model_name }) }}
+                </span>
               </div>
 
               <div class="field-group">
@@ -213,6 +225,12 @@
                       ✕
                     </button>
                   </div>
+                  <span
+                    v-if="project_settings.orchestrator_model_name && !aiModelsManager.isInstalled(project_settings.orchestrator_model_name)"
+                    class="text-red"
+                  >
+                    {{ $t("models.model_not_available", { name: project_settings.orchestrator_model_name }) }}
+                  </span>
                 </div>
 
                 <div class="field-group">
@@ -237,6 +255,12 @@
                       ✕
                     </button>
                   </div>
+                  <span
+                    v-if="project_settings.scouting_model_name && !aiModelsManager.isInstalled(project_settings.scouting_model_name)"
+                    class="text-red"
+                  >
+                    {{ $t("models.model_not_available", { name: project_settings.scouting_model_name }) }}
+                  </span>
                 </div>
 
                 <div class="field-group">
@@ -261,6 +285,12 @@
                       ✕
                     </button>
                   </div>
+                  <span
+                    v-if="project_settings.pentesting_model_name && !aiModelsManager.isInstalled(project_settings.pentesting_model_name)"
+                    class="text-red"
+                  >
+                    {{ $t("models.model_not_available", { name: project_settings.pentesting_model_name }) }}
+                  </span>
                 </div>
 
                 <div class="field-group">
@@ -285,6 +315,12 @@
                       ✕
                     </button>
                   </div>
+                  <span
+                    v-if="project_settings.reporting_model_name && !aiModelsManager.isInstalled(project_settings.reporting_model_name)"
+                    class="text-red"
+                  >
+                    {{ $t("models.model_not_available", { name: project_settings.reporting_model_name }) }}
+                  </span>
                 </div>
 
               </template>
@@ -466,6 +502,7 @@ import { getProjectSettings, updateProjectSettings } from "@/api";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { type OllamaModelData, type ProjectSettings } from "@/api/types.gen";
 import { useMomosStore } from "@/store/momos_store";
+import { aiModelsManager } from "@/components/tools";
 import { useI18n } from "vue-i18n";
 import { toast } from "vue3-toastify";
 import "@/assets/md-editor.css";
@@ -850,6 +887,20 @@ async function confirmDeleteProject() {
 }
 
 onMounted(async () => {
+  // aiModelsManager.installed_models (read by the six model-mismatch
+  // warnings below) starts empty and is otherwise only populated as a side
+  // effect of AISettings.vue/ProjectDialog.vue mounting first - a user who
+  // navigates straight here would see every configured model incorrectly
+  // flagged "not installed" until something else happened to populate it.
+  // Not awaited: it's unrelated to project_settings, so it must not delay
+  // this page's own gating fetch below. installed_models is connection-
+  // scoped, not project-scoped (ConnectionSettings.vue already refreshes it
+  // itself on a connection change), so this only needs to run once here,
+  // not again in the openedProject watcher further down.
+  aiModelsManager
+    .initialize()
+    .catch((error) => console.error("Failed to load installed models:", error));
+
   await load_settings(store.openedProject);
   store.loadRunningTarget(store.openedProject);
   loadAcknowledgmentStatus(store.openedProject);
