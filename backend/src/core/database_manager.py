@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     # project_scheme.py's own comment on pipeline_mode for the same class
     # of cycle avoided the same way.
     from src.schemas.user_settings_scheme import UserSettings
+    from src.schemas.ollama_connection_scheme import OllamaConnectionSettings
 
 T = TypeVar("T", bound=SQLModel)
 
@@ -461,6 +462,27 @@ class DatabaseManager:
     def update_user_settings(self, user_settings: "UserSettings") -> "UserSettings":
         with Session(self.engine) as session:
             merged = session.merge(user_settings)
+            session.commit()
+            session.refresh(merged)
+            return merged
+
+    def get_ollama_connection_settings(self) -> "OllamaConnectionSettings":
+        from src.schemas.ollama_connection_scheme import OllamaConnectionSettings, ollama_connection_settings_factory
+
+        with Session(self.engine) as session:
+            connection_settings = session.exec(select(OllamaConnectionSettings)).first()
+            if connection_settings is None:
+                connection_settings = ollama_connection_settings_factory()
+                session.add(connection_settings)
+                session.commit()
+                session.refresh(connection_settings)
+            return connection_settings
+
+    def update_ollama_connection_settings(
+        self, connection_settings: "OllamaConnectionSettings"
+    ) -> "OllamaConnectionSettings":
+        with Session(self.engine) as session:
+            merged = session.merge(connection_settings)
             session.commit()
             session.refresh(merged)
             return merged

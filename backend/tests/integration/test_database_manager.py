@@ -15,6 +15,7 @@ from src.schemas.agent_run_scheme import AgentRun, AgentRunState
 from src.schemas.attack_vector_scheme import AttackVector
 from src.schemas.project_scheme import Project, project_settings_factory
 from src.schemas.target_scheme import Target
+from src.schemas.ollama_connection_scheme import OllamaConnectionSettings
 from src.schemas.user_settings_scheme import UserSettings
 from src.schemas.vulnerability_scheme import Vulnerability
 from src.core.config import settings
@@ -238,3 +239,35 @@ def test_update_user_settings_persists_and_is_read_back(pg_container):
 
     assert refreshed.accent_color == "blue"
     assert refreshed.global_max_concurrent_agents == 4
+
+
+def test_get_ollama_connection_settings_creates_singleton_row_on_empty_table(pg_container):
+    connection_settings = pg_container.get_ollama_connection_settings()
+
+    assert connection_settings.mode == "local"
+    assert connection_settings.remote_url == ""
+    assert connection_settings.remote_api_key_encrypted is None
+
+
+def test_get_ollama_connection_settings_never_creates_a_second_row(pg_container):
+    first = pg_container.get_ollama_connection_settings()
+    second = pg_container.get_ollama_connection_settings()
+    third = pg_container.get_ollama_connection_settings()
+
+    assert first.id == second.id == third.id
+    assert _count(pg_container, OllamaConnectionSettings) == 1
+
+
+def test_update_ollama_connection_settings_persists_and_is_read_back(pg_container):
+    api_key_bytes = b"\x00\x01\xffsome-bytes"
+    connection_settings = pg_container.get_ollama_connection_settings()
+    connection_settings.mode = "remote"
+    connection_settings.remote_url = "https://ollama.example.com"
+    connection_settings.remote_api_key_encrypted = api_key_bytes
+
+    pg_container.update_ollama_connection_settings(connection_settings)
+    refreshed = pg_container.get_ollama_connection_settings()
+
+    assert refreshed.mode == "remote"
+    assert refreshed.remote_url == "https://ollama.example.com"
+    assert refreshed.remote_api_key_encrypted == api_key_bytes

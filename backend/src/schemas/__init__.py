@@ -15,6 +15,15 @@ from .test_session_scheme import (
 )
 from .kali_scheme import *
 from .ollama_scheme import *
+from .ollama_connection_scheme import (
+    OllamaConnectionSettings,
+    OllamaConnectionSettingsBase,
+    ollama_connection_settings_factory,
+    OllamaConnectionPublic,
+    OllamaConnectionUpdate,
+    OllamaConnectionTestRequest,
+    OllamaConnectionTestResult,
+)
 from .user_settings_scheme import (
     UserSettings,
     UserSettingsBase,
@@ -37,4 +46,6 @@ __all__ = [
     "TestSession", "TestSessionBase", "TestSessionResponse", "TestSessionDetailResponse", "TestSessionOutcome",
     "DEFAULT_LOG_PAGE_SIZE",
     "UserSettings", "UserSettingsBase", "ACCENT_COLOR_PRESETS", "user_settings_factory",
+    "OllamaConnectionSettings", "OllamaConnectionSettingsBase", "ollama_connection_settings_factory",
+    "OllamaConnectionPublic", "OllamaConnectionUpdate", "OllamaConnectionTestRequest", "OllamaConnectionTestResult",
 ]
