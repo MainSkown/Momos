@@ -1,12 +1,50 @@
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from src.schemas import OllamaDownloadProgress
 from ollama import AsyncClient
 from . import settings
 
 
 class OllamaManager:
+    """Single resolved-connection source of truth for talking to Ollama -
+    see docs/plans/milestone-3-remote-ollama-connection.md's Scope note
+    point 1. `base_url`/`headers` always reflect the last `reconfigure()`
+    call (or these constructor defaults if it was never called); callers
+    outside this module (e.g. Agent) read them instead of settings.ollama_url
+    directly, so a saved Remote connection is visible everywhere without
+    each caller re-resolving it itself."""
+
     def __init__(self):
+        self.base_url = settings.ollama_url
+        self.headers: dict[str, str] = {}
         self.client = AsyncClient(settings.ollama_url)
+
+    async def reconfigure(
+        self, base_url: str, headers: Optional[dict] = None, timeout: Optional[float] = None
+    ) -> None:
+        """Repoints every subsequent call through this manager at a
+        different Ollama server - called on every connection save
+        (Local or Remote) and once at boot if a Remote connection was
+        already saved. `timeout=None` preserves AsyncClient's own default
+        (no override passed through) rather than inventing a new one, so
+        a Local save/boot stays byte-for-byte today's behavior.
+
+        Closes the client it replaces: ollama.AsyncClient wraps an httpx
+        connection pool that GC can't clean up for us (no sync __del__ can
+        run httpx's async aclose(), which AsyncClient.close() awaits
+        internally), so dropping the reference without awaiting close()
+        leaks one pool per Local<->Remote toggle over the life of this
+        (long-running) process."""
+        old_client = self.client
+
+        self.base_url = base_url
+        self.headers = headers or {}
+
+        client_kwargs = {"headers": self.headers}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+
+        self.client = AsyncClient(base_url, **client_kwargs)
+        await old_client.close()
 
     async def list_models(self):
         try:

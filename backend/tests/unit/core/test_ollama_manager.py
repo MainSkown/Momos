@@ -4,13 +4,25 @@ singleton's .client attribute) so the real OllamaManager/capabilities_from_show_
 code runs unmodified against a scripted AsyncClient."""
 
 import asyncio
+import sys
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import ollama
 import pytest
 import sqlalchemy
 
+from src.core import settings as live_settings
 from src.core.config import Settings
-from src.core.ollama_manager import capabilities_from_show_info, ollama_manager
+from src.core.ollama_manager import OllamaManager, capabilities_from_show_info, ollama_manager
+
+# src.core's own __init__ does `from .ollama_manager import ollama_manager`,
+# which rebinds the package attribute `src.core.ollama_manager` to the
+# singleton INSTANCE, shadowing the submodule of the same name - so any
+# attribute-path monkeypatch target string/`import ... as x` resolves to
+# the instance, not the module. Pull the real module straight out of
+# sys.modules instead (it's already loaded, imported above).
+ollama_manager_module = sys.modules["src.core.ollama_manager"]
 
 
 def _settings(**overrides):
@@ -251,3 +263,87 @@ async def test_pull_model_mid_stream_failure_still_yields_earlier_items_then_rai
 
     assert len(collected) == 2
     assert [c.completed for c in collected] == [1, 2]
+
+
+# --- OllamaManager.reconfigure: resolved-connection source of truth ------
+# Milestone 3 (remote Ollama connection), O4. Tests build a fresh
+# OllamaManager() instance rather than mutating the module-level
+# `ollama_manager` singleton, so they never leak state into other tests
+# in this file/suite.
+
+
+def test_init_seeds_base_url_from_settings_and_empty_headers():
+    manager = OllamaManager()
+
+    assert manager.base_url == live_settings.ollama_url
+    assert manager.headers == {}
+
+
+async def test_reconfigure_updates_base_url_and_headers_attributes():
+    manager = OllamaManager()
+
+    await manager.reconfigure(
+        "http://remote-host:9999", headers={"Authorization": "Bearer secret"}, timeout=42.0
+    )
+
+    assert manager.base_url == "http://remote-host:9999"
+    assert manager.headers == {"Authorization": "Bearer secret"}
+
+
+async def test_reconfigure_rebuilds_client_so_subsequent_calls_use_new_host_and_headers():
+    manager = OllamaManager()
+
+    await manager.reconfigure(
+        "http://remote-host:9999", headers={"Authorization": "Bearer secret"}, timeout=42.0
+    )
+
+    assert str(manager.client._client.base_url) == "http://remote-host:9999"
+    assert dict(manager.client._client.headers)["authorization"] == "Bearer secret"
+    assert manager.client._client.timeout == httpx.Timeout(42.0)
+
+
+async def test_reconfigure_without_headers_defaults_to_empty_dict():
+    manager = OllamaManager()
+
+    await manager.reconfigure("http://remote-host:9999")
+
+    assert manager.headers == {}
+
+
+async def test_reconfigure_with_timeout_none_preserves_existing_default():
+    manager = OllamaManager()
+    default_timeout = manager.client._client.timeout
+
+    await manager.reconfigure("http://remote-host:9999", headers={"Authorization": "Bearer x"})
+
+    assert manager.client._client.timeout == default_timeout
+
+
+async def test_reconfigure_closes_the_previous_client_when_called_again(monkeypatch):
+    """Q1 (Milestone 3 code review): reconfigure() must await the old
+    client's close() (ollama.AsyncClient's own async close method, which
+    internally awaits the wrapped httpx client's aclose()) rather than just
+    dropping the reference, otherwise every Local<->Remote toggle leaks the
+    previous AsyncClient's connection pool. Verified red->green: before
+    this fix, reconfigure() only ever did `self.client = AsyncClient(...)`,
+    and this test failed with AttributeError (reconfigure wasn't even
+    async yet) and then, once made async, with close() never invoked."""
+    created_clients = []
+
+    def fake_async_client(*args, **kwargs):
+        client = MagicMock()
+        client.close = AsyncMock()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(ollama_manager_module, "AsyncClient", fake_async_client)
+    manager = OllamaManager()
+
+    await manager.reconfigure("http://host-a:1111")
+    first_client = created_clients[-1]
+
+    await manager.reconfigure("http://host-b:2222")
+
+    first_client.close.assert_awaited_once()
+    assert manager.client is created_clients[-1]
+    assert manager.client is not first_client

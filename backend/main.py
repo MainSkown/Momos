@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from src.core.kali_integration import kali_registry
 from src.core.database_manager import db_manager
+from src.core.ollama_manager import ollama_manager
+from src.core import encryption_service
 from src.core.agent.agent_checkpointer import setup_checkpointer, shutdown_checkpointer
 from src.routers import (
     project_router,
@@ -17,8 +19,50 @@ from src.routers import (
     session_router,
     user_settings_router,
     scope_discovery_router,
+    connection_router,
 )
 from src.schemas import export_json_schema, OllamaModelsList
+from src.services.connection_service import SAVED_CONNECTION_TIMEOUT_SECONDS
+
+
+async def _apply_startup_ollama_connection() -> None:
+    """Runs once at boot, right after init_db() seeds the connection
+    settings row on a fresh database. Provisioning must happen
+    unconditionally (Local or Remote) so Remote can be turned on later from
+    the Connection tab with zero .env editing (Milestone 3 plan's Scope note
+    point 5); applying a saved Remote connection here is what makes a
+    restart come back up already pointed at it, instead of silently
+    falling back to Local until the next save. A fresh/Local row takes
+    neither further branch, leaving ollama_manager on its constructor
+    default - "behaves exactly as today" with zero extra calls."""
+    encryption_service.ensure_encryption_key_provisioned()
+
+    connection = db_manager.get_ollama_connection_settings()
+    if connection is None or connection.mode != "remote":
+        return
+
+    if not encryption_service.encryption_key_configured():
+        # Defensive only - ensure_encryption_key_provisioned() above means
+        # this should be unreachable in practice; kept as the literal
+        # fail-fast backstop the spec calls for, in case provisioning
+        # itself was ever bypassed (e.g. a future code path that skips
+        # lifespan).
+        raise RuntimeError(
+            "A remote Ollama connection is configured but APP_ENCRYPTION_KEY "
+            "is not set - refusing to start rather than risk storing the "
+            "API key unencrypted."
+        )
+
+    key = (
+        encryption_service.decrypt_secret(connection.remote_api_key_encrypted)
+        if connection.remote_api_key_encrypted
+        else None
+    )
+    headers = {"Authorization": f"Bearer {key}"} if key else None
+    await ollama_manager.reconfigure(
+        connection.remote_url, headers=headers, timeout=SAVED_CONNECTION_TIMEOUT_SECONDS
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,6 +71,8 @@ async def lifespan(app: FastAPI):
     # queries tables init_db() creates. See DatabaseManager.__init__'s own
     # comment for why this isn't done at construction time instead.
     db_manager.init_db()
+
+    await _apply_startup_ollama_connection()
 
     export_json_schema(Path("models.schema.json"))
 
@@ -83,5 +129,6 @@ app.include_router(vulnerability_router, prefix="/api")
 app.include_router(session_router, prefix="/api")
 app.include_router(user_settings_router, prefix="/api")
 app.include_router(scope_discovery_router, prefix="/api")
+app.include_router(connection_router, prefix="/api")
 # --- WebSockets ---
 app.include_router(websocket_router, prefix="/ws")
