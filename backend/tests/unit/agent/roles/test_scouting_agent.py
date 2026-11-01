@@ -188,3 +188,48 @@ async def test_requires_interrupt_branches(monkeypatch):
     assert requires_interrupt({always}) is True
     # Reader only: never needs approval.
     assert requires_interrupt({reader}) is False
+
+
+class TestOllamaConnectionWiring:
+    """B1 fix: changeModel must read ollama_manager.base_url/.headers
+    instead of hardcoding settings.ollama_url, same as agent.py's Agent
+    (see test_agent_core.py's own TestOllamaConnectionWiring). A Local
+    connection (ollama_manager.headers == {}) must build ChatOllama with no
+    client_kwargs at all."""
+
+    def _build(self, monkeypatch, base_url, headers):
+        fake_manager = MagicMock()
+        fake_manager.base_url = base_url
+        fake_manager.headers = headers
+        monkeypatch.setattr(scouting_mod, "ollama_manager", fake_manager)
+
+        fake_llm = MagicMock()
+        fake_llm.bind_tools.return_value = MagicMock()
+        chat_ollama_mock = MagicMock(return_value=fake_llm)
+        monkeypatch.setattr(scouting_mod, "ChatOllama", chat_ollama_mock)
+
+        scouting_mod.ScoutingAgent(
+            model_name="test-model",
+            checkpointer=MemorySaver(),
+            project_id=str(uuid.uuid4()),
+            target_id=str(uuid.uuid4()),
+            agent_run_id=str(uuid.uuid4()),
+            allow_shell=False,
+        )
+        return chat_ollama_mock
+
+    def test_changeModel_omits_client_kwargs_when_headers_empty(self, monkeypatch):
+        chat_ollama_mock = self._build(monkeypatch, "http://localhost:11434", {})
+
+        assert "client_kwargs" not in chat_ollama_mock.call_args.kwargs
+        assert chat_ollama_mock.call_args.kwargs["base_url"] == "http://localhost:11434"
+
+    def test_changeModel_passes_headers_through_client_kwargs_when_present(self, monkeypatch):
+        chat_ollama_mock = self._build(
+            monkeypatch, "http://remote-host:11434", {"Authorization": "Bearer abc"}
+        )
+
+        assert chat_ollama_mock.call_args.kwargs["client_kwargs"] == {
+            "headers": {"Authorization": "Bearer abc"}
+        }
+        assert chat_ollama_mock.call_args.kwargs["base_url"] == "http://remote-host:11434"

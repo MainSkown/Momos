@@ -351,6 +351,22 @@ async def _get_parsing_model_num_ctx(parsing_model_name: str, project_settings) 
     return min(capabilities["context_window"], ceiling)
 
 
+def _parsing_chat_ollama_kwargs(parsing_model_name: str, num_ctx: Optional[int]) -> dict:
+    """Shared ChatOllama kwargs for every parsing/verification-model call
+    site (_parse_output/_verify_claim_against_evidence here,
+    _suggest_command_fix in terminal_tools.py) - these are standalone
+    functions with no persistent instance to cache ollama_manager's
+    base_url/headers onto (unlike Agent.__init__/changeModel's own copy of
+    this pattern), so each reads the live ollama_manager directly at call
+    time instead. client_kwargs is omitted entirely for a Local connection
+    (ollama_manager.headers == {}) rather than passed as a no-op {}, same
+    reasoning as agent.py::changeModel."""
+    kwargs = dict(model=parsing_model_name, base_url=ollama_manager.base_url, num_ctx=num_ctx)
+    if ollama_manager.headers:
+        kwargs["client_kwargs"] = {"headers": ollama_manager.headers}
+    return kwargs
+
+
 async def _parse_output(
     project_id: str,
     command: str,
@@ -369,9 +385,7 @@ async def _parse_output(
         return raw_output
 
     num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
-    parser_llm = ChatOllama(
-        model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
-    )
+    parser_llm = ChatOllama(**_parsing_chat_ollama_kwargs(parsing_model_name, num_ctx))
     structured_llm = parser_llm.with_structured_output(_ParsedCommandOutput)
 
     # Prompt-level hint (best-effort, see the code-level gate below for the
@@ -531,9 +545,7 @@ async def _verify_claim_against_evidence(
 
     try:
         num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
-        verifier_llm = ChatOllama(
-            model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
-        )
+        verifier_llm = ChatOllama(**_parsing_chat_ollama_kwargs(parsing_model_name, num_ctx))
         structured_verifier = verifier_llm.with_structured_output(_ClaimVerification)
         result = await structured_verifier.ainvoke(
             [

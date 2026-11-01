@@ -169,3 +169,51 @@ async def test_start_agent_passes_check_done_mid_turn_false(monkeypatch):
     # (orchestrator_tools.ALWAYS_INTERRUPT_TOOL_NAMES) - this is the gate
     # the whole request_tool_access feature depends on actually firing.
     assert captured["requires_interrupt"]({"request_tool_access"}) is True
+
+
+class TestOllamaConnectionWiring:
+    """B1 fix: changeModel must read ollama_manager.base_url/.headers (set
+    by OllamaManager.reconfigure - see O4/O5) instead of hardcoding
+    settings.ollama_url, same as agent.py's Agent already does (see
+    test_agent_core.py's own TestOllamaConnectionWiring). A Local
+    connection (ollama_manager.headers == {}) must build ChatOllama with no
+    client_kwargs at all, byte-for-byte identical to before this existed."""
+
+    def _build(self, monkeypatch, base_url, headers):
+        fake_manager = MagicMock()
+        fake_manager.base_url = base_url
+        fake_manager.headers = headers
+        monkeypatch.setattr(orch_mod, "ollama_manager", fake_manager)
+
+        fake_llm = MagicMock()
+        fake_llm.bind_tools.return_value = MagicMock()
+        chat_ollama_mock = MagicMock(return_value=fake_llm)
+        monkeypatch.setattr(orch_mod, "ChatOllama", chat_ollama_mock)
+
+        fake_db = MagicMock()
+        monkeypatch.setattr(orch_mod, "db_manager", fake_db)
+
+        orch_mod.OrchestratorAgent(
+            model_name="test-model",
+            checkpointer=MemorySaver(),
+            project_id=str(uuid.uuid4()),
+            target_id=str(uuid.uuid4()),
+            agent_run_id=str(uuid.uuid4()),
+        )
+        return chat_ollama_mock
+
+    def test_changeModel_omits_client_kwargs_when_headers_empty(self, monkeypatch):
+        chat_ollama_mock = self._build(monkeypatch, "http://localhost:11434", {})
+
+        assert "client_kwargs" not in chat_ollama_mock.call_args.kwargs
+        assert chat_ollama_mock.call_args.kwargs["base_url"] == "http://localhost:11434"
+
+    def test_changeModel_passes_headers_through_client_kwargs_when_present(self, monkeypatch):
+        chat_ollama_mock = self._build(
+            monkeypatch, "http://remote-host:11434", {"Authorization": "Bearer abc"}
+        )
+
+        assert chat_ollama_mock.call_args.kwargs["client_kwargs"] == {
+            "headers": {"Authorization": "Bearer abc"}
+        }
+        assert chat_ollama_mock.call_args.kwargs["base_url"] == "http://remote-host:11434"

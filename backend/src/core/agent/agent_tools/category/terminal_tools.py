@@ -11,7 +11,6 @@ from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
-from src.core import settings
 from src.core.kali_integration import kali_registry
 from src.core.kali_integration.kali_manager import KALI_USERS, KaliManger
 from src.core.kali_integration.kali_session import KaliSessionError
@@ -23,6 +22,7 @@ from .common import (
     _find_binary_token,
     _get_parsing_model_num_ctx,
     _maybe_condense,
+    _parsing_chat_ollama_kwargs,
     _resolve_current_session,
     _send_and_condense,
     _package,
@@ -236,9 +236,7 @@ async def _suggest_command_fix(
         return None
 
     num_ctx = await _get_parsing_model_num_ctx(parsing_model_name, project_settings)
-    parser_llm = ChatOllama(
-        model=parsing_model_name, base_url=settings.ollama_url, num_ctx=num_ctx
-    )
+    parser_llm = ChatOllama(**_parsing_chat_ollama_kwargs(parsing_model_name, num_ctx))
     structured_llm = parser_llm.with_structured_output(_UsageSuggestion)
 
     try:

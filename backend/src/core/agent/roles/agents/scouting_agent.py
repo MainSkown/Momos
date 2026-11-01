@@ -24,7 +24,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from src.core import settings
+from src.core import ollama_manager
 from src.core.agent import agent_tools
 from src.core.kali_integration import kali_registry
 from src.schemas import AgentTargetScope, Target
@@ -60,6 +60,8 @@ class ScoutingAgent:
         self.target_id = target_id
         self.agent_run_id = agent_run_id
         self.checkpointer = checkpointer
+        self.ollama_url = ollama_manager.base_url
+        self.ollama_headers = ollama_manager.headers
         self.finish_summary: Optional[str] = None
         self.context_window = context_window or common.DEFAULT_CONTEXT_WINDOW_FALLBACK
         self.allow_shell = allow_shell
@@ -276,12 +278,19 @@ class ScoutingAgent:
     def changeModel(self, model_name: str, reasoning: Optional[bool] = None):
         self.model_name = model_name
         use_reasoning = True if reasoning is None else reasoning
-        llm = ChatOllama(
+        chat_ollama_kwargs = dict(
             model=model_name,
-            base_url=settings.ollama_url,
+            base_url=self.ollama_url,
             reasoning=use_reasoning,
             num_ctx=self.context_window,
         )
+        # Only set when a Remote connection's API key header is configured
+        # (see agent.py::changeModel's own comment) - omitted entirely for
+        # Local, so this call stays byte-for-byte identical to before this
+        # existed rather than passing a no-op client_kwargs={}.
+        if self.ollama_headers:
+            chat_ollama_kwargs["client_kwargs"] = {"headers": self.ollama_headers}
+        llm = ChatOllama(**chat_ollama_kwargs)
         self.llm_with_tools = llm.bind_tools(self.tools)
 
     async def start_agent(
