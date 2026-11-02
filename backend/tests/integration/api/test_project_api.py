@@ -10,7 +10,14 @@ from src.schemas.test_session_scheme import TestSession
 def test_post_project_is_reachable_via_real_get_afterward(api_integration_client, pg_container):
     response = api_integration_client.post(
         "/api/project",
-        json={"name": "Acme Corp", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Acme Corp",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     )
     assert response.status_code == 200
     project_id = response.json()["id"]
@@ -23,7 +30,14 @@ def test_post_project_is_reachable_via_real_get_afterward(api_integration_client
 def test_put_settings_persists_to_the_real_row(api_integration_client, pg_container):
     created = api_integration_client.post(
         "/api/project",
-        json={"name": "Settings Target", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Settings Target",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
     project_id = created["id"]
 
@@ -45,7 +59,14 @@ def test_put_settings_persists_to_the_real_row(api_integration_client, pg_contai
 def test_delete_project_cascades_to_target_and_session(api_integration_client, pg_container):
     created = api_integration_client.post(
         "/api/project",
-        json={"name": "Cascade Target", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Cascade Target",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
     project_id = created["id"]
 

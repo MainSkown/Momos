@@ -16,6 +16,9 @@ def _create_project(client, base_model_name=""):
             "name": "Ollama Target",
             "base_model_name": base_model_name,
             "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
         },
     ).json()
 

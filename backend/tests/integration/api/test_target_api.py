@@ -9,7 +9,18 @@ tier task (docs/testing-plan.md §1.4)."""
 def _create_project(client):
     return client.post(
         "/api/project",
-        json={"name": "Target Host", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Target Host",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            # A /24, not a single host - test_put_target_persists_real_changes
+            # exercises a target whose IPv4 (10.0.0.5) differs from the one
+            # it was created with, so the scope must cover more than just
+            # one address.
+            "host_range": "10.0.0.0/24",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
 
 

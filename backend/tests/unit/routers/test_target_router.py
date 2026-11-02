@@ -153,17 +153,30 @@ def test_delete_target_error_returns_500(api_client, monkeypatch):
 
 
 def test_update_target_happy_path(api_client, monkeypatch):
+    """TargetBase (the PUT body) carries no project_id, so update_target
+    must look up the existing row to learn it - regression test for the
+    bug where the router built a Target with no project_id at all,
+    crashing the real project-scope lookup downstream."""
+    mock_get = MagicMock(return_value=target_router.Target(**target_response()))
     mock_update = MagicMock(return_value=None)
+    monkeypatch.setattr(target_router.TargetService, "get_target", mock_get)
     monkeypatch.setattr(target_router.TargetService, "update_target", mock_update)
     response = api_client.put(f"/api/target/{TARGET_ID}", json=target_body())
     assert response.status_code == 200
     mock_update.assert_called_once()
+    updated_target = mock_update.call_args.args[0]
+    assert str(updated_target.project_id) == PROJECT_ID
 
 
 def test_update_target_bad_ipv4_returns_400(api_client, monkeypatch):
     """Fixed (routers.md confirmed gap): a bad IPv4 now raises
     InvalidTargetDataException, which the router maps to 400 instead of
     the generic 500."""
+    monkeypatch.setattr(
+        target_router.TargetService,
+        "get_target",
+        MagicMock(return_value=target_router.Target(**target_response())),
+    )
     monkeypatch.setattr(
         target_router.TargetService,
         "update_target",
@@ -180,6 +193,11 @@ def test_update_target_bad_ipv4_returns_400(api_client, monkeypatch):
 def test_update_target_bad_ipv6_returns_400(api_client, monkeypatch):
     monkeypatch.setattr(
         target_router.TargetService,
+        "get_target",
+        MagicMock(return_value=target_router.Target(**target_response())),
+    )
+    monkeypatch.setattr(
+        target_router.TargetService,
         "update_target",
         MagicMock(
             side_effect=target_router.InvalidTargetDataException(
@@ -194,15 +212,11 @@ def test_update_target_bad_ipv6_returns_400(api_client, monkeypatch):
 def test_update_target_missing_target_returns_404(api_client, monkeypatch):
     """Fixed (routers.md confirmed gap): "Target does not exist" now
     raises TargetDoesNotExistException, which the router maps to 404
-    instead of the generic 500."""
-    monkeypatch.setattr(
-        target_router.TargetService,
-        "update_target",
-        MagicMock(
-            side_effect=target_router.TargetDoesNotExistException(
-                f"Target does not exist: {TARGET_ID}", TARGET_ID
-            )
-        ),
-    )
+    instead of the generic 500. The router itself detects this (via
+    get_target returning None) before ever calling update_target."""
+    mock_update = MagicMock()
+    monkeypatch.setattr(target_router.TargetService, "get_target", MagicMock(return_value=None))
+    monkeypatch.setattr(target_router.TargetService, "update_target", mock_update)
     response = api_client.put(f"/api/target/{TARGET_ID}", json=target_body())
     assert response.status_code == 404
+    mock_update.assert_not_called()

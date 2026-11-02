@@ -24,6 +24,7 @@ from main import app
 # package attribute) reaches the actual module object that holds the
 # `db_manager` name these fixtures need to patch.
 agent_router_module = importlib.import_module("src.routers.agent_router")
+project_router_module = importlib.import_module("src.routers.project_router")
 kali_registry_module = importlib.import_module("src.core.kali_integration.kali_registry")
 
 
@@ -46,13 +47,22 @@ def api_integration_client(pg_container, monkeypatch):
     code underneath those routers (not just the router/service layer) -
     kali_registry.py, run_registry.py and agent.py each do their own
     `from src.core import db_manager` too, independently of
-    agent_service.py's own import of the same name."""
+    agent_service.py's own import of the same name. project_scope_service
+    is its own module for the same reason - AgentService.start_agent calls
+    ProjectScopeService.is_acknowledged, which would otherwise reach the
+    unpatched production db_manager and fail to resolve the real-deployment
+    Postgres host. project_router.py needs its own patch too -
+    _require_project_exists (the scope/acknowledgment endpoints' 404 guard)
+    calls `from src.core import db_manager` directly rather than going
+    through ProjectService."""
     monkeypatch.setattr("src.services.project_service.db_manager", pg_container)
     monkeypatch.setattr("src.services.target_service.db_manager", pg_container)
     monkeypatch.setattr("src.services.test_session_service.db_manager", pg_container)
     monkeypatch.setattr("src.services.vulnerability_service.db_manager", pg_container)
     monkeypatch.setattr("src.services.ollama_service.db_manager", pg_container)
     monkeypatch.setattr("src.services.agent_service.db_manager", pg_container)
+    monkeypatch.setattr("src.services.project_scope_service.db_manager", pg_container)
+    monkeypatch.setattr(project_router_module, "db_manager", pg_container)
     monkeypatch.setattr(agent_router_module, "db_manager", pg_container)
     monkeypatch.setattr(kali_registry_module, "db_manager", pg_container)
     monkeypatch.setattr("src.core.agent.run_registry.db_manager", pg_container)

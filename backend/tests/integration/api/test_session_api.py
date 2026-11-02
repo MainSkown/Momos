@@ -12,7 +12,14 @@ def test_delete_running_session_is_rejected_and_row_survives(
 ):
     project = api_integration_client.post(
         "/api/project",
-        json={"name": "Session Host", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Session Host",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
     target = pg_container.add_target(
         Target(

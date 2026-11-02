@@ -12,7 +12,14 @@ import time
 def _create_project(client):
     return client.post(
         "/api/project",
-        json={"name": "Kali Target", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Kali Target",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
 
 

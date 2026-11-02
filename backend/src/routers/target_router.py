@@ -74,8 +74,15 @@ def delete_target(target_id: str):
 
 @router.put("/target/{target_id}", status_code=status.HTTP_200_OK, operation_id="UpdateTarget")
 def update_target(target_id: str, data: TargetBase):
-    target = Target(**data.model_dump(), id= target_id)
     try:
+        existing = TargetService.get_target(target_id)
+        if existing is None:
+            raise TargetDoesNotExistException(
+                f"Target does not exist: {target_id}", target_id
+            )
+        # TargetBase (the PUT body) carries no project_id - the existing
+        # row's is the only trustworthy source for it.
+        target = Target(**data.model_dump(), id=target_id, project_id=existing.project_id)
         TargetService.update_target(target)
         return
     except TargetDoesNotExistException as e:

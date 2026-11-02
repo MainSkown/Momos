@@ -106,7 +106,14 @@ def _create_project_and_target(client, fake_ollama_client, model_name="qwen3:8b"
 
     project = client.post(
         "/api/project",
-        json={"name": "Agent Target", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "Agent Target",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
 
     # single_agent mode - project_settings_factory defaults new projects to
@@ -155,6 +162,15 @@ def _create_project_and_target(client, fake_ollama_client, model_name="qwen3:8b"
         },
     )
     assert put_response.status_code == 200
+
+    # start_agent (AgentService.start_agent) rejects a run whose current
+    # ProjectScope has never been acknowledged (ScopeNotAcknowledgedException)
+    # - a real submission is the only way to clear that gate.
+    ack_response = client.post(
+        f"/api/project/{project['id']}/acknowledgment",
+        json={"acknowledged_by": "tester", "description": "integration test run"},
+    )
+    assert ack_response.status_code == 200
 
     return project, target
 

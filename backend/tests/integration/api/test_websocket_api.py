@@ -18,7 +18,14 @@ def test_kali_client_creation_broadcasts_over_the_real_websocket(
 ):
     project = api_integration_client.post(
         "/api/project",
-        json={"name": "WS Target", "base_model_name": "", "parsing_model_name": ""},
+        json={
+            "name": "WS Target",
+            "base_model_name": "",
+            "parsing_model_name": "",
+            "host_range": "10.0.0.1",
+            "port_range_start": 1,
+            "port_range_end": 1024,
+        },
     ).json()
 
     with api_integration_client.websocket_connect("/ws/client") as websocket:

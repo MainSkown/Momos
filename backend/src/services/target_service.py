@@ -119,6 +119,10 @@ class TargetService:
         return db_manager.get_all_targets_in_project(project_id)
 
     @staticmethod
+    def get_target(target_id: str) -> Target | None:
+        return db_manager.get_target(target_id)
+
+    @staticmethod
     def delete_target(target_id: str):
         db_manager.delete_target(target_id)
 
